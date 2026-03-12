@@ -22,9 +22,11 @@ impl DetectionEngine {
         }
     }
 
-    /// Evaluate all rules against current metrics. Returns any new alerts.
+    /// Evaluate all rules against current metrics.
+    /// Only returns alerts when the overall health state transitions (e.g. Healthy -> Degraded),
+    /// preventing floods of identical alerts while the condition persists.
     pub fn evaluate(&mut self, metrics: &AggregatedMetrics) -> Vec<Alert> {
-        let mut alerts = Vec::new();
+        let mut new_alerts = Vec::new();
         let mut worst_state = HealthState::Healthy;
 
         for rule in &self.rules {
@@ -32,12 +34,18 @@ impl DetectionEngine {
                 if severity_rank(alert.severity) > severity_rank(worst_state) {
                     worst_state = alert.severity;
                 }
-                alerts.push(alert);
+                new_alerts.push(alert);
             }
         }
 
+        let previous = self.current_state;
         self.current_state = worst_state;
-        alerts
+
+        if worst_state != previous {
+            new_alerts
+        } else {
+            vec![]
+        }
     }
 
     #[must_use]
@@ -112,5 +120,27 @@ mod tests {
         engine.evaluate(&metrics);
         engine.reset();
         assert_eq!(engine.current_state(), HealthState::Healthy);
+    }
+
+    #[test]
+    fn repeated_degraded_deduplicates() {
+        let mut engine = DetectionEngine::new();
+        let metrics = AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![80, 10, 5, 5],
+                total_count: 100,
+            },
+            ..Default::default()
+        };
+
+        let first = engine.evaluate(&metrics);
+        assert!(!first.is_empty(), "first transition should emit alerts");
+
+        let second = engine.evaluate(&metrics);
+        assert!(second.is_empty(), "same state should not re-emit alerts");
+
+        engine.reset();
+        let after_reset = engine.evaluate(&metrics);
+        assert!(!after_reset.is_empty(), "alert fires again after window reset");
     }
 }
