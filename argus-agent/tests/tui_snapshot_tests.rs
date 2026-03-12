@@ -1,0 +1,96 @@
+use argus_agent::tui::{render_to_string, DashboardState};
+use argus_common::*;
+
+fn healthy_state() -> DashboardState {
+    DashboardState {
+        health: HealthState::Healthy,
+        source_name: "test".to_string(),
+        event_count: 500,
+        uptime_secs: 12.3,
+        metrics: AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![130, 120, 125, 125],
+                total_count: 500,
+            },
+            slab_metrics: SlabMetrics {
+                alloc_count: 200,
+                total_latency_ns: 100_000,
+                max_latency_ns: 800,
+                ..Default::default()
+            },
+            rdma_metrics: RdmaMetrics {
+                completion_count: 150,
+                total_latency_ns: 300_000,
+                max_latency_ns: 3000,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        latency_history: vec![2.0, 2.1, 1.9, 2.0, 2.2, 1.8, 2.0, 2.1],
+        slab_latency_history: vec![0.5, 0.48, 0.52, 0.5, 0.49, 0.51, 0.5, 0.48],
+        irq_rate_history: vec![100.0, 120.0, 110.0, 115.0, 105.0, 125.0, 130.0, 120.0],
+        recent_alerts: Vec::new(),
+    }
+}
+
+fn degraded_state() -> DashboardState {
+    DashboardState {
+        health: HealthState::Degraded,
+        source_name: "scenario".to_string(),
+        event_count: 1000,
+        uptime_secs: 25.7,
+        metrics: AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![750, 100, 80, 70],
+                total_count: 1000,
+            },
+            slab_metrics: SlabMetrics {
+                alloc_count: 400,
+                total_latency_ns: 200_000,
+                max_latency_ns: 1200,
+                ..Default::default()
+            },
+            rdma_metrics: RdmaMetrics {
+                completion_count: 300,
+                total_latency_ns: 3_600_000,
+                max_latency_ns: 16000,
+                error_count: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        latency_history: vec![2.0, 2.1, 2.0, 8.0, 12.0, 14.0, 12.0, 11.0],
+        slab_latency_history: vec![0.5, 0.5, 0.5, 0.8, 1.2, 1.5, 1.3, 1.1],
+        irq_rate_history: vec![250.0, 260.0, 280.0, 500.0, 700.0, 750.0, 740.0, 720.0],
+        recent_alerts: vec![Alert {
+            timestamp_ns: 20_000_000_000,
+            kind: AlertKind::InterruptAffinitySkew {
+                dominant_cpu: 0,
+                dominant_pct: 75.0,
+            },
+            severity: HealthState::Degraded,
+            message: "Interrupt affinity skew: CPU 0 handling 75.0% of interrupts".to_string(),
+        }],
+    }
+}
+
+#[test]
+fn snapshot_healthy_dashboard() {
+    let state = healthy_state();
+    let rendered = render_to_string(&state, 80, 30);
+    insta::assert_snapshot!("healthy_dashboard", rendered);
+}
+
+#[test]
+fn snapshot_degraded_dashboard() {
+    let state = degraded_state();
+    let rendered = render_to_string(&state, 80, 30);
+    insta::assert_snapshot!("degraded_dashboard", rendered);
+}
+
+#[test]
+fn snapshot_empty_dashboard() {
+    let state = DashboardState::default();
+    let rendered = render_to_string(&state, 80, 30);
+    insta::assert_snapshot!("empty_dashboard", rendered);
+}

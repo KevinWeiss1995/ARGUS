@@ -1,0 +1,41 @@
+{
+  "name": "healthy_baseline",
+  "description": "Normal operating conditions - balanced interrupts, low latency, no errors",
+  "events": [
+    {"IrqEntry": {"timestamp_ns": 1000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 2000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 3000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 4000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 5000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 6000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 7000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 8000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 9000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 10000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 11000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 12000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"SlabAlloc": {"timestamp_ns": 13000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 450, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 14000000, "cpu": 1, "bytes_req": 128, "bytes_alloc": 128, "latency_ns": 520, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 15000000, "cpu": 2, "bytes_req": 256, "bytes_alloc": 256, "latency_ns": 480, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 16000000, "cpu": 3, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 500, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 17000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 510, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 18000000, "cpu": 1, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 490, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 19000000, "cpu": 2, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 470, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 20000000, "cpu": 3, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 530, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 21000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 460, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 22000000, "cpu": 1, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 540, "numa_node": 0}},
+    {"CqCompletion": {"timestamp_ns": 23000000, "cpu": 0, "latency_ns": 1800, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 24000000, "cpu": 1, "latency_ns": 2100, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 25000000, "cpu": 2, "latency_ns": 1900, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 26000000, "cpu": 3, "latency_ns": 2200, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 27000000, "cpu": 0, "latency_ns": 2000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 28000000, "cpu": 1, "latency_ns": 1950, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 29000000, "cpu": 2, "latency_ns": 2050, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 30000000, "cpu": 3, "latency_ns": 2100, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 31000000, "cpu": 0, "latency_ns": 1850, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
+    {"CqCompletion": {"timestamp_ns": 32000000, "cpu": 1, "latency_ns": 2150, "queue_pair_num": 2, "is_error": false, "opcode": 0}}
+  ],
+  "expected_states": [
+    {"after_event_index": 31, "expected_state": "Healthy"}
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "interrupt_skew_ramp",
+  "description": "Gradual interrupt affinity skew - CPU 0 handles increasingly disproportionate share",
+  "events": [
+    {"IrqEntry": {"timestamp_ns": 1000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 2000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 3000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 4000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 5000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 6000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 7000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 8000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 9000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 10000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 11000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 12000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 13000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 14000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 15000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 16000000, "cpu": 1, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 17000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 18000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 19000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 20000000, "cpu": 2, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 21000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 22000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 23000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 24000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 25000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 26000000, "cpu": 3, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 27000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 28000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 29000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}},
+    {"IrqEntry": {"timestamp_ns": 30000000, "cpu": 0, "irq": 33, "handler_name_hash": 1}}
+  ],
+  "expected_states": [
+    {"after_event_index": 9, "expected_state": "Healthy"},
+    {"after_event_index": 29, "expected_state": "Degraded"}
+  ]
+}

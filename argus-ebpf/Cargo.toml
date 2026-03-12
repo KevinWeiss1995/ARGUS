@@ -1,0 +1,24 @@
+[package]
+name = "argus-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+argus-common = { path = "../argus-common", default-features = false }
+
+[[bin]]
+name = "argus-ebpf"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 2
+debug = false
+overflow-checks = false
+lto = true
+panic = "abort"
+
+[profile.release]
+lto = true
+panic = "abort"

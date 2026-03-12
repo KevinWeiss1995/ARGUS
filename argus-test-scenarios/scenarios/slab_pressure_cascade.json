@@ -1,0 +1,31 @@
+{
+  "name": "slab_pressure_cascade",
+  "description": "Slab allocator latency rises dramatically while CQ completions back up - triggers critical",
+  "events": [
+    {"SlabAlloc": {"timestamp_ns": 1000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 500, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 2000000, "cpu": 1, "bytes_req": 128, "bytes_alloc": 128, "latency_ns": 480, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 3000000, "cpu": 2, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 520, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 4000000, "cpu": 3, "bytes_req": 256, "bytes_alloc": 256, "latency_ns": 510, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 5000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 490, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 6000000, "cpu": 1, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 500, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 7000000, "cpu": 2, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 530, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 8000000, "cpu": 3, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 470, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 9000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 510, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 10000000, "cpu": 1, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 490, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 11000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 8000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 12000000, "cpu": 1, "bytes_req": 128, "bytes_alloc": 128, "latency_ns": 12000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 13000000, "cpu": 2, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 15000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 14000000, "cpu": 3, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 18000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 15000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 20000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 16000000, "cpu": 1, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 22000, "numa_node": 0}},
+    {"CqCompletion": {"timestamp_ns": 16500000, "cpu": 0, "latency_ns": 8000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
+    {"SlabAlloc": {"timestamp_ns": 17000000, "cpu": 2, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 25000, "numa_node": 0}},
+    {"SlabAlloc": {"timestamp_ns": 18000000, "cpu": 3, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 28000, "numa_node": 0}},
+    {"CqCompletion": {"timestamp_ns": 18500000, "cpu": 1, "latency_ns": 12000, "queue_pair_num": 2, "is_error": true, "opcode": 0}},
+    {"SlabAlloc": {"timestamp_ns": 19000000, "cpu": 0, "bytes_req": 64, "bytes_alloc": 64, "latency_ns": 30000, "numa_node": 0}}
+  ],
+  "expected_states": [
+    {"after_event_index": 9, "expected_state": "Healthy"},
+    {"after_event_index": 20, "expected_state": "Critical"}
+  ]
+}
