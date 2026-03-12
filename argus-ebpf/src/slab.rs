@@ -1,18 +1,11 @@
 use aya_ebpf::{
     helpers::bpf_ktime_get_ns,
-    macros::{map, tracepoint},
-    maps::HashMap,
+    macros::tracepoint,
     programs::TracePointContext,
 };
 
 use super::EVENTS;
 
-/// Per-CPU timestamp tracking for latency calculation.
-/// Key: CPU ID, Value: start timestamp in nanoseconds.
-#[map]
-static ALLOC_START: HashMap<u32, u64> = HashMap::with_max_entries(256, 0);
-
-/// Event header written to the ring buffer.
 /// Type tag 1 = SlabAlloc, 2 = SlabFree
 #[repr(C)]
 struct SlabAllocRingEvent {
@@ -49,19 +42,9 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
 
-    // Read tracepoint arguments.
-    // kmem_cache_alloc format: bytes_req, bytes_alloc, ...
-    // Offsets depend on kernel version; these are typical for 5.15+
-    let bytes_req: u32 = unsafe { ctx.read_at(16)? };
-    let bytes_alloc: u32 = unsafe { ctx.read_at(20)? };
+    let bytes_req: u32 = unsafe { ctx.read_at(16).unwrap_or(0) };
+    let bytes_alloc: u32 = unsafe { ctx.read_at(20).unwrap_or(0) };
 
-    // Calculate latency if we recorded a start time for this CPU
-    let latency_ns = match unsafe { ALLOC_START.get(&cpu) } {
-        Some(&start) => ts.saturating_sub(start),
-        None => 0,
-    };
-
-    // Write event to ring buffer
     if let Some(mut entry) = EVENTS.reserve::<SlabAllocRingEvent>(0) {
         let event = SlabAllocRingEvent {
             event_type: 1,
@@ -71,7 +54,7 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
             bytes_req,
             bytes_alloc,
             _pad2: 0,
-            latency_ns,
+            latency_ns: 0,
         };
         unsafe {
             core::ptr::write_unaligned(entry.as_mut_ptr().cast(), event);
