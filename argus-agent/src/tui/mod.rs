@@ -242,7 +242,7 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     render_sparkline_panel(
         frame,
         chunks[2],
-        " IRQ Count ",
+        " IRQ Rate (/window) ",
         &state.irq_rate_history,
         Color::Cyan,
     );
