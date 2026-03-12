@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
-argus-common = { path = "../argus-common", default-features = false }
 
 [[bin]]
 name = "argus-ebpf"
