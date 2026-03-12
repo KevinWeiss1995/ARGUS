@@ -7,27 +7,32 @@ use std::path::PathBuf;
 #[command(about = "ARGUS - Adaptive RDMA Guard & Utilization Sentinel")]
 pub struct Cli {
     /// Operating mode
-    #[arg(long, default_value = "mock")]
+    #[arg(long, value_enum, default_value = "mock")]
     pub mode: RunMode,
 
-    /// Path to scenario file (for scenario mode)
+    /// Event file to replay (for replay mode).
+    /// Accepts both raw event arrays and scenario files (with expected_states).
     #[arg(long)]
-    pub scenario: Option<String>,
+    pub file: Option<PathBuf>,
 
-    /// Path to replay file (for replay mode)
+    /// Mock profile preset
+    #[arg(long, value_enum, default_value = "healthy")]
+    pub profile: MockProfile,
+
+    /// Path to compiled eBPF object (for live mode)
     #[arg(long)]
-    pub replay_file: Option<PathBuf>,
+    pub ebpf_path: Option<PathBuf>,
 
     /// Number of CPUs to simulate (for mock mode)
     #[arg(long, default_value = "4")]
     pub num_cpus: u32,
 
     /// Enable TUI dashboard
-    #[arg(long, default_value = "true")]
+    #[arg(long)]
     pub tui: bool,
 
     /// Time scale for replay (0 = instant, 1.0 = realtime, 2.0 = 2x speed)
-    #[arg(long, default_value = "1.0")]
+    #[arg(long, default_value = "0.0")]
     pub time_scale: f64,
 
     /// Maximum events before stopping (0 = unlimited)
@@ -37,14 +42,24 @@ pub struct Cli {
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum RunMode {
-    /// Live eBPF probes (Linux only)
+    /// Live eBPF probes (Linux only, requires --ebpf-path)
     Live,
-    /// Synthetic event generation
+    /// Synthetic event generation (use --profile to select preset)
     Mock,
-    /// Replay recorded events from file
+    /// Replay events from a file (requires --file)
     Replay,
-    /// Run a named test scenario
-    Scenario,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum MockProfile {
+    /// Normal operation — balanced IRQs, low latency
+    Healthy,
+    /// IRQ affinity skew — 80% interrupts on CPU 0
+    Skew,
+    /// RDMA completion queue latency spike (8x baseline)
+    Spike,
+    /// Slab allocator pressure (10x latency)
+    Pressure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
