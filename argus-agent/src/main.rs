@@ -2,8 +2,8 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-use anyhow::Result;
-use argus_agent::config::{Cli, RunMode};
+use anyhow::{bail, Context, Result};
+use argus_agent::config::{Cli, MockProfile, RunMode};
 use argus_agent::pipeline::Pipeline;
 use argus_agent::sources::mock::{MockConfig, MockEventSource};
 use argus_agent::sources::replay::ReplayEventSource;
@@ -26,58 +26,12 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let source_name = format!("{:?}", cli.mode).to_lowercase();
-
-    let mut source: AnyEventSource = match cli.mode {
-        RunMode::Mock => {
-            let config = MockConfig {
-                num_cpus: cli.num_cpus,
-                max_events: if cli.max_events > 0 {
-                    Some(cli.max_events)
-                } else {
-                    None
-                },
-                ..MockConfig::healthy()
-            };
-            AnyEventSource::Mock(MockEventSource::new(config))
-        }
-        RunMode::Replay => {
-            let path = cli
-                .replay_file
-                .as_ref()
-                .expect("--replay-file required in replay mode");
-            let source = ReplayEventSource::from_file(path)?.with_time_scale(cli.time_scale);
-            AnyEventSource::Replay(source)
-        }
-        RunMode::Scenario => {
-            let scenario_name = cli
-                .scenario
-                .as_ref()
-                .expect("--scenario required in scenario mode");
-            let path = std::path::PathBuf::from(format!(
-                "argus-test-scenarios/scenarios/{scenario_name}.json"
-            ));
-            let (source, _expected) = ReplayEventSource::from_scenario_file(&path)?;
-            AnyEventSource::Replay(source.with_time_scale(cli.time_scale))
-        }
-        RunMode::Live => {
-            #[cfg(target_os = "linux")]
-            {
-                eprintln!("Live eBPF mode not yet implemented (Phase 3)");
-                return Ok(());
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                eprintln!("Live eBPF mode requires Linux");
-                return Ok(());
-            }
-        }
-    };
+    let (mut source, source_name) = build_event_source(&cli)?;
 
     let mut pipeline = Pipeline::new(cli.num_cpus);
     let mut telemetry = TelemetryCollector::default();
     let mut dash_state = DashboardState {
-        source_name: source_name.clone(),
+        source_name,
         ..Default::default()
     };
     let start = std::time::Instant::now();
@@ -156,4 +110,84 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
+    match cli.mode {
+        RunMode::Mock => {
+            let base = match cli.profile {
+                MockProfile::Healthy => MockConfig::healthy(),
+                MockProfile::Skew => MockConfig::interrupt_skew(),
+                MockProfile::Spike => MockConfig::rdma_latency_spike(),
+                MockProfile::Pressure => MockConfig::slab_pressure(),
+            };
+            let config = MockConfig {
+                num_cpus: cli.num_cpus,
+                max_events: if cli.max_events > 0 {
+                    Some(cli.max_events)
+                } else {
+                    None
+                },
+                ..base
+            };
+            let name = format!("mock/{:?}", cli.profile).to_lowercase();
+            Ok((AnyEventSource::Mock(MockEventSource::new(config)), name))
+        }
+        RunMode::Replay => {
+            let path = cli
+                .file
+                .as_ref()
+                .context("--file <path> is required in replay mode")?;
+
+            if !path.exists() {
+                bail!("file not found: {}", path.display());
+            }
+
+            let contents = std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+
+            // Try scenario format first (has "events" + "expected_states" fields),
+            // fall back to raw event array.
+            let source = if let Ok(scenario) = serde_json::from_str::<argus_common::TestScenario>(&contents) {
+                tracing::info!(
+                    name = scenario.name,
+                    events = scenario.events.len(),
+                    "loaded scenario"
+                );
+                ReplayEventSource::from_events(scenario.events)
+            } else {
+                let events: Vec<argus_common::ArgusEvent> = serde_json::from_str(&contents)
+                    .with_context(|| format!("failed to parse {} as events or scenario", path.display()))?;
+                ReplayEventSource::from_events(events)
+            };
+
+            let source = source.with_time_scale(cli.time_scale);
+            let name = format!("replay/{}", path.file_name().unwrap_or_default().to_string_lossy());
+            Ok((AnyEventSource::Replay(source), name))
+        }
+        RunMode::Live => {
+            #[cfg(target_os = "linux")]
+            {
+                let ebpf_path = cli
+                    .ebpf_path
+                    .as_ref()
+                    .context("--ebpf-path <path> is required in live mode")?;
+
+                if !ebpf_path.exists() {
+                    bail!(
+                        "eBPF artifact not found: {}\nBuild it with: just build-ebpf",
+                        ebpf_path.display()
+                    );
+                }
+
+                let source = argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path)
+                    .map_err(|e| anyhow::anyhow!("failed to load eBPF probes: {e}"))?;
+                Ok((AnyEventSource::Ebpf(source), "ebpf/live".into()))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                bail!("live eBPF mode requires Linux — use --mode mock or --mode replay on this platform");
+            }
+        }
+    }
 }
