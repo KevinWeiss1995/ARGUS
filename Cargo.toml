@@ -4,6 +4,9 @@ members = [
     "argus-agent",
     "xtask",
 ]
+exclude = [
+    "argus-ebpf",
+]
 resolver = "2"
 
 [workspace.package]
