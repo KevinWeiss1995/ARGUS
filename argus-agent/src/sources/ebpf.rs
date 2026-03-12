@@ -106,21 +106,37 @@ mod inner {
                 .map_err(|e| EventSourceError::Other(format!("failed to load eBPF: {e}")))?;
 
             if let Err(e) = EbpfLogger::init(&mut ebpf) {
-                warn!("Failed to init eBPF logger: {e}");
+                warn!("Failed to init eBPF logger (non-fatal): {e}");
             }
 
-            Self::attach_tracepoint(&mut ebpf, "trace_kmem_cache_alloc", "kmem", "kmem_cache_alloc")?;
-            Self::attach_tracepoint(&mut ebpf, "trace_kmem_cache_free", "kmem", "kmem_cache_free")?;
-            Self::attach_tracepoint(&mut ebpf, "trace_irq_handler_entry", "irq", "irq_handler_entry")?;
-            Self::attach_tracepoint(&mut ebpf, "trace_napi_poll", "napi", "napi_poll")?;
+            let probes: &[(&str, &str, &str)] = &[
+                ("trace_kmem_cache_alloc", "kmem", "kmem_cache_alloc"),
+                ("trace_kmem_cache_free", "kmem", "kmem_cache_free"),
+                ("trace_irq_handler_entry", "irq", "irq_handler_entry"),
+                ("trace_napi_poll", "napi", "napi_poll"),
+            ];
+
+            let mut attached = 0u32;
+            for &(prog, category, name) in probes {
+                match Self::attach_tracepoint(&mut ebpf, prog, category, name) {
+                    Ok(()) => attached += 1,
+                    Err(e) => warn!("skipping {category}/{name}: {e}"),
+                }
+            }
+
+            if attached == 0 {
+                return Err(EventSourceError::Other(
+                    "no eBPF probes could be attached — check kernel tracepoint availability".into(),
+                ));
+            }
+
+            info!(attached, total = probes.len(), "eBPF probes attached");
 
             let events_map = ebpf
                 .take_map("EVENTS")
                 .ok_or_else(|| EventSourceError::Other("EVENTS map not found".into()))?;
             let ring_buf = RingBuf::try_from(events_map)
                 .map_err(|e| EventSourceError::Other(format!("EVENTS is not a RingBuf: {e}")))?;
-
-            info!("eBPF probes attached successfully");
 
             Ok(Self {
                 ebpf,
