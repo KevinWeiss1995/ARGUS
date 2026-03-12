@@ -1,11 +1,15 @@
 default:
     @just --list
 
-# Build all userspace crates
+# Build the agent (default workspace member)
 build:
-    cargo build --workspace
+    cargo build
 
-# Run all unit and integration tests (Tier 0)
+# Build in release mode
+build-release:
+    cargo build --release
+
+# Run all unit and integration tests
 test:
     cargo test --workspace
 
@@ -29,23 +33,49 @@ fmt-check:
 deny:
     cargo deny check
 
-# Run a test scenario by name (e.g., just scenario interrupt-skew)
-scenario name:
-    cargo run --bin argus-agent -- --mode scenario --scenario {{name}}
+# ---------------------------------------------------------------------------
+# Agent run commands — all use `cargo run` with default-members
+# ---------------------------------------------------------------------------
 
-# Run in replay mode with a recorded event file
-replay file:
-    cargo run --bin argus-agent -- --mode replay --replay-file {{file}}
+# Run mock mode with TUI (default healthy profile)
+run:
+    cargo run -- --tui
 
-# Run the agent in mock mode (generates synthetic events)
-mock:
-    cargo run --bin argus-agent -- --mode mock
+# Run mock mode with a specific profile (healthy, skew, spike, pressure)
+run-profile profile:
+    cargo run -- --mode mock --profile {{profile}} --tui
+
+# Replay an event/scenario file with TUI
+run-replay file:
+    cargo run -- --mode replay --file {{file}} --tui
+
+# Run live eBPF mode (Linux only)
+run-live:
+    cargo run --release -- --mode live --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf --tui
+
+# Quick demo: cycle through all mock profiles
+demo:
+    @echo "=== healthy ==="
+    cargo run -- --mode mock --profile healthy --tui --max-events 300
+    @echo ""
+    @echo "=== interrupt skew ==="
+    cargo run -- --mode mock --profile skew --tui --max-events 300
+    @echo ""
+    @echo "=== RDMA latency spike ==="
+    cargo run -- --mode mock --profile spike --tui --max-events 300
+    @echo ""
+    @echo "=== slab pressure ==="
+    cargo run -- --mode mock --profile pressure --tui --max-events 300
 
 # Run property-based tests with extended cases
 proptest:
     PROPTEST_CASES=10000 cargo test --workspace
 
-# Build eBPF programs (Linux only, requires nightly + bpf-linker)
+# ---------------------------------------------------------------------------
+# eBPF (Linux only)
+# ---------------------------------------------------------------------------
+
+# Build eBPF programs (requires nightly + bpf-linker)
 build-ebpf:
     cargo xtask build-ebpf
 
@@ -56,6 +86,10 @@ build-ebpf-release:
 # Build everything (eBPF + userspace)
 build-all:
     cargo xtask build-all
+
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
 
 # Setup development environment
 setup:
@@ -75,7 +109,16 @@ audit:
     cargo audit
     cargo deny check advisories
 
-# Run eBPF tests in OrbStack/Lima VM (macOS development)
-vm-test:
-    @echo "Start an ARM64 Linux VM with OrbStack or Lima,"
-    @echo "then run: just setup-ebpf && just build-ebpf && just test"
+# Show what the Jetson / Linux target can do
+check-capabilities:
+    @echo "=== System ==="
+    uname -a
+    @echo ""
+    @echo "=== Agent binary ==="
+    @ls -la target/release/argus-agent 2>/dev/null || ls -la target/debug/argus-agent 2>/dev/null || echo "Not built yet — run: just build"
+    @echo ""
+    @echo "=== eBPF artifact ==="
+    @ls -la argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf 2>/dev/null || echo "Not built — run: just build-ebpf"
+    @echo ""
+    @echo "=== Fault injection ==="
+    @sudo bash scripts/inject-faults.sh lo capabilities 2>/dev/null || echo "Run with sudo for full capabilities check"
