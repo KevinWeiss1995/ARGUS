@@ -16,6 +16,15 @@ die()  { echo "FATAL: $*" >&2; exit 1; }
 warn() { echo "WARN:  $*" >&2; }
 info() { echo "INFO:  $*"; }
 
+live_mode_reminder() {
+    echo ""
+    echo "NOTE: Fault injection affects the real kernel. To observe its effects in ARGUS,"
+    echo "      run in live eBPF mode (not mock):"
+    echo ""
+    echo "  sudo argus-agent --mode live --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf --tui"
+    echo ""
+}
+
 require_root() {
     [[ $EUID -eq 0 ]] || die "Must run as root (try: sudo $SCRIPT_NAME $*)"
 }
@@ -239,28 +248,33 @@ EOF
         require_iface
         detect_capabilities
         do_jitter
+        live_mode_reminder
         ;;
     loss)
         require_root
         require_iface
         detect_capabilities
         do_loss 0.5
+        live_mode_reminder
         ;;
     heavy-loss)
         require_root
         require_iface
         detect_capabilities
         do_loss 5
+        live_mode_reminder
         ;;
     latency)
         require_root
         require_iface
         detect_capabilities
         do_latency
+        live_mode_reminder
         ;;
     slab-pressure)
         require_root
         slab_pressure
+        live_mode_reminder
         ;;
     clear)
         require_root
