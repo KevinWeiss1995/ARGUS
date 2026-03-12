@@ -183,7 +183,7 @@ tier0_tests() {
             [[ -f "$scenario" ]] || continue
             local sname
             sname=$(basename "$scenario" .json)
-            log=$(run_agent "t0_replay_${sname}" --mode replay --scenario "$scenario")
+            log=$(run_agent "t0_replay_${sname}" --mode replay --file "$scenario")
             if [[ -f "$log" && -s "$log" ]]; then
                 record_pass "replay $sname"
             else
@@ -225,7 +225,7 @@ tier1_tests() {
 
     # Test: eBPF probes load and produce events
     local log
-    log=$(run_agent "t1_ebpf_basic" --mode ebpf --ebpf-path "$ebpf_path" --max-events 100)
+    log=$(run_agent "t1_ebpf_basic" --mode live --ebpf-path "$ebpf_path" --max-events 100)
     if [[ -f "$log" ]]; then
         if check_log_for "$log" "probes attached\|event.*slab\|event.*irq"; then
             record_pass "eBPF probes loaded and produced events"
