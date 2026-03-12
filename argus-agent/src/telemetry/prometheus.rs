@@ -13,6 +13,7 @@ pub struct PrometheusExporter {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Fields are held to keep prometheus registry handles alive for scraping
 struct ArgusPrometheusMetrics {
     health_state: Gauge,
     event_count: Counter,

@@ -73,7 +73,7 @@ proptest! {
     fn irq_skew_monotonic(skew_pct in 50u32..100) {
         let total = 100u32;
         let skewed = (total as f64 * skew_pct as f64 / 100.0) as u32;
-        let remaining = total - skewed;
+        let _remaining = total - skewed;
 
         let mut pipeline_skewed = Pipeline::new(4);
         for i in 0..total {

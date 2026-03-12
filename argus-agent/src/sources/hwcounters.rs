@@ -12,6 +12,7 @@ pub struct HwCounterReader {
 }
 
 struct IbPort {
+    #[allow(dead_code)]
     device: String,
     port_num: u32,
     counter_dir: PathBuf,
