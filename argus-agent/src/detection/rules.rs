@@ -105,9 +105,7 @@ impl DetectionRule for RdmaLatencySpikeRule {
                 } else {
                     HealthState::Degraded
                 },
-                message: format!(
-                    "RDMA latency spike: {avg_latency}ns ({ratio:.1}x baseline)"
-                ),
+                message: format!("RDMA latency spike: {avg_latency}ns ({ratio:.1}x baseline)"),
             })
         } else {
             None

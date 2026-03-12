@@ -18,8 +18,8 @@ mod inner {
     use std::path::Path;
     use tracing::{info, warn};
 
-    use argus_common::*;
     use crate::sources::{EventSource, EventSourceError};
+    use argus_common::*;
 
     const EVENT_TYPE_SLAB_ALLOC: u32 = 1;
     const EVENT_TYPE_SLAB_FREE: u32 = 2;
@@ -126,7 +126,8 @@ mod inner {
 
             if attached == 0 {
                 return Err(EventSourceError::Other(
-                    "no eBPF probes could be attached — check kernel tracepoint availability".into(),
+                    "no eBPF probes could be attached — check kernel tracepoint availability"
+                        .into(),
                 ));
             }
 
@@ -161,8 +162,11 @@ mod inner {
 
             prog.load()
                 .map_err(|e| EventSourceError::Other(format!("failed to load {prog_name}: {e}")))?;
-            prog.attach(category, name)
-                .map_err(|e| EventSourceError::Other(format!("failed to attach {prog_name} to {category}/{name}: {e}")))?;
+            prog.attach(category, name).map_err(|e| {
+                EventSourceError::Other(format!(
+                    "failed to attach {prog_name} to {category}/{name}: {e}"
+                ))
+            })?;
 
             info!(prog_name, category, name, "tracepoint attached");
             Ok(())

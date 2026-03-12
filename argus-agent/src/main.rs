@@ -155,7 +155,9 @@ fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
 
             // Try scenario format first (has "events" + "expected_states" fields),
             // fall back to raw event array.
-            let source = if let Ok(scenario) = serde_json::from_str::<argus_common::TestScenario>(&contents) {
+            let source = if let Ok(scenario) =
+                serde_json::from_str::<argus_common::TestScenario>(&contents)
+            {
                 tracing::info!(
                     name = scenario.name,
                     events = scenario.events.len(),
@@ -164,12 +166,17 @@ fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
                 ReplayEventSource::from_events(scenario.events)
             } else {
                 let events: Vec<argus_common::ArgusEvent> = serde_json::from_str(&contents)
-                    .with_context(|| format!("failed to parse {} as events or scenario", path.display()))?;
+                    .with_context(|| {
+                        format!("failed to parse {} as events or scenario", path.display())
+                    })?;
                 ReplayEventSource::from_events(events)
             };
 
             let source = source.with_time_scale(cli.time_scale);
-            let name = format!("replay/{}", path.file_name().unwrap_or_default().to_string_lossy());
+            let name = format!(
+                "replay/{}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
             Ok((AnyEventSource::Replay(source), name))
         }
         RunMode::Live => {

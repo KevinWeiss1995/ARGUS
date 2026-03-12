@@ -141,6 +141,9 @@ mod tests {
 
         engine.reset();
         let after_reset = engine.evaluate(&metrics);
-        assert!(!after_reset.is_empty(), "alert fires again after window reset");
+        assert!(
+            !after_reset.is_empty(),
+            "alert fires again after window reset"
+        );
     }
 }

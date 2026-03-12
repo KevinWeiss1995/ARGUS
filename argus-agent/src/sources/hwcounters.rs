@@ -31,10 +31,8 @@ impl HwCounterReader {
 
                 if let Ok(port_entries) = std::fs::read_dir(&ports_dir) {
                     for port_entry in port_entries.flatten() {
-                        if let Ok(port_num) = port_entry
-                            .file_name()
-                            .to_string_lossy()
-                            .parse::<u32>()
+                        if let Ok(port_num) =
+                            port_entry.file_name().to_string_lossy().parse::<u32>()
                         {
                             let counter_dir = port_entry.path().join("counters");
                             if counter_dir.exists() {

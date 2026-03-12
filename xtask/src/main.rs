@@ -54,7 +54,13 @@ fn build_ebpf(release: bool) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&ebpf_dir);
     cmd.env_remove("RUSTUP_TOOLCHAIN");
-    cmd.args(["+nightly", "build", "--target=bpfel-unknown-none", "-Z", "build-std=core"]);
+    cmd.args([
+        "+nightly",
+        "build",
+        "--target=bpfel-unknown-none",
+        "-Z",
+        "build-std=core",
+    ]);
 
     if release {
         cmd.arg("--release");

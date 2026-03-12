@@ -118,7 +118,7 @@ fn render_dashboard(frame: &mut Frame, state: &DashboardState) {
         .constraints([
             Constraint::Length(3),  // header
             Constraint::Length(6),  // IRQ distribution
-            Constraint::Min(8),    // sparklines / metrics
+            Constraint::Min(8),     // sparklines / metrics
             Constraint::Length(10), // event log
         ])
         .split(area);
@@ -134,7 +134,10 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
         HealthState::Healthy => (Style::default().fg(Color::Green).bold(), "HEALTHY"),
         HealthState::Degraded => (Style::default().fg(Color::Yellow).bold(), "DEGRADED"),
         HealthState::Critical => (
-            Style::default().fg(Color::Red).bold().add_modifier(Modifier::SLOW_BLINK),
+            Style::default()
+                .fg(Color::Red)
+                .bold()
+                .add_modifier(Modifier::SLOW_BLINK),
             "CRITICAL",
         ),
     };
@@ -175,7 +178,13 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
         return;
     }
 
-    let max_count = dist.per_cpu_counts.iter().copied().max().unwrap_or(1).max(1);
+    let max_count = dist
+        .per_cpu_counts
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -248,13 +257,7 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     );
 }
 
-fn render_sparkline_panel(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    data: &[f64],
-    color: Color,
-) {
+fn render_sparkline_panel(frame: &mut Frame, area: Rect, title: &str, data: &[f64], color: Color) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -272,11 +275,12 @@ fn render_sparkline_panel(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let max_val = data.iter().copied().fold(f64::NEG_INFINITY, f64::max).max(1.0);
-    let u64_data: Vec<u64> = data
+    let max_val = data
         .iter()
-        .map(|&v| (v / max_val * 100.0) as u64)
-        .collect();
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(1.0);
+    let u64_data: Vec<u64> = data.iter().map(|&v| (v / max_val * 100.0) as u64).collect();
 
     let sparkline = Sparkline::default()
         .data(&u64_data)
@@ -288,7 +292,12 @@ fn render_sparkline_panel(
         .style(Style::default().fg(Color::DarkGray));
 
     if inner.height >= 2 {
-        let spark_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+        let spark_area = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
         let summary_area = Rect::new(
             inner.x,
             inner.y + inner.height.saturating_sub(1),
@@ -337,15 +346,15 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
             };
 
             Line::from(vec![
-                Span::styled(format!("  {ts_secs:>10.3}s "), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {ts_secs:>10.3}s "),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(
                     format!("{:<24} ", alert.kind_name()),
                     Style::default().fg(Color::White),
                 ),
-                Span::styled(
-                    format!("[{}] ", alert.severity),
-                    severity_style,
-                ),
+                Span::styled(format!("[{}] ", alert.severity), severity_style),
                 Span::styled(&alert.message, Style::default().fg(Color::DarkGray)),
             ])
         })

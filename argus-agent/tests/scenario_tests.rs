@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 fn run_scenario(scenario_path: &str) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = PathBuf::from(manifest_dir).parent().unwrap().join(scenario_path);
+    let path = PathBuf::from(manifest_dir)
+        .parent()
+        .unwrap()
+        .join(scenario_path);
     let path = path.as_path();
     let contents = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("Failed to read scenario {scenario_path}: {e}"));

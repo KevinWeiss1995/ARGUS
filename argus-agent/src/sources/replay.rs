@@ -23,7 +23,9 @@ impl ReplayEventSource {
         })
     }
 
-    pub fn from_scenario_file(path: &Path) -> Result<(Self, Vec<argus_common::ExpectedStateTransition>), EventSourceError> {
+    pub fn from_scenario_file(
+        path: &Path,
+    ) -> Result<(Self, Vec<argus_common::ExpectedStateTransition>), EventSourceError> {
         let contents = std::fs::read_to_string(path)?;
         let scenario: TestScenario = serde_json::from_str(&contents)?;
         let source = Self {
