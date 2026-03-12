@@ -11,7 +11,7 @@ expression: rendered
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ CQ Latency (μs) ───────┐┌ Slab Alloc Latency (μs) ─┐┌ IRQ Count ─────────────┐
+┌ CQ Latency (μs) ───────┐┌ Slab Alloc Latency (μs) ─┐┌ IRQ Rate (/window) ────┐
 │  Waiting for data...   ││  Waiting for data...     ││  Waiting for data...   │
 │                        ││                          ││                        │
 │                        ││                          ││                        │
