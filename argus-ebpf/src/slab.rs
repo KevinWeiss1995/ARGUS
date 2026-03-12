@@ -4,7 +4,6 @@ use aya_ebpf::{
     maps::HashMap,
     programs::TracePointContext,
 };
-use aya_log_ebpf::info;
 
 use super::EVENTS;
 
@@ -92,7 +91,7 @@ pub fn trace_kmem_cache_free(ctx: TracePointContext) -> u32 {
     }
 }
 
-fn try_trace_kmem_cache_free(ctx: &TracePointContext) -> Result<u32, i64> {
+fn try_trace_kmem_cache_free(_ctx: &TracePointContext) -> Result<u32, i64> {
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
 
