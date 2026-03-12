@@ -43,12 +43,20 @@ async fn main() -> Result<()> {
     };
 
     let mut event_count = 0u64;
+    let window_duration = std::time::Duration::from_secs(cli.window_secs);
+    let mut window_start = std::time::Instant::now();
 
     loop {
         if let Some(ref dash) = dashboard {
             if dash.poll_quit()? {
                 break;
             }
+        }
+
+        if window_start.elapsed() >= window_duration {
+            dash_state.push_metrics_snapshot();
+            pipeline.reset_window();
+            window_start = std::time::Instant::now();
         }
 
         match source.next_event().await {
@@ -68,7 +76,6 @@ async fn main() -> Result<()> {
                 dash_state.metrics = pipeline.current_metrics().clone();
                 dash_state.event_count = event_count;
                 dash_state.uptime_secs = start.elapsed().as_secs_f64();
-                dash_state.push_metrics_snapshot();
 
                 if let Some(ref mut dash) = dashboard {
                     dash.draw(&dash_state)?;
@@ -130,7 +137,7 @@ fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
                 },
                 ..base
             };
-            let name = format!("mock/{:?}", cli.profile).to_lowercase();
+            let name = format!("mock/{:?} (simulated)", cli.profile).to_lowercase();
             Ok((AnyEventSource::Mock(MockEventSource::new(config)), name))
         }
         RunMode::Replay => {

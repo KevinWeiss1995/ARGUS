@@ -38,6 +38,11 @@ pub struct Cli {
     /// Maximum events before stopping (0 = unlimited)
     #[arg(long, default_value = "0")]
     pub max_events: u64,
+
+    /// Aggregation window duration in seconds.
+    /// Detection and sparklines reset each window so they reflect recent behavior.
+    #[arg(long, default_value = "10")]
+    pub window_secs: u64,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
