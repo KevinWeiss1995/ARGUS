@@ -127,7 +127,7 @@ impl PrometheusExporter {
     }
 
     /// Update all gauges from aggregated metrics.
-    pub fn update(&self, metrics: &AggregatedMetrics, health: HealthState, event_count: u64) {
+    pub fn update(&self, metrics: &AggregatedMetrics, health: HealthState, _event_count: u64) {
         let state_val: i64 = match health {
             HealthState::Healthy => 0,
             HealthState::Degraded => 1,

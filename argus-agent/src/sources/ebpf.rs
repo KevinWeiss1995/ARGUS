@@ -2,15 +2,20 @@
 //!
 //! Loads compiled eBPF programs, attaches tracepoints, and reads events
 //! from the shared ring buffer.
+//!
+//! # Safety
+//! This module is the kernel/eBPF FFI boundary. It allows `unsafe_code`
+//! because reading from the eBPF ring buffer requires interpreting raw bytes
+//! from kernel memory. All unsafe blocks are size-checked before access.
 
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 mod inner {
     use aya::maps::RingBuf;
     use aya::programs::TracePoint;
     use aya::{Ebpf, EbpfLoader};
     use aya_log::EbpfLogger;
     use std::path::Path;
-    use tokio::io::unix::AsyncFd;
     use tracing::{info, warn};
 
     use argus_common::*;
@@ -21,63 +26,75 @@ mod inner {
     const EVENT_TYPE_IRQ_ENTRY: u32 = 3;
     const EVENT_TYPE_NAPI_POLL: u32 = 4;
 
-    /// Ring buffer event header - must match eBPF-side layout.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct RingEventHeader {
-        event_type: u32,
-        _pad: u32,
-        timestamp_ns: u64,
-        cpu: u32,
+    fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+        data.get(offset..offset + 4)
+            .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct SlabAllocRingEvent {
-        event_type: u32,
-        _pad: u32,
-        timestamp_ns: u64,
-        cpu: u32,
-        bytes_req: u32,
-        bytes_alloc: u32,
-        _pad2: u32,
-        latency_ns: u64,
+    fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
+        data.get(offset..offset + 8)
+            .map(|b| u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct SlabFreeRingEvent {
-        event_type: u32,
-        _pad: u32,
-        timestamp_ns: u64,
-        cpu: u32,
-        bytes_freed: u32,
+    /// Parse a slab alloc event from raw ring buffer bytes.
+    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_req(4) + bytes_alloc(4) + pad2(4) + latency(8) = 40 bytes
+    fn parse_slab_alloc(data: &[u8]) -> Option<ArgusEvent> {
+        if data.len() < 40 {
+            return None;
+        }
+        Some(ArgusEvent::SlabAlloc(SlabAllocEvent {
+            timestamp_ns: read_u64(data, 8)?,
+            cpu: read_u32(data, 16)?,
+            bytes_req: read_u32(data, 20)?,
+            bytes_alloc: read_u32(data, 24)?,
+            latency_ns: read_u64(data, 32)?,
+            numa_node: 0,
+        }))
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct IrqEntryRingEvent {
-        event_type: u32,
-        _pad: u32,
-        timestamp_ns: u64,
-        cpu: u32,
-        irq: u32,
+    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_freed(4) = 24 bytes
+    fn parse_slab_free(data: &[u8]) -> Option<ArgusEvent> {
+        if data.len() < 24 {
+            return None;
+        }
+        Some(ArgusEvent::SlabFree(SlabFreeEvent {
+            timestamp_ns: read_u64(data, 8)?,
+            cpu: read_u32(data, 16)?,
+            bytes_freed: read_u32(data, 20)?,
+        }))
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct NapiPollRingEvent {
-        event_type: u32,
-        _pad: u32,
-        timestamp_ns: u64,
-        cpu: u32,
-        budget: u32,
-        work_done: u32,
-        _pad2: u32,
+    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + irq(4) = 24 bytes
+    fn parse_irq_entry(data: &[u8]) -> Option<ArgusEvent> {
+        if data.len() < 24 {
+            return None;
+        }
+        Some(ArgusEvent::IrqEntry(IrqEntryEvent {
+            timestamp_ns: read_u64(data, 8)?,
+            cpu: read_u32(data, 16)?,
+            irq: read_u32(data, 20)?,
+            handler_name_hash: 0,
+        }))
+    }
+
+    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + budget(4) + work_done(4) + pad2(4) = 32 bytes
+    fn parse_napi_poll(data: &[u8]) -> Option<ArgusEvent> {
+        if data.len() < 32 {
+            return None;
+        }
+        Some(ArgusEvent::NapiPoll(NapiPollEvent {
+            timestamp_ns: read_u64(data, 8)?,
+            cpu: read_u32(data, 16)?,
+            budget: read_u32(data, 20)?,
+            work_done: read_u32(data, 24)?,
+            dev_name_hash: 0,
+        }))
     }
 
     pub struct EbpfEventSource {
+        #[allow(dead_code)]
         ebpf: Ebpf,
+        ring_buf: RingBuf<aya::maps::MapData>,
         pending_events: Vec<ArgusEvent>,
     }
 
@@ -92,16 +109,22 @@ mod inner {
                 warn!("Failed to init eBPF logger: {e}");
             }
 
-            // Attach tracepoints
             Self::attach_tracepoint(&mut ebpf, "trace_kmem_cache_alloc", "kmem", "kmem_cache_alloc")?;
             Self::attach_tracepoint(&mut ebpf, "trace_kmem_cache_free", "kmem", "kmem_cache_free")?;
             Self::attach_tracepoint(&mut ebpf, "trace_irq_handler_entry", "irq", "irq_handler_entry")?;
             Self::attach_tracepoint(&mut ebpf, "trace_napi_poll", "napi", "napi_poll")?;
 
+            let events_map = ebpf
+                .take_map("EVENTS")
+                .ok_or_else(|| EventSourceError::Other("EVENTS map not found".into()))?;
+            let ring_buf = RingBuf::try_from(events_map)
+                .map_err(|e| EventSourceError::Other(format!("EVENTS is not a RingBuf: {e}")))?;
+
             info!("eBPF probes attached successfully");
 
             Ok(Self {
                 ebpf,
+                ring_buf,
                 pending_events: Vec::new(),
             })
         }
@@ -129,61 +152,20 @@ mod inner {
             Ok(())
         }
 
-        fn drain_ring_buffer(&mut self) -> Result<(), EventSourceError> {
-            let ring_buf = self.ebpf
-                .map_mut("EVENTS")
-                .ok_or_else(|| EventSourceError::Other("EVENTS map not found".into()))?;
-            let ring_buf: &mut RingBuf<_> = ring_buf
-                .try_into()
-                .map_err(|e| EventSourceError::Other(format!("not a ring buffer: {e}")))?;
-
-            while let Some(item) = ring_buf.next() {
+        fn drain_ring_buffer(&mut self) {
+            while let Some(item) = self.ring_buf.next() {
                 let data = item.as_ref();
-                if data.len() < 4 {
+                if data.len() < 8 {
                     continue;
                 }
 
                 let event_type = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
 
                 let event = match event_type {
-                    EVENT_TYPE_SLAB_ALLOC if data.len() >= core::mem::size_of::<SlabAllocRingEvent>() => {
-                        let raw = unsafe { &*(data.as_ptr() as *const SlabAllocRingEvent) };
-                        Some(ArgusEvent::SlabAlloc(SlabAllocEvent {
-                            timestamp_ns: raw.timestamp_ns,
-                            cpu: raw.cpu,
-                            bytes_req: raw.bytes_req,
-                            bytes_alloc: raw.bytes_alloc,
-                            latency_ns: raw.latency_ns,
-                            numa_node: 0,
-                        }))
-                    }
-                    EVENT_TYPE_SLAB_FREE if data.len() >= core::mem::size_of::<SlabFreeRingEvent>() => {
-                        let raw = unsafe { &*(data.as_ptr() as *const SlabFreeRingEvent) };
-                        Some(ArgusEvent::SlabFree(SlabFreeEvent {
-                            timestamp_ns: raw.timestamp_ns,
-                            cpu: raw.cpu,
-                            bytes_freed: raw.bytes_freed,
-                        }))
-                    }
-                    EVENT_TYPE_IRQ_ENTRY if data.len() >= core::mem::size_of::<IrqEntryRingEvent>() => {
-                        let raw = unsafe { &*(data.as_ptr() as *const IrqEntryRingEvent) };
-                        Some(ArgusEvent::IrqEntry(IrqEntryEvent {
-                            timestamp_ns: raw.timestamp_ns,
-                            cpu: raw.cpu,
-                            irq: raw.irq,
-                            handler_name_hash: 0,
-                        }))
-                    }
-                    EVENT_TYPE_NAPI_POLL if data.len() >= core::mem::size_of::<NapiPollRingEvent>() => {
-                        let raw = unsafe { &*(data.as_ptr() as *const NapiPollRingEvent) };
-                        Some(ArgusEvent::NapiPoll(NapiPollEvent {
-                            timestamp_ns: raw.timestamp_ns,
-                            cpu: raw.cpu,
-                            budget: raw.budget,
-                            work_done: raw.work_done,
-                            dev_name_hash: 0,
-                        }))
-                    }
+                    EVENT_TYPE_SLAB_ALLOC => parse_slab_alloc(data),
+                    EVENT_TYPE_SLAB_FREE => parse_slab_free(data),
+                    EVENT_TYPE_IRQ_ENTRY => parse_irq_entry(data),
+                    EVENT_TYPE_NAPI_POLL => parse_napi_poll(data),
                     _ => None,
                 };
 
@@ -191,8 +173,6 @@ mod inner {
                     self.pending_events.push(evt);
                 }
             }
-
-            Ok(())
         }
     }
 
@@ -203,9 +183,8 @@ mod inner {
                     return Ok(event);
                 }
 
-                // Small sleep to avoid busy-spinning, then drain
                 tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                self.drain_ring_buffer()?;
+                self.drain_ring_buffer();
             }
         }
 
@@ -215,6 +194,5 @@ mod inner {
     }
 }
 
-// Re-export on Linux
 #[cfg(target_os = "linux")]
 pub use inner::EbpfEventSource;
