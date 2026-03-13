@@ -69,11 +69,23 @@ async fn main() -> Result<()> {
             #[cfg(target_os = "linux")]
             if let Some(ref reader) = hw_reader {
                 for hw_event in reader.read_all() {
-                    pipeline.process_event(&hw_event);
+                    pipeline.ingest(&hw_event);
                 }
             }
 
+            // Run detection once per window, so alerts and sparklines appear together
+            let alerts = pipeline.evaluate();
+            for alert in alerts {
+                telemetry.record_alert(alert.clone());
+                dash_state.recent_alerts.push(alert);
+                if dash_state.recent_alerts.len() > 100 {
+                    dash_state.recent_alerts.remove(0);
+                }
+            }
+            dash_state.health = pipeline.detection_engine().current_state();
+            dash_state.metrics = pipeline.current_metrics().clone();
             dash_state.push_metrics_snapshot();
+
             pipeline.reset_window();
             window_start = std::time::Instant::now();
         }
@@ -81,17 +93,8 @@ async fn main() -> Result<()> {
         match source.next_event().await {
             Ok(event) => {
                 event_count += 1;
-                let alerts = pipeline.process_event(&event);
+                pipeline.ingest(&event);
 
-                for alert in alerts {
-                    telemetry.record_alert(alert.clone());
-                    dash_state.recent_alerts.push(alert);
-                    if dash_state.recent_alerts.len() > 100 {
-                        dash_state.recent_alerts.remove(0);
-                    }
-                }
-
-                dash_state.health = pipeline.detection_engine().current_state();
                 dash_state.metrics = pipeline.current_metrics().clone();
                 dash_state.event_count = event_count;
                 dash_state.uptime_secs = start.elapsed().as_secs_f64();
@@ -101,8 +104,17 @@ async fn main() -> Result<()> {
                 }
             }
             Err(argus_agent::sources::EventSourceError::Exhausted) => {
+                // Final window evaluation before exiting
+                let alerts = pipeline.evaluate();
+                for alert in alerts {
+                    telemetry.record_alert(alert.clone());
+                    dash_state.recent_alerts.push(alert);
+                }
+                dash_state.health = pipeline.detection_engine().current_state();
+                dash_state.metrics = pipeline.current_metrics().clone();
+                dash_state.push_metrics_snapshot();
+
                 if let Some(ref mut dash) = dashboard {
-                    dash_state.health = pipeline.detection_engine().current_state();
                     dash_state.uptime_secs = start.elapsed().as_secs_f64();
                     dash.draw(&dash_state)?;
 
