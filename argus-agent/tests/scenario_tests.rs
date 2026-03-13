@@ -17,10 +17,12 @@ fn run_scenario(scenario_path: &str) {
     let mut pipeline = Pipeline::new(4);
 
     for (i, event) in scenario.events.iter().enumerate() {
-        pipeline.process_event(event);
+        pipeline.ingest(event);
 
         for expected in &scenario.expected_states {
             if expected.after_event_index == i {
+                // Run detection at checkpoint to get current state
+                let _ = pipeline.evaluate();
                 let actual_state = pipeline.detection_engine().current_state();
                 assert_eq!(
                     actual_state, expected.expected_state,

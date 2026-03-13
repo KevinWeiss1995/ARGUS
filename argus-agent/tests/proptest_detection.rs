@@ -50,9 +50,9 @@ proptest! {
     fn detection_never_panics(events in proptest::collection::vec(arb_event(), 0..500)) {
         let mut pipeline = Pipeline::new(16);
         for event in &events {
-            let _ = pipeline.process_event(event);
+            pipeline.ingest(event);
         }
-        // If we get here without panic, the test passes
+        let _ = pipeline.evaluate();
         let _ = pipeline.detection_engine().current_state();
     }
 
@@ -61,10 +61,11 @@ proptest! {
     fn health_state_always_valid(events in proptest::collection::vec(arb_event(), 1..200)) {
         let mut pipeline = Pipeline::new(16);
         for event in &events {
-            pipeline.process_event(event);
-            let state = pipeline.detection_engine().current_state();
-            prop_assert!(matches!(state, HealthState::Healthy | HealthState::Degraded | HealthState::Critical));
+            pipeline.ingest(event);
         }
+        let _ = pipeline.evaluate();
+        let state = pipeline.detection_engine().current_state();
+        prop_assert!(matches!(state, HealthState::Healthy | HealthState::Degraded | HealthState::Critical));
     }
 
     /// IRQ skew detection is monotonic: higher skew should never produce
@@ -78,7 +79,7 @@ proptest! {
         let mut pipeline_skewed = Pipeline::new(4);
         for i in 0..total {
             let cpu = if i < skewed { 0 } else { (i % 3) + 1 };
-            pipeline_skewed.process_event(&ArgusEvent::IrqEntry(IrqEntryEvent {
+            pipeline_skewed.ingest(&ArgusEvent::IrqEntry(IrqEntryEvent {
                 timestamp_ns: u64::from(i) * 1_000_000,
                 cpu,
                 irq: 33,
@@ -86,6 +87,7 @@ proptest! {
             }));
         }
 
+        let _ = pipeline_skewed.evaluate();
         let state = pipeline_skewed.detection_engine().current_state();
 
         if skew_pct >= 90 && total >= 10 {
@@ -103,7 +105,7 @@ proptest! {
 
         let mut pipeline = Pipeline::new(4);
         for i in 0..20 {
-            pipeline.process_event(&ArgusEvent::CqCompletion(CqCompletionEvent {
+            pipeline.ingest(&ArgusEvent::CqCompletion(CqCompletionEvent {
                 timestamp_ns: i * 1_000_000,
                 cpu: 0,
                 latency_ns: latency,
@@ -113,6 +115,7 @@ proptest! {
             }));
         }
 
+        let _ = pipeline.evaluate();
         let state = pipeline.detection_engine().current_state();
 
         if latency_factor >= 10.0 {
@@ -128,7 +131,7 @@ proptest! {
     fn slab_pressure_needs_ib_errors(alloc_count in 100u64..10_000) {
         let mut pipeline = Pipeline::new(4);
         for i in 0..alloc_count {
-            pipeline.process_event(&ArgusEvent::SlabAlloc(SlabAllocEvent {
+            pipeline.ingest(&ArgusEvent::SlabAlloc(SlabAllocEvent {
                 timestamp_ns: i * 1_000_000,
                 cpu: 0,
                 bytes_req: 64,
@@ -138,6 +141,7 @@ proptest! {
             }));
         }
 
+        let _ = pipeline.evaluate();
         let state = pipeline.detection_engine().current_state();
         prop_assert_eq!(state, HealthState::Healthy,
             "Slab allocs without IB errors should never trigger slab pressure");
@@ -156,13 +160,12 @@ proptest! {
             .chain(cq_events)
             .collect();
 
-        let mut all_alerts = Vec::new();
         for event in &all_events {
-            let alerts = pipeline.process_event(event);
-            all_alerts.extend(alerts);
+            pipeline.ingest(event);
         }
 
-        // Final state should be consistent with the worst alert severity
+        let all_alerts = pipeline.evaluate();
+
         let worst_alert = all_alerts.iter().map(|a| a.severity).max_by_key(|s| match s {
             HealthState::Healthy => 0,
             HealthState::Degraded => 1,
