@@ -117,21 +117,38 @@ mod inner {
             ];
 
             let mut attached = 0u32;
+            let mut failures: Vec<String> = Vec::new();
             for &(prog, category, name) in probes {
                 match Self::attach_tracepoint(&mut ebpf, prog, category, name) {
-                    Ok(()) => attached += 1,
-                    Err(e) => warn!("skipping {category}/{name}: {e}"),
+                    Ok(()) => {
+                        info!("{category}/{name} attached");
+                        attached += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!("{category}/{name}: {e}");
+                        warn!("skipping {msg}");
+                        failures.push(msg);
+                    }
                 }
             }
 
             if attached == 0 {
-                return Err(EventSourceError::Other(
-                    "no eBPF probes could be attached — check kernel tracepoint availability"
-                        .into(),
-                ));
+                let detail = failures.join("\n  ");
+                return Err(EventSourceError::Other(format!(
+                    "no eBPF probes could be attached ({} tried, all failed):\n  {detail}",
+                    probes.len()
+                )));
             }
 
-            info!(attached, total = probes.len(), "eBPF probes attached");
+            if !failures.is_empty() {
+                info!(
+                    attached,
+                    skipped = failures.len(),
+                    "eBPF probes partially attached"
+                );
+            } else {
+                info!(attached, "all eBPF probes attached");
+            }
 
             let events_map = ebpf
                 .take_map("EVENTS")
