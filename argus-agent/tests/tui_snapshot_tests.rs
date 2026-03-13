@@ -26,8 +26,8 @@ fn healthy_state() -> DashboardState {
             },
             ..Default::default()
         },
-        latency_history: vec![2.0, 2.1, 1.9, 2.0, 2.2, 1.8, 2.0, 2.1],
-        slab_latency_history: vec![0.5, 0.48, 0.52, 0.5, 0.49, 0.51, 0.5, 0.48],
+        ib_error_history: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        slab_rate_history: vec![200.0, 198.0, 205.0, 200.0, 195.0, 210.0, 200.0, 198.0],
         irq_rate_history: vec![100.0, 120.0, 110.0, 115.0, 105.0, 125.0, 130.0, 120.0],
         recent_alerts: Vec::new(),
     }
@@ -59,8 +59,8 @@ fn degraded_state() -> DashboardState {
             },
             ..Default::default()
         },
-        latency_history: vec![2.0, 2.1, 2.0, 8.0, 12.0, 14.0, 12.0, 11.0],
-        slab_latency_history: vec![0.5, 0.5, 0.5, 0.8, 1.2, 1.5, 1.3, 1.1],
+        ib_error_history: vec![0.0, 0.0, 0.0, 2.0, 5.0, 8.0, 4.0, 3.0],
+        slab_rate_history: vec![400.0, 410.0, 400.0, 600.0, 800.0, 900.0, 850.0, 800.0],
         irq_rate_history: vec![250.0, 260.0, 280.0, 500.0, 700.0, 750.0, 740.0, 720.0],
         recent_alerts: vec![Alert {
             timestamp_ns: 20_000_000_000,

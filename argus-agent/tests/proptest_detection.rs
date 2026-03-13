@@ -122,31 +122,25 @@ proptest! {
         }
     }
 
-    /// Slab pressure detection with variable latency.
+    /// Slab pressure detection: high alloc rate + IB errors should trigger.
+    /// Without IB errors, slab allocs alone should stay Healthy.
     #[test]
-    fn slab_pressure_monotonic(latency_factor in 1.0f64..20.0) {
-        let baseline = 500u64;
-        let latency = (baseline as f64 * latency_factor) as u64;
-
+    fn slab_pressure_needs_ib_errors(alloc_count in 100u64..10_000) {
         let mut pipeline = Pipeline::new(4);
-        for i in 0..20 {
+        for i in 0..alloc_count {
             pipeline.process_event(&ArgusEvent::SlabAlloc(SlabAllocEvent {
                 timestamp_ns: i * 1_000_000,
                 cpu: 0,
                 bytes_req: 64,
                 bytes_alloc: 64,
-                latency_ns: latency,
+                latency_ns: 0,
                 numa_node: 0,
             }));
         }
 
         let state = pipeline.detection_engine().current_state();
-
-        if latency_factor >= 10.0 {
-            prop_assert_eq!(state, HealthState::Critical);
-        } else if latency_factor >= 5.0 {
-            prop_assert!(matches!(state, HealthState::Degraded | HealthState::Critical));
-        }
+        prop_assert_eq!(state, HealthState::Healthy,
+            "Slab allocs without IB errors should never trigger slab pressure");
     }
 
     /// Mixed events should never produce inconsistent state.
