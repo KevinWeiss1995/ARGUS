@@ -21,7 +21,7 @@ struct CqCompletionRingEvent {
 /// Tracepoint: ib/ib_cq_poll
 /// Fires on InfiniBand completion queue polling (when available).
 /// Falls back to mlx5-specific tracepoints on Mellanox hardware.
-#[tracepoint]
+#[tracepoint(category = "ib", name = "ib_cq_poll")]
 pub fn trace_cq_completion(ctx: TracePointContext) -> u32 {
     match try_trace_cq(&ctx) {
         Ok(0) => 0,
