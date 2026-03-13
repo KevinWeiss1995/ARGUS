@@ -4,7 +4,6 @@
 
 mod slab;
 mod interrupts;
-mod rdma;
 
 use aya_ebpf::{macros::map, maps::RingBuf};
 
