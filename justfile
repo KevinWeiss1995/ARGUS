@@ -85,10 +85,32 @@ build-ebpf-release:
 
 # Inspect compiled eBPF binary — verify program sections have code
 inspect-ebpf:
-    @echo "=== eBPF binary sections ==="
-    @llvm-objdump -d argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf 2>/dev/null \
-        || rust-objdump -d argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf 2>/dev/null \
-        || echo "No objdump available. Install llvm or run: rustup component add llvm-tools"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BPF_BIN="argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf"
+    if [ ! -f "$BPF_BIN" ]; then
+        echo "eBPF binary not found. Run: just build-ebpf"
+        exit 1
+    fi
+    echo "=== eBPF binary: $(wc -c < "$BPF_BIN") bytes ==="
+    # Find llvm-objdump: PATH, then rustup sysroot
+    OBJDUMP=""
+    if command -v llvm-objdump &>/dev/null; then
+        OBJDUMP="llvm-objdump"
+    else
+        SYSROOT="$(rustc --print sysroot 2>/dev/null || true)"
+        if [ -n "$SYSROOT" ]; then
+            FOUND="$(find "$SYSROOT" -name 'llvm-objdump' -type f 2>/dev/null | head -1)"
+            [ -n "$FOUND" ] && OBJDUMP="$FOUND"
+        fi
+    fi
+    if [ -z "$OBJDUMP" ]; then
+        echo "No llvm-objdump found. Run: rustup component add llvm-tools"
+        exit 1
+    fi
+    echo "Using: $OBJDUMP"
+    echo ""
+    "$OBJDUMP" -d "$BPF_BIN"
 
 # Build everything (eBPF + userspace)
 build-all:
