@@ -1890,7 +1890,7 @@
     },
     {
       "after_event_index": 199,
-      "expected_state": "Critical"
+      "expected_state": "Healthy"
     }
   ]
 }
