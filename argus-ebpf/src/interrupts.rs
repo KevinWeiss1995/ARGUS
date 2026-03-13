@@ -39,7 +39,7 @@ pub fn trace_irq_handler_entry(ctx: TracePointContext) -> u32 {
 fn try_trace_irq_entry(ctx: &TracePointContext) -> Result<u32, i64> {
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
-    let irq: u32 = unsafe { ctx.read_at(8)? };
+    let irq: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<IrqEntryRingEvent>(0) {
         let event = IrqEntryRingEvent {
@@ -71,8 +71,8 @@ pub fn trace_napi_poll(ctx: TracePointContext) -> u32 {
 fn try_trace_napi_poll(ctx: &TracePointContext) -> Result<u32, i64> {
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
-    let budget: u32 = unsafe { ctx.read_at(8)? };
-    let work_done: u32 = unsafe { ctx.read_at(12)? };
+    let budget: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
+    let work_done: u32 = unsafe { ctx.read_at(12).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<NapiPollRingEvent>(0) {
         let event = NapiPollRingEvent {
