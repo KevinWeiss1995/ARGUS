@@ -19,9 +19,9 @@ info() { echo "INFO:  $*"; }
 live_mode_reminder() {
     echo ""
     echo "NOTE: Fault injection affects the real kernel. To observe its effects in ARGUS,"
-    echo "      run in live eBPF mode (not mock):"
+    echo "      run in live eBPF mode (not mock). From the ARGUS project directory:"
     echo ""
-    echo "  sudo argus-agent --mode live --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf --tui"
+    echo "  sudo ./target/release/argus-agent --mode live --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf --tui"
     echo ""
 }
 
