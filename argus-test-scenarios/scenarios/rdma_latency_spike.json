@@ -1,30 +1,1816 @@
 {
   "name": "rdma_latency_spike",
-  "description": "Sudden RDMA completion latency spike - avg exceeds 5x baseline after spike events dominate",
+  "description": "Normal CQ latency for 80 events, then spike to 15x baseline. Should trigger Degraded.",
   "events": [
-    {"CqCompletion": {"timestamp_ns": 1000000, "cpu": 0, "latency_ns": 2000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 2000000, "cpu": 1, "latency_ns": 1900, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 3000000, "cpu": 2, "latency_ns": 2100, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 4000000, "cpu": 3, "latency_ns": 2050, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 5000000, "cpu": 0, "latency_ns": 1950, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 6000000, "cpu": 1, "latency_ns": 2000, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 7000000, "cpu": 2, "latency_ns": 2100, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 8000000, "cpu": 3, "latency_ns": 1980, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 9000000, "cpu": 0, "latency_ns": 2020, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 10000000, "cpu": 1, "latency_ns": 2000, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 11000000, "cpu": 0, "latency_ns": 25000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 12000000, "cpu": 1, "latency_ns": 28000, "queue_pair_num": 2, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 13000000, "cpu": 2, "latency_ns": 30000, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 14000000, "cpu": 3, "latency_ns": 26000, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 15000000, "cpu": 0, "latency_ns": 32000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 16000000, "cpu": 1, "latency_ns": 29000, "queue_pair_num": 2, "is_error": true, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 17000000, "cpu": 2, "latency_ns": 27000, "queue_pair_num": 3, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 18000000, "cpu": 3, "latency_ns": 31000, "queue_pair_num": 4, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 19000000, "cpu": 0, "latency_ns": 35000, "queue_pair_num": 1, "is_error": false, "opcode": 0}},
-    {"CqCompletion": {"timestamp_ns": 20000000, "cpu": 1, "latency_ns": 33000, "queue_pair_num": 2, "is_error": false, "opcode": 0}}
+    {
+      "IrqEntry": {
+        "timestamp_ns": 50000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 100000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 150000000,
+        "cpu": 2,
+        "bytes_req": 256,
+        "bytes_alloc": 512,
+        "latency_ns": 501,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 200000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 61,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 250000000,
+        "cpu": 1,
+        "latency_ns": 1794,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 300000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 350000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 400000000,
+        "cpu": 0,
+        "bytes_req": 512,
+        "bytes_alloc": 256,
+        "latency_ns": 455,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 450000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 1,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 500000000,
+        "cpu": 2,
+        "latency_ns": 1826,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 550000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 600000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 650000000,
+        "cpu": 3,
+        "bytes_req": 512,
+        "bytes_alloc": 512,
+        "latency_ns": 469,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 700000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 25,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 750000000,
+        "cpu": 1,
+        "latency_ns": 2384,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 800000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 850000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 900000000,
+        "cpu": 0,
+        "bytes_req": 512,
+        "bytes_alloc": 512,
+        "latency_ns": 463,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 950000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 20,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 1000000000,
+        "cpu": 0,
+        "latency_ns": 1996,
+        "queue_pair_num": 3,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1050000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1100000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 1150000000,
+        "cpu": 3,
+        "bytes_req": 512,
+        "bytes_alloc": 64,
+        "latency_ns": 419,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 1200000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 53,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 1250000000,
+        "cpu": 1,
+        "latency_ns": 2296,
+        "queue_pair_num": 2,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1300000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1350000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 1400000000,
+        "cpu": 2,
+        "bytes_req": 512,
+        "bytes_alloc": 64,
+        "latency_ns": 524,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 1450000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 49,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 1500000000,
+        "cpu": 3,
+        "latency_ns": 2363,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1550000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1600000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 1650000000,
+        "cpu": 2,
+        "bytes_req": 64,
+        "bytes_alloc": 512,
+        "latency_ns": 599,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 1700000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 13,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 1750000000,
+        "cpu": 2,
+        "latency_ns": 1954,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1800000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 1850000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 1900000000,
+        "cpu": 0,
+        "bytes_req": 256,
+        "bytes_alloc": 512,
+        "latency_ns": 458,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 1950000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 32,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 2000000000,
+        "cpu": 1,
+        "latency_ns": 2024,
+        "queue_pair_num": 3,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2050000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2100000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 2150000000,
+        "cpu": 3,
+        "bytes_req": 128,
+        "bytes_alloc": 512,
+        "latency_ns": 523,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 2200000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 30,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 2250000000,
+        "cpu": 2,
+        "latency_ns": 1968,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2300000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2350000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 2400000000,
+        "cpu": 3,
+        "bytes_req": 128,
+        "bytes_alloc": 64,
+        "latency_ns": 580,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 2450000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 45,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 2500000000,
+        "cpu": 2,
+        "latency_ns": 2390,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2550000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2600000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 2650000000,
+        "cpu": 2,
+        "bytes_req": 512,
+        "bytes_alloc": 512,
+        "latency_ns": 439,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 2700000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 31,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 2750000000,
+        "cpu": 2,
+        "latency_ns": 1905,
+        "queue_pair_num": 5,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2800000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 2850000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 2900000000,
+        "cpu": 3,
+        "bytes_req": 64,
+        "bytes_alloc": 512,
+        "latency_ns": 454,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 2950000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 30,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 3000000000,
+        "cpu": 2,
+        "latency_ns": 2085,
+        "queue_pair_num": 4,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3050000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3100000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 3150000000,
+        "cpu": 1,
+        "bytes_req": 64,
+        "bytes_alloc": 256,
+        "latency_ns": 525,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 3200000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 5,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 3250000000,
+        "cpu": 1,
+        "latency_ns": 2063,
+        "queue_pair_num": 2,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3300000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3350000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 3400000000,
+        "cpu": 3,
+        "bytes_req": 128,
+        "bytes_alloc": 256,
+        "latency_ns": 435,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 3450000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 22,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 3500000000,
+        "cpu": 3,
+        "latency_ns": 1805,
+        "queue_pair_num": 5,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3550000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3600000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 3650000000,
+        "cpu": 3,
+        "bytes_req": 128,
+        "bytes_alloc": 128,
+        "latency_ns": 592,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 3700000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 47,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 3750000000,
+        "cpu": 3,
+        "latency_ns": 1672,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3800000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 3850000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 3900000000,
+        "cpu": 3,
+        "bytes_req": 256,
+        "bytes_alloc": 512,
+        "latency_ns": 473,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 3950000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 14,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 4000000000,
+        "cpu": 3,
+        "latency_ns": 2139,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4050000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4100000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 4150000000,
+        "cpu": 0,
+        "bytes_req": 512,
+        "bytes_alloc": 256,
+        "latency_ns": 527,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 4200000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 15,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 4250000000,
+        "cpu": 0,
+        "latency_ns": 10270,
+        "queue_pair_num": 5,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4300000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4350000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 4400000000,
+        "cpu": 0,
+        "bytes_req": 128,
+        "bytes_alloc": 512,
+        "latency_ns": 446,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 4450000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 48,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 4500000000,
+        "cpu": 3,
+        "latency_ns": 12818,
+        "queue_pair_num": 3,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4550000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4600000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 4650000000,
+        "cpu": 3,
+        "bytes_req": 256,
+        "bytes_alloc": 64,
+        "latency_ns": 523,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 4700000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 28,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 4750000000,
+        "cpu": 1,
+        "latency_ns": 11728,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4800000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 4850000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 4900000000,
+        "cpu": 2,
+        "bytes_req": 256,
+        "bytes_alloc": 128,
+        "latency_ns": 412,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 4950000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 59,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 5000000000,
+        "cpu": 1,
+        "latency_ns": 10040,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5050000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5100000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 5150000000,
+        "cpu": 1,
+        "bytes_req": 128,
+        "bytes_alloc": 64,
+        "latency_ns": 597,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 5200000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 28,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 5250000000,
+        "cpu": 1,
+        "latency_ns": 13502,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5300000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5350000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 5400000000,
+        "cpu": 2,
+        "bytes_req": 128,
+        "bytes_alloc": 128,
+        "latency_ns": 571,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 5450000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 23,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 5500000000,
+        "cpu": 0,
+        "latency_ns": 10127,
+        "queue_pair_num": 3,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5550000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5600000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 5650000000,
+        "cpu": 1,
+        "bytes_req": 64,
+        "bytes_alloc": 128,
+        "latency_ns": 517,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 5700000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 7,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 5750000000,
+        "cpu": 3,
+        "latency_ns": 10208,
+        "queue_pair_num": 2,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5800000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 5850000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 5900000000,
+        "cpu": 3,
+        "bytes_req": 64,
+        "bytes_alloc": 512,
+        "latency_ns": 555,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 5950000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 6,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 6000000000,
+        "cpu": 2,
+        "latency_ns": 13090,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6050000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6100000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 6150000000,
+        "cpu": 3,
+        "bytes_req": 512,
+        "bytes_alloc": 64,
+        "latency_ns": 569,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 6200000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 57,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 6250000000,
+        "cpu": 0,
+        "latency_ns": 24881,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6300000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6350000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 6400000000,
+        "cpu": 1,
+        "bytes_req": 256,
+        "bytes_alloc": 512,
+        "latency_ns": 455,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 6450000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 59,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 6500000000,
+        "cpu": 3,
+        "latency_ns": 30066,
+        "queue_pair_num": 2,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6550000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6600000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 6650000000,
+        "cpu": 3,
+        "bytes_req": 128,
+        "bytes_alloc": 512,
+        "latency_ns": 490,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 6700000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 59,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 6750000000,
+        "cpu": 0,
+        "latency_ns": 28784,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6800000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 6850000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 6900000000,
+        "cpu": 2,
+        "bytes_req": 128,
+        "bytes_alloc": 512,
+        "latency_ns": 474,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 6950000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 12,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 7000000000,
+        "cpu": 0,
+        "latency_ns": 33981,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7050000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7100000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 7150000000,
+        "cpu": 1,
+        "bytes_req": 256,
+        "bytes_alloc": 64,
+        "latency_ns": 511,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 7200000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 46,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 7250000000,
+        "cpu": 3,
+        "latency_ns": 34483,
+        "queue_pair_num": 1,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7300000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7350000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 7400000000,
+        "cpu": 2,
+        "bytes_req": 128,
+        "bytes_alloc": 128,
+        "latency_ns": 420,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 7450000000,
+        "cpu": 3,
+        "budget": 64,
+        "work_done": 29,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 7500000000,
+        "cpu": 2,
+        "latency_ns": 34167,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7550000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7600000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 7650000000,
+        "cpu": 1,
+        "bytes_req": 64,
+        "bytes_alloc": 256,
+        "latency_ns": 561,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 7700000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 24,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 7750000000,
+        "cpu": 2,
+        "latency_ns": 27279,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7800000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 7850000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 7900000000,
+        "cpu": 1,
+        "bytes_req": 512,
+        "bytes_alloc": 64,
+        "latency_ns": 513,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 7950000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 4,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 8000000000,
+        "cpu": 1,
+        "latency_ns": 25101,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8050000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8100000000,
+        "cpu": 1,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 8150000000,
+        "cpu": 2,
+        "bytes_req": 256,
+        "bytes_alloc": 64,
+        "latency_ns": 462,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 8200000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 20,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 8250000000,
+        "cpu": 0,
+        "latency_ns": 25888,
+        "queue_pair_num": 5,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8300000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8350000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 8400000000,
+        "cpu": 3,
+        "bytes_req": 512,
+        "bytes_alloc": 256,
+        "latency_ns": 521,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 8450000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 15,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 8500000000,
+        "cpu": 0,
+        "latency_ns": 28142,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8550000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8600000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 8650000000,
+        "cpu": 1,
+        "bytes_req": 64,
+        "bytes_alloc": 64,
+        "latency_ns": 479,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 8700000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 39,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 8750000000,
+        "cpu": 1,
+        "latency_ns": 35343,
+        "queue_pair_num": 5,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8800000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 8850000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 8900000000,
+        "cpu": 0,
+        "bytes_req": 512,
+        "bytes_alloc": 128,
+        "latency_ns": 499,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 8950000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 49,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 9000000000,
+        "cpu": 1,
+        "latency_ns": 30390,
+        "queue_pair_num": 6,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9050000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9100000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 9150000000,
+        "cpu": 0,
+        "bytes_req": 512,
+        "bytes_alloc": 64,
+        "latency_ns": 487,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 9200000000,
+        "cpu": 2,
+        "budget": 64,
+        "work_done": 55,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 9250000000,
+        "cpu": 3,
+        "latency_ns": 30880,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9300000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9350000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 9400000000,
+        "cpu": 1,
+        "bytes_req": 512,
+        "bytes_alloc": 256,
+        "latency_ns": 560,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 9450000000,
+        "cpu": 0,
+        "budget": 64,
+        "work_done": 56,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 9500000000,
+        "cpu": 1,
+        "latency_ns": 34133,
+        "queue_pair_num": 7,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9550000000,
+        "cpu": 0,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9600000000,
+        "cpu": 3,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 9650000000,
+        "cpu": 2,
+        "bytes_req": 128,
+        "bytes_alloc": 256,
+        "latency_ns": 549,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 9700000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 10,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 9750000000,
+        "cpu": 0,
+        "latency_ns": 30125,
+        "queue_pair_num": 4,
+        "is_error": false,
+        "opcode": 0
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9800000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "IrqEntry": {
+        "timestamp_ns": 9850000000,
+        "cpu": 2,
+        "irq": 33,
+        "handler_name_hash": 1
+      }
+    },
+    {
+      "SlabAlloc": {
+        "timestamp_ns": 9900000000,
+        "cpu": 1,
+        "bytes_req": 128,
+        "bytes_alloc": 256,
+        "latency_ns": 447,
+        "numa_node": 0
+      }
+    },
+    {
+      "NapiPoll": {
+        "timestamp_ns": 9950000000,
+        "cpu": 1,
+        "budget": 64,
+        "work_done": 23,
+        "dev_name_hash": 3405691582
+      }
+    },
+    {
+      "CqCompletion": {
+        "timestamp_ns": 10000000000,
+        "cpu": 0,
+        "latency_ns": 31228,
+        "queue_pair_num": 8,
+        "is_error": false,
+        "opcode": 0
+      }
+    }
   ],
   "expected_states": [
-    {"after_event_index": 9, "expected_state": "Healthy"},
-    {"after_event_index": 19, "expected_state": "Degraded"}
+    {
+      "after_event_index": 79,
+      "expected_state": "Healthy"
+    },
+    {
+      "after_event_index": 199,
+      "expected_state": "Degraded"
+    }
   ]
 }
