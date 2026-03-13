@@ -28,7 +28,7 @@ struct NapiPollRingEvent {
 
 /// Tracepoint: irq/irq_handler_entry
 /// Fires on every hardware interrupt.
-#[tracepoint]
+#[tracepoint(category = "irq", name = "irq_handler_entry")]
 pub fn trace_irq_handler_entry(ctx: TracePointContext) -> u32 {
     match try_trace_irq_entry(&ctx) {
         Ok(0) => 0,
@@ -60,7 +60,7 @@ fn try_trace_irq_entry(ctx: &TracePointContext) -> Result<u32, i64> {
 
 /// Tracepoint: napi/napi_poll
 /// Fires when NAPI polling processes network packets.
-#[tracepoint]
+#[tracepoint(category = "napi", name = "napi_poll")]
 pub fn trace_napi_poll(ctx: TracePointContext) -> u32 {
     match try_trace_napi_poll(&ctx) {
         Ok(0) => 0,
