@@ -28,6 +28,17 @@ async fn main() -> Result<()> {
 
     let (mut source, source_name) = build_event_source(&cli)?;
 
+    #[cfg(target_os = "linux")]
+    let hw_reader = if matches!(cli.mode, RunMode::Live) {
+        let reader = argus_agent::sources::hwcounters::HwCounterReader::discover();
+        if reader.port_count() > 0 {
+            tracing::info!(ports = reader.port_count(), "discovered IB ports for hw counters");
+        }
+        Some(reader)
+    } else {
+        None
+    };
+
     let mut pipeline = Pipeline::new(cli.num_cpus);
     let mut telemetry = TelemetryCollector::default();
     let mut dash_state = DashboardState {
@@ -54,6 +65,14 @@ async fn main() -> Result<()> {
         }
 
         if window_start.elapsed() >= window_duration {
+            // Poll hardware counters at window boundary (live mode only)
+            #[cfg(target_os = "linux")]
+            if let Some(ref reader) = hw_reader {
+                for hw_event in reader.read_all() {
+                    pipeline.process_event(&hw_event);
+                }
+            }
+
             dash_state.push_metrics_snapshot();
             pipeline.reset_window();
             window_start = std::time::Instant::now();

@@ -68,6 +68,18 @@ impl HwCounterReader {
                 ("port_xmit_discards", HardwareCounter::PortXmitDiscards),
                 ("port_rcv_data", HardwareCounter::PortRcvData),
                 ("port_xmit_data", HardwareCounter::PortXmitData),
+                (
+                    "port_rcv_remote_physical_errors",
+                    HardwareCounter::PortRcvRemotePhysicalErrors,
+                ),
+                (
+                    "local_link_integrity_errors",
+                    HardwareCounter::LocalLinkIntegrityErrors,
+                ),
+                (
+                    "excessive_buffer_overrun_errors",
+                    HardwareCounter::ExcessiveBufferOverrunErrors,
+                ),
             ];
 
             for (filename, make_counter) in counters {

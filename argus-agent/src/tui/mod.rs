@@ -19,9 +19,9 @@ pub struct DashboardState {
     pub event_count: u64,
     pub uptime_secs: f64,
     pub source_name: String,
-    pub latency_history: Vec<f64>,
+    pub ib_error_history: Vec<f64>,
     pub irq_rate_history: Vec<f64>,
-    pub slab_latency_history: Vec<f64>,
+    pub slab_rate_history: Vec<f64>,
 }
 
 impl Default for DashboardState {
@@ -33,25 +33,25 @@ impl Default for DashboardState {
             event_count: 0,
             uptime_secs: 0.0,
             source_name: String::from("none"),
-            latency_history: Vec::new(),
+            ib_error_history: Vec::new(),
             irq_rate_history: Vec::new(),
-            slab_latency_history: Vec::new(),
+            slab_rate_history: Vec::new(),
         }
     }
 }
 
 impl DashboardState {
     pub fn push_metrics_snapshot(&mut self) {
-        let cq_avg = self.metrics.rdma_metrics.avg_latency_ns() as f64 / 1000.0;
-        self.latency_history.push(cq_avg);
-        if self.latency_history.len() > 60 {
-            self.latency_history.remove(0);
+        let ib_errors = self.metrics.ib_counter_deltas.total_error_delta() as f64;
+        self.ib_error_history.push(ib_errors);
+        if self.ib_error_history.len() > 60 {
+            self.ib_error_history.remove(0);
         }
 
-        let slab_avg = self.metrics.slab_metrics.avg_latency_ns() as f64 / 1000.0;
-        self.slab_latency_history.push(slab_avg);
-        if self.slab_latency_history.len() > 60 {
-            self.slab_latency_history.remove(0);
+        let slab_rate = self.metrics.slab_metrics.alloc_count as f64;
+        self.slab_rate_history.push(slab_rate);
+        if self.slab_rate_history.len() > 60 {
+            self.slab_rate_history.remove(0);
         }
 
         let irq_total = self.metrics.interrupt_distribution.total_count as f64;
@@ -237,15 +237,15 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     render_sparkline_panel(
         frame,
         chunks[0],
-        " CQ Latency (μs) ",
-        &state.latency_history,
+        " IB Errors (/window) ",
+        &state.ib_error_history,
         Color::Magenta,
     );
     render_sparkline_panel(
         frame,
         chunks[1],
-        " Slab Alloc Latency (μs) ",
-        &state.slab_latency_history,
+        " Slab Allocs (/window) ",
+        &state.slab_rate_history,
         Color::Yellow,
     );
     render_sparkline_panel(

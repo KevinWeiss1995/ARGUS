@@ -59,6 +59,7 @@ impl DetectionRule for InterruptAffinitySkewRule {
 
 // ---------------------------------------------------------------------------
 // RDMA Latency Spike: current latency > baseline * spike_factor
+// (mock/replay mode only — live eBPF cannot measure CQ latency)
 // ---------------------------------------------------------------------------
 
 pub struct RdmaLatencySpikeRule {
@@ -114,21 +115,97 @@ impl DetectionRule for RdmaLatencySpikeRule {
 }
 
 // ---------------------------------------------------------------------------
-// Slab Pressure Correlation: slab latency spike + CQ backlog
+// RDMA Link Degradation: fires on IB hardware counter deltas from sysfs
+// ---------------------------------------------------------------------------
+
+pub struct RdmaLinkDegradationRule {
+    /// Minimum total error delta across all counters to trigger.
+    pub min_error_delta: u64,
+}
+
+impl Default for RdmaLinkDegradationRule {
+    fn default() -> Self {
+        Self { min_error_delta: 1 }
+    }
+}
+
+impl DetectionRule for RdmaLinkDegradationRule {
+    fn name(&self) -> &str {
+        "rdma_link_degradation"
+    }
+
+    fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let d = &metrics.ib_counter_deltas;
+        let total = d.total_error_delta();
+        if total < self.min_error_delta {
+            return None;
+        }
+
+        let is_critical = d.link_downed_delta > 0 || d.port_rcv_errors_delta > 100;
+
+        let mut parts = Vec::new();
+        if d.symbol_error_delta > 0 {
+            parts.push(format!("symbol_err+{}", d.symbol_error_delta));
+        }
+        if d.link_downed_delta > 0 {
+            parts.push(format!("link_down+{}", d.link_downed_delta));
+        }
+        if d.port_rcv_errors_delta > 0 {
+            parts.push(format!("rcv_err+{}", d.port_rcv_errors_delta));
+        }
+        if d.port_xmit_discards_delta > 0 {
+            parts.push(format!("xmit_disc+{}", d.port_xmit_discards_delta));
+        }
+        if d.port_rcv_remote_physical_errors_delta > 0 {
+            parts.push(format!(
+                "remote_phys+{}",
+                d.port_rcv_remote_physical_errors_delta
+            ));
+        }
+        if d.local_link_integrity_errors_delta > 0 {
+            parts.push(format!("link_integ+{}", d.local_link_integrity_errors_delta));
+        }
+        if d.excessive_buffer_overrun_errors_delta > 0 {
+            parts.push(format!(
+                "buf_overrun+{}",
+                d.excessive_buffer_overrun_errors_delta
+            ));
+        }
+
+        Some(Alert {
+            timestamp_ns: metrics.window_end_ns,
+            kind: AlertKind::RdmaLinkDegradation {
+                symbol_error_delta: d.symbol_error_delta,
+                link_downed_delta: d.link_downed_delta,
+                rcv_error_delta: d.port_rcv_errors_delta,
+                xmit_discard_delta: d.port_xmit_discards_delta,
+            },
+            severity: if is_critical {
+                HealthState::Critical
+            } else {
+                HealthState::Degraded
+            },
+            message: format!("IB link degradation: {}", parts.join(", ")),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slab Pressure Correlation: high slab alloc rate + IB error counters rising
 // ---------------------------------------------------------------------------
 
 pub struct SlabPressureRule {
-    pub slab_spike_factor: f64,
-    pub slab_baseline_ns: u64,
+    /// Minimum slab allocations in the window to consider.
     pub min_allocs: u64,
+    /// Alloc rate threshold (allocs/window) above which pressure is suspected.
+    pub alloc_rate_threshold: u64,
 }
 
 impl Default for SlabPressureRule {
     fn default() -> Self {
         Self {
-            slab_spike_factor: 5.0,
-            slab_baseline_ns: 500,
-            min_allocs: 10,
+            min_allocs: 100,
+            alloc_rate_threshold: 5_000,
         }
     }
 }
@@ -144,26 +221,23 @@ impl DetectionRule for SlabPressureRule {
             return None;
         }
 
-        let avg_latency = slab.avg_latency_ns();
-        let threshold = (self.slab_baseline_ns as f64 * self.slab_spike_factor) as u64;
+        let ib_errors = metrics.ib_counter_deltas.total_error_delta();
 
-        if avg_latency >= threshold {
-            let rdma_backlog = metrics.rdma_metrics.completion_count;
+        if slab.alloc_count >= self.alloc_rate_threshold && ib_errors > 0 {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::SlabPressureCorrelation {
-                    slab_latency_ns: avg_latency,
-                    slab_baseline_ns: self.slab_baseline_ns,
-                    cq_backlog: rdma_backlog,
+                    slab_alloc_rate: slab.alloc_count,
+                    ib_error_delta: ib_errors,
                 },
-                severity: if avg_latency >= (self.slab_baseline_ns as f64 * 10.0) as u64 {
+                severity: if ib_errors > 100 {
                     HealthState::Critical
                 } else {
                     HealthState::Degraded
                 },
                 message: format!(
-                    "Slab pressure: avg latency {avg_latency}ns (baseline {}ns), CQ backlog: {rdma_backlog}",
-                    self.slab_baseline_ns
+                    "Slab pressure correlated with IB errors: {} allocs/window, {} IB errors",
+                    slab.alloc_count, ib_errors
                 ),
             })
         } else {
@@ -175,7 +249,7 @@ impl DetectionRule for SlabPressureRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argus_common::{InterruptDistribution, RdmaMetrics, SlabMetrics};
+    use argus_common::{IbCounterDeltas, InterruptDistribution, RdmaMetrics, SlabMetrics};
 
     #[test]
     fn irq_skew_below_threshold() {
@@ -266,26 +340,80 @@ mod tests {
     }
 
     #[test]
-    fn slab_pressure_below_threshold() {
-        let rule = SlabPressureRule::default();
-        let metrics = AggregatedMetrics {
-            slab_metrics: SlabMetrics {
-                alloc_count: 100,
-                total_latency_ns: 50_000,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+    fn link_degradation_no_errors() {
+        let rule = RdmaLinkDegradationRule::default();
+        let metrics = AggregatedMetrics::default();
         assert!(rule.evaluate(&metrics).is_none());
     }
 
     #[test]
-    fn slab_pressure_above_threshold() {
+    fn link_degradation_symbol_errors_degraded() {
+        let rule = RdmaLinkDegradationRule::default();
+        let metrics = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                symbol_error_delta: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate(&metrics).unwrap();
+        assert_eq!(alert.severity, HealthState::Degraded);
+    }
+
+    #[test]
+    fn link_degradation_link_down_critical() {
+        let rule = RdmaLinkDegradationRule::default();
+        let metrics = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                link_downed_delta: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate(&metrics).unwrap();
+        assert_eq!(alert.severity, HealthState::Critical);
+    }
+
+    #[test]
+    fn link_degradation_many_rcv_errors_critical() {
+        let rule = RdmaLinkDegradationRule::default();
+        let metrics = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_errors_delta: 200,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate(&metrics).unwrap();
+        assert_eq!(alert.severity, HealthState::Critical);
+    }
+
+    #[test]
+    fn slab_pressure_no_correlation() {
         let rule = SlabPressureRule::default();
         let metrics = AggregatedMetrics {
             slab_metrics: SlabMetrics {
-                alloc_count: 100,
-                total_latency_ns: 300_000,
+                alloc_count: 10_000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            rule.evaluate(&metrics).is_none(),
+            "high allocs alone without IB errors should not trigger"
+        );
+    }
+
+    #[test]
+    fn slab_pressure_with_ib_errors() {
+        let rule = SlabPressureRule::default();
+        let metrics = AggregatedMetrics {
+            slab_metrics: SlabMetrics {
+                alloc_count: 10_000,
+                ..Default::default()
+            },
+            ib_counter_deltas: IbCounterDeltas {
+                symbol_error_delta: 3,
                 ..Default::default()
             },
             ..Default::default()

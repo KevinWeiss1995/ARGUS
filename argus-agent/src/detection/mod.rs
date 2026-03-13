@@ -1,7 +1,10 @@
 pub mod rules;
 
 use argus_common::{AggregatedMetrics, Alert, HealthState};
-use rules::{DetectionRule, InterruptAffinitySkewRule, RdmaLatencySpikeRule, SlabPressureRule};
+use rules::{
+    DetectionRule, InterruptAffinitySkewRule, RdmaLatencySpikeRule, RdmaLinkDegradationRule,
+    SlabPressureRule,
+};
 
 /// Evaluates aggregated metrics against detection rules and maintains health state.
 pub struct DetectionEngine {
@@ -16,6 +19,7 @@ impl DetectionEngine {
             rules: vec![
                 Box::new(InterruptAffinitySkewRule::default()),
                 Box::new(RdmaLatencySpikeRule::default()),
+                Box::new(RdmaLinkDegradationRule::default()),
                 Box::new(SlabPressureRule::default()),
             ],
             current_state: HealthState::Healthy,

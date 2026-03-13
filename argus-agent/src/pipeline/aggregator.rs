@@ -1,9 +1,42 @@
-use argus_common::{AggregatedMetrics, ArgusEvent};
+use std::collections::HashMap;
+
+use argus_common::{AggregatedMetrics, ArgusEvent, HardwareCounter};
 
 /// Maintains rolling metric aggregations from raw events.
 pub struct Aggregator {
     metrics: AggregatedMetrics,
     num_cpus: u32,
+    /// Previous absolute counter values keyed by (port, counter_discriminant).
+    /// Used to compute deltas between windows.
+    prev_counters: HashMap<(u32, u8), u64>,
+}
+
+fn counter_discriminant(c: &HardwareCounter) -> u8 {
+    match c {
+        HardwareCounter::SymbolErrors(_) => 0,
+        HardwareCounter::LinkDowned(_) => 1,
+        HardwareCounter::PortRcvErrors(_) => 2,
+        HardwareCounter::PortXmitDiscards(_) => 3,
+        HardwareCounter::PortRcvData(_) => 4,
+        HardwareCounter::PortXmitData(_) => 5,
+        HardwareCounter::PortRcvRemotePhysicalErrors(_) => 6,
+        HardwareCounter::LocalLinkIntegrityErrors(_) => 7,
+        HardwareCounter::ExcessiveBufferOverrunErrors(_) => 8,
+    }
+}
+
+fn counter_value(c: &HardwareCounter) -> u64 {
+    match c {
+        HardwareCounter::SymbolErrors(v)
+        | HardwareCounter::LinkDowned(v)
+        | HardwareCounter::PortRcvErrors(v)
+        | HardwareCounter::PortXmitDiscards(v)
+        | HardwareCounter::PortRcvData(v)
+        | HardwareCounter::PortXmitData(v)
+        | HardwareCounter::PortRcvRemotePhysicalErrors(v)
+        | HardwareCounter::LocalLinkIntegrityErrors(v)
+        | HardwareCounter::ExcessiveBufferOverrunErrors(v) => *v,
+    }
 }
 
 impl Aggregator {
@@ -11,7 +44,11 @@ impl Aggregator {
     pub fn new(num_cpus: u32) -> Self {
         let mut metrics = AggregatedMetrics::default();
         metrics.interrupt_distribution.per_cpu_counts = vec![0; num_cpus as usize];
-        Self { metrics, num_cpus }
+        Self {
+            metrics,
+            num_cpus,
+            prev_counters: HashMap::new(),
+        }
     }
 
     pub fn ingest(&mut self, event: &ArgusEvent) {
@@ -61,9 +98,40 @@ impl Aggregator {
                     self.metrics.rdma_metrics.error_count += 1;
                 }
             }
-            ArgusEvent::HardwareCounter(_) => {
-                // Hardware counters are absolute values, not aggregated incrementally.
-                // They are handled separately by the telemetry layer.
+            ArgusEvent::HardwareCounter(e) => {
+                self.ingest_hw_counter(e.port_num, &e.counter);
+            }
+        }
+    }
+
+    fn ingest_hw_counter(&mut self, port: u32, counter: &HardwareCounter) {
+        let disc = counter_discriminant(counter);
+        let current = counter_value(counter);
+        let key = (port, disc);
+
+        let delta = if let Some(&prev) = self.prev_counters.get(&key) {
+            current.saturating_sub(prev)
+        } else {
+            0
+        };
+        self.prev_counters.insert(key, current);
+
+        let d = &mut self.metrics.ib_counter_deltas;
+        match counter {
+            HardwareCounter::SymbolErrors(_) => d.symbol_error_delta += delta,
+            HardwareCounter::LinkDowned(_) => d.link_downed_delta += delta,
+            HardwareCounter::PortRcvErrors(_) => d.port_rcv_errors_delta += delta,
+            HardwareCounter::PortXmitDiscards(_) => d.port_xmit_discards_delta += delta,
+            HardwareCounter::PortRcvData(_) => d.port_rcv_data_delta += delta,
+            HardwareCounter::PortXmitData(_) => d.port_xmit_data_delta += delta,
+            HardwareCounter::PortRcvRemotePhysicalErrors(_) => {
+                d.port_rcv_remote_physical_errors_delta += delta;
+            }
+            HardwareCounter::LocalLinkIntegrityErrors(_) => {
+                d.local_link_integrity_errors_delta += delta;
+            }
+            HardwareCounter::ExcessiveBufferOverrunErrors(_) => {
+                d.excessive_buffer_overrun_errors_delta += delta;
             }
         }
     }
@@ -73,6 +141,7 @@ impl Aggregator {
         &self.metrics
     }
 
+    /// Reset per-window metrics but keep absolute counter state for delta computation.
     pub fn reset(&mut self) {
         self.metrics = AggregatedMetrics::default();
         self.metrics.interrupt_distribution.per_cpu_counts = vec![0; self.num_cpus as usize];
@@ -193,5 +262,70 @@ mod tests {
         let m = agg.current_metrics();
         assert_eq!(m.window_start_ns, 5_000_000);
         assert_eq!(m.window_end_ns, 15_000_000);
+    }
+
+    #[test]
+    fn hw_counter_deltas_computed() {
+        let mut agg = Aggregator::new(4);
+
+        // First reading establishes baseline (delta = 0)
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(100),
+        }));
+        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 0);
+
+        // Second reading: delta = 110 - 100 = 10
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(110),
+        }));
+        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 10);
+
+        // Reset clears deltas but retains absolute baseline
+        agg.reset();
+        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 0);
+
+        // Third reading: delta = 115 - 110 = 5
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 3_000,
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(115),
+        }));
+        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 5);
+    }
+
+    #[test]
+    fn hw_counter_multi_port() {
+        let mut agg = Aggregator::new(4);
+
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::LinkDowned(0),
+        }));
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 2,
+            counter: HardwareCounter::LinkDowned(0),
+        }));
+
+        // Port 1 link goes down
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 1,
+            counter: HardwareCounter::LinkDowned(1),
+        }));
+        assert_eq!(agg.current_metrics().ib_counter_deltas.link_downed_delta, 1);
+
+        // Port 2 also goes down — deltas accumulate across ports
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 2,
+            counter: HardwareCounter::LinkDowned(2),
+        }));
+        assert_eq!(agg.current_metrics().ib_counter_deltas.link_downed_delta, 3);
     }
 }
