@@ -118,6 +118,9 @@ pub enum HardwareCounter {
     PortXmitDiscards(u64),
     PortRcvData(u64),
     PortXmitData(u64),
+    PortRcvRemotePhysicalErrors(u64),
+    LocalLinkIntegrityErrors(u64),
+    ExcessiveBufferOverrunErrors(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -165,14 +168,19 @@ pub enum AlertKind {
         ratio: f64,
     },
     SlabPressureCorrelation {
-        slab_latency_ns: u64,
-        slab_baseline_ns: u64,
-        cq_backlog: u64,
+        slab_alloc_rate: u64,
+        ib_error_delta: u64,
     },
     LinkEvent {
         port: u32,
         counter: String,
         value: u64,
+    },
+    RdmaLinkDegradation {
+        symbol_error_delta: u64,
+        link_downed_delta: u64,
+        rcv_error_delta: u64,
+        xmit_discard_delta: u64,
     },
 }
 
@@ -184,6 +192,7 @@ impl Alert {
             AlertKind::RdmaLatencySpike { .. } => "rdma_latency_spike",
             AlertKind::SlabPressureCorrelation { .. } => "slab_pressure_correlation",
             AlertKind::LinkEvent { .. } => "link_event",
+            AlertKind::RdmaLinkDegradation { .. } => "rdma_link_degradation",
         }
     }
 }
@@ -200,6 +209,7 @@ pub struct AggregatedMetrics {
     pub slab_metrics: SlabMetrics,
     pub rdma_metrics: RdmaMetrics,
     pub network_metrics: NetworkMetrics,
+    pub ib_counter_deltas: IbCounterDeltas,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -282,6 +292,34 @@ pub struct NetworkMetrics {
     pub napi_polls: u64,
     pub napi_total_work: u64,
     pub napi_total_budget: u64,
+}
+
+/// Per-window deltas of InfiniBand hardware counters from sysfs.
+/// These are computed as (current_absolute - previous_absolute) each window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IbCounterDeltas {
+    pub symbol_error_delta: u64,
+    pub link_downed_delta: u64,
+    pub port_rcv_errors_delta: u64,
+    pub port_xmit_discards_delta: u64,
+    pub port_rcv_remote_physical_errors_delta: u64,
+    pub local_link_integrity_errors_delta: u64,
+    pub excessive_buffer_overrun_errors_delta: u64,
+    pub port_rcv_data_delta: u64,
+    pub port_xmit_data_delta: u64,
+}
+
+impl IbCounterDeltas {
+    #[must_use]
+    pub fn total_error_delta(&self) -> u64 {
+        self.symbol_error_delta
+            + self.link_downed_delta
+            + self.port_rcv_errors_delta
+            + self.port_xmit_discards_delta
+            + self.port_rcv_remote_physical_errors_delta
+            + self.local_link_integrity_errors_delta
+            + self.excessive_buffer_overrun_errors_delta
+    }
 }
 
 // ---------------------------------------------------------------------------
