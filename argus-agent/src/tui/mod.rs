@@ -117,9 +117,9 @@ fn render_dashboard(frame: &mut Frame, state: &DashboardState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),  // header
-            Constraint::Length(6),  // IRQ distribution
-            Constraint::Min(8),     // sparklines / metrics
-            Constraint::Length(10), // event log
+            Constraint::Min(6),    // IRQ distribution
+            Constraint::Min(8),    // sparklines / metrics
+            Constraint::Length(8), // event log
         ])
         .split(area);
 
