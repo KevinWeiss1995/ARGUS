@@ -83,6 +83,13 @@ build-ebpf:
 build-ebpf-release:
     cargo xtask build-ebpf --release
 
+# Inspect compiled eBPF binary — verify program sections have code
+inspect-ebpf:
+    @echo "=== eBPF binary sections ==="
+    @llvm-objdump -d argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf 2>/dev/null \
+        || rust-objdump -d argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf 2>/dev/null \
+        || echo "No objdump available. Install llvm or run: rustup component add llvm-tools"
+
 # Build everything (eBPF + userspace)
 build-all:
     cargo xtask build-all

@@ -79,6 +79,21 @@ fn build_ebpf(release: bool) -> Result<()> {
         .join("argus-ebpf");
 
     println!("eBPF artifact: {}", artifact.display());
+
+    // Quick sanity check: verify the binary has actual BPF program sections
+    if artifact.exists() {
+        let metadata = std::fs::metadata(&artifact).context("stat eBPF artifact")?;
+        if metadata.len() < 1024 {
+            println!(
+                "WARNING: eBPF binary is only {} bytes — programs may be empty. \
+                 Try: just inspect-ebpf",
+                metadata.len()
+            );
+        } else {
+            println!("Binary size: {} bytes (OK)", metadata.len());
+        }
+    }
+
     Ok(())
 }
 
