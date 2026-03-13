@@ -30,7 +30,7 @@ struct SlabFreeRingEvent {
 
 /// Tracepoint: kmem/kmem_cache_alloc
 /// Fires when the kernel allocates from a slab cache.
-#[tracepoint]
+#[tracepoint(category = "kmem", name = "kmem_cache_alloc")]
 pub fn trace_kmem_cache_alloc(ctx: TracePointContext) -> u32 {
     match try_trace_kmem_cache_alloc(&ctx) {
         Ok(0) => 0,
@@ -66,7 +66,7 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
 }
 
 /// Tracepoint: kmem/kmem_cache_free
-#[tracepoint]
+#[tracepoint(category = "kmem", name = "kmem_cache_free")]
 pub fn trace_kmem_cache_free(ctx: TracePointContext) -> u32 {
     match try_trace_kmem_cache_free(&ctx) {
         Ok(0) => 0,
