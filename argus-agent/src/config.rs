@@ -41,7 +41,7 @@ pub struct Cli {
 
     /// Aggregation window duration in seconds.
     /// Detection and sparklines reset each window so they reflect recent behavior.
-    #[arg(long, default_value = "10")]
+    #[arg(long, default_value = "3")]
     pub window_secs: u64,
 }
 
