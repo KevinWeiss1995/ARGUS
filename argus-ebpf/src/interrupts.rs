@@ -37,8 +37,11 @@ pub fn trace_irq_handler_entry(ctx: TracePointContext) -> u32 {
 }
 
 fn try_trace_irq_entry(ctx: &TracePointContext) -> Result<u32, i64> {
+    // SAFETY: bpf_ktime_get_ns reads the kernel monotonic clock, always safe.
     let ts = unsafe { bpf_ktime_get_ns() };
+    // SAFETY: bpf_get_smp_processor_id returns current CPU, always safe.
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
+    // SAFETY: Offset 8 is the IRQ number in the irq_handler_entry tracepoint.
     let irq: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<IrqEntryRingEvent>(0) {
@@ -49,6 +52,7 @@ fn try_trace_irq_entry(ctx: &TracePointContext) -> Result<u32, i64> {
             cpu,
             irq,
         };
+        // SAFETY: ring buffer slot is reserved for IrqEntryRingEvent size.
         unsafe {
             core::ptr::write_unaligned(entry.as_mut_ptr().cast(), event);
         }
@@ -69,8 +73,10 @@ pub fn trace_napi_poll(ctx: TracePointContext) -> u32 {
 }
 
 fn try_trace_napi_poll(ctx: &TracePointContext) -> Result<u32, i64> {
+    // SAFETY: see try_trace_irq_entry above.
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
+    // SAFETY: Offsets 8 and 12 are budget and work_done in napi_poll tracepoint.
     let budget: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
     let work_done: u32 = unsafe { ctx.read_at(12).unwrap_or(0) };
 
@@ -84,6 +90,7 @@ fn try_trace_napi_poll(ctx: &TracePointContext) -> Result<u32, i64> {
             work_done,
             _pad2: 0,
         };
+        // SAFETY: ring buffer slot is reserved for NapiPollRingEvent size.
         unsafe {
             core::ptr::write_unaligned(entry.as_mut_ptr().cast(), event);
         }

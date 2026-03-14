@@ -39,10 +39,18 @@ pub fn trace_kmem_cache_alloc(ctx: TracePointContext) -> u32 {
 }
 
 fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
+    // SAFETY: bpf_ktime_get_ns is a BPF helper that reads the kernel
+    // monotonic clock. Always safe to call from a BPF context.
     let ts = unsafe { bpf_ktime_get_ns() };
+    // SAFETY: bpf_get_smp_processor_id returns the current CPU number.
+    // Always safe to call from a BPF context.
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
 
+    // SAFETY: Reads from the tracepoint context at a fixed offset.
+    // Offset 16 is bytes_req for kmem_cache_alloc tracepoint format.
+    // Returns 0 on failure (out-of-bounds).
     let bytes_req: u32 = unsafe { ctx.read_at(16).unwrap_or(0) };
+    // SAFETY: Offset 20 is bytes_alloc for this tracepoint.
     let bytes_alloc: u32 = unsafe { ctx.read_at(20).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<SlabAllocRingEvent>(0) {
@@ -56,6 +64,9 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
             _pad2: 0,
             latency_ns: 0,
         };
+        // SAFETY: entry.as_mut_ptr() points to a ring buffer slot of at least
+        // size_of::<SlabAllocRingEvent>() bytes, reserved above. write_unaligned
+        // is used because BPF stack/ring buffer may not have natural alignment.
         unsafe {
             core::ptr::write_unaligned(entry.as_mut_ptr().cast(), event);
         }
@@ -75,6 +86,7 @@ pub fn trace_kmem_cache_free(ctx: TracePointContext) -> u32 {
 }
 
 fn try_trace_kmem_cache_free(_ctx: &TracePointContext) -> Result<u32, i64> {
+    // SAFETY: see try_trace_kmem_cache_alloc above.
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
 
@@ -86,6 +98,7 @@ fn try_trace_kmem_cache_free(_ctx: &TracePointContext) -> Result<u32, i64> {
             cpu,
             bytes_freed: 0,
         };
+        // SAFETY: ring buffer slot is reserved for SlabFreeRingEvent.
         unsafe {
             core::ptr::write_unaligned(entry.as_mut_ptr().cast(), event);
         }
