@@ -179,7 +179,10 @@ mod tests {
         for i in 0..10 {
             rs.push(i as f64 * 10.0);
         }
-        assert!(rs.trend() > 0.0, "trend should be positive for increasing data");
+        assert!(
+            rs.trend() > 0.0,
+            "trend should be positive for increasing data"
+        );
     }
 
     #[test]

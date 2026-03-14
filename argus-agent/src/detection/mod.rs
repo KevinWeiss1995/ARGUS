@@ -151,8 +151,7 @@ impl DetectionEngine {
         }
 
         // NAPI saturation component (0..0.2)
-        if metrics.network_metrics.napi_polls > 0 && metrics.network_metrics.napi_total_budget > 0
-        {
+        if metrics.network_metrics.napi_polls > 0 && metrics.network_metrics.napi_total_budget > 0 {
             let avg_work = metrics.network_metrics.napi_total_work as f64
                 / metrics.network_metrics.napi_polls as f64;
             let avg_budget = metrics.network_metrics.napi_total_budget as f64
@@ -230,12 +229,18 @@ mod tests {
         };
         // First evaluation: hysteresis not yet met
         let first = engine.evaluate(&metrics);
-        assert!(first.is_empty(), "single window should not trigger due to hysteresis");
+        assert!(
+            first.is_empty(),
+            "single window should not trigger due to hysteresis"
+        );
         assert_eq!(engine.current_state(), HealthState::Healthy);
 
         // Second evaluation: hysteresis met
         let second = engine.evaluate(&metrics);
-        assert!(!second.is_empty(), "second consecutive window should trigger");
+        assert!(
+            !second.is_empty(),
+            "second consecutive window should trigger"
+        );
         assert_eq!(engine.current_state(), HealthState::Degraded);
     }
 

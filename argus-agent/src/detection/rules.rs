@@ -172,7 +172,10 @@ impl DetectionRule for RdmaLinkDegradationRule {
             ));
         }
         if d.local_link_integrity_errors_delta > 0 {
-            parts.push(format!("link_integ+{}", d.local_link_integrity_errors_delta));
+            parts.push(format!(
+                "link_integ+{}",
+                d.local_link_integrity_errors_delta
+            ));
         }
         if d.excessive_buffer_overrun_errors_delta > 0 {
             parts.push(format!(
