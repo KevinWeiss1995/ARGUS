@@ -94,7 +94,13 @@ pub fn parse_event(data: &[u8]) -> Option<ArgusEvent> {
 mod tests {
     use super::*;
 
-    fn make_slab_alloc_bytes(ts: u64, cpu: u32, bytes_req: u32, bytes_alloc: u32, latency: u64) -> Vec<u8> {
+    fn make_slab_alloc_bytes(
+        ts: u64,
+        cpu: u32,
+        bytes_req: u32,
+        bytes_alloc: u32,
+        latency: u64,
+    ) -> Vec<u8> {
         let mut buf = vec![0u8; 40];
         buf[0..4].copy_from_slice(&EVENT_TYPE_SLAB_ALLOC.to_ne_bytes());
         buf[8..16].copy_from_slice(&ts.to_ne_bytes());
