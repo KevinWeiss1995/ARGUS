@@ -81,15 +81,7 @@ pub fn apply_seccomp() {
 
     // SAFETY: prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...) with a valid
     // BPF filter program is a safe kernel call.
-    let ret = unsafe {
-        libc::prctl(
-            libc::PR_SET_NO_NEW_PRIVS,
-            1,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
 
     if ret != 0 {
         warn!("seccomp: failed to set no_new_privs, skipping filter");
