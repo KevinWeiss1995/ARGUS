@@ -4,7 +4,7 @@ use aya_ebpf::{
     programs::TracePointContext,
 };
 
-use super::EVENTS;
+use super::{EVENTS, OFFSETS};
 
 /// Type tag 1 = SlabAlloc, 2 = SlabFree
 #[repr(C)]
@@ -46,12 +46,18 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
     // Always safe to call from a BPF context.
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
 
-    // SAFETY: Reads from the tracepoint context at a fixed offset.
-    // Offset 16 is bytes_req for kmem_cache_alloc tracepoint format.
-    // Returns 0 on failure (out-of-bounds).
-    let bytes_req: u32 = unsafe { ctx.read_at(16).unwrap_or(0) };
-    // SAFETY: Offset 20 is bytes_alloc for this tracepoint.
-    let bytes_alloc: u32 = unsafe { ctx.read_at(20).unwrap_or(0) };
+    let bytes_req_offset = match OFFSETS.get(3) {
+        Some(&off) if off > 0 => off as usize,
+        _ => return Ok(0),
+    };
+    let bytes_alloc_offset = match OFFSETS.get(4) {
+        Some(&off) if off > 0 => off as usize,
+        _ => return Ok(0),
+    };
+
+    // SAFETY: offsets discovered from tracefs format file, populated by userspace.
+    let bytes_req: u32 = unsafe { ctx.read_at(bytes_req_offset).unwrap_or(0) };
+    let bytes_alloc: u32 = unsafe { ctx.read_at(bytes_alloc_offset).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<SlabAllocRingEvent>(0) {
         let event = SlabAllocRingEvent {

@@ -6,6 +6,8 @@ pub mod ebpf_parse;
 pub mod hwcounters;
 pub mod mock;
 pub mod replay;
+#[cfg(target_os = "linux")]
+pub mod tracepoint_format;
 
 use argus_common::ArgusEvent;
 use thiserror::Error;

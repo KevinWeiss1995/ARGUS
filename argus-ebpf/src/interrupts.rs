@@ -4,7 +4,7 @@ use aya_ebpf::{
     programs::TracePointContext,
 };
 
-use super::EVENTS;
+use super::{EVENTS, OFFSETS};
 
 #[repr(C)]
 struct IrqEntryRingEvent {
@@ -41,8 +41,13 @@ fn try_trace_irq_entry(ctx: &TracePointContext) -> Result<u32, i64> {
     let ts = unsafe { bpf_ktime_get_ns() };
     // SAFETY: bpf_get_smp_processor_id returns current CPU, always safe.
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
-    // SAFETY: Offset 8 is the IRQ number in the irq_handler_entry tracepoint.
-    let irq: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
+
+    let irq_offset = match OFFSETS.get(0) {
+        Some(&off) if off > 0 => off as usize,
+        _ => return Ok(0),
+    };
+    // SAFETY: offset discovered from tracefs format file, populated by userspace.
+    let irq: u32 = unsafe { ctx.read_at(irq_offset).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<IrqEntryRingEvent>(0) {
         let event = IrqEntryRingEvent {
@@ -76,9 +81,19 @@ fn try_trace_napi_poll(ctx: &TracePointContext) -> Result<u32, i64> {
     // SAFETY: see try_trace_irq_entry above.
     let ts = unsafe { bpf_ktime_get_ns() };
     let cpu = unsafe { aya_ebpf::helpers::bpf_get_smp_processor_id() };
-    // SAFETY: Offsets 8 and 12 are budget and work_done in napi_poll tracepoint.
-    let budget: u32 = unsafe { ctx.read_at(8).unwrap_or(0) };
-    let work_done: u32 = unsafe { ctx.read_at(12).unwrap_or(0) };
+
+    let work_offset = match OFFSETS.get(1) {
+        Some(&off) if off > 0 => off as usize,
+        _ => return Ok(0),
+    };
+    let budget_offset = match OFFSETS.get(2) {
+        Some(&off) if off > 0 => off as usize,
+        _ => return Ok(0),
+    };
+
+    // SAFETY: offsets discovered from tracefs format file, populated by userspace.
+    let budget: u32 = unsafe { ctx.read_at(budget_offset).unwrap_or(0) };
+    let work_done: u32 = unsafe { ctx.read_at(work_offset).unwrap_or(0) };
 
     if let Some(mut entry) = EVENTS.reserve::<NapiPollRingEvent>(0) {
         let event = NapiPollRingEvent {

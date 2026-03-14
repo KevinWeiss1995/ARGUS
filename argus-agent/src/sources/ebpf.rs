@@ -19,6 +19,7 @@ mod inner {
     use tracing::{info, warn};
 
     use crate::sources::ebpf_parse;
+    use crate::sources::tracepoint_format;
     use crate::sources::{EventSource, EventSourceError};
     use argus_common::*;
 
@@ -41,6 +42,8 @@ mod inner {
             if let Err(e) = EbpfLogger::init(&mut ebpf) {
                 warn!("Failed to init eBPF logger (non-fatal): {e}");
             }
+
+            Self::populate_offsets(&mut ebpf)?;
 
             let probes: &[(&str, &str, &str)] = &[
                 ("trace_kmem_cache_alloc", "kmem", "kmem_cache_alloc"),
@@ -98,6 +101,31 @@ mod inner {
                 dropped_events: 0,
                 attached_probes,
             })
+        }
+
+        /// Read tracepoint format files from tracefs and populate the BPF OFFSETS map
+        /// so probes read fields at the correct kernel-specific byte offsets.
+        fn populate_offsets(ebpf: &mut Ebpf) -> Result<(), EventSourceError> {
+            let offsets = tracepoint_format::discover_offsets();
+            if offsets.is_empty() {
+                warn!("no tracepoint offsets discovered — probes will skip events until offsets are populated");
+                return Ok(());
+            }
+
+            let offsets_map = ebpf
+                .map_mut("OFFSETS")
+                .ok_or_else(|| EventSourceError::Other("OFFSETS map not found in eBPF object".into()))?;
+            let mut arr: aya::maps::Array<_, u32> = offsets_map
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("OFFSETS is not an Array: {e}")))?;
+
+            for (idx, val) in &offsets {
+                arr.set(*idx, *val, 0)
+                    .map_err(|e| EventSourceError::Other(format!("failed to set OFFSETS[{idx}]={val}: {e}")))?;
+            }
+
+            info!(count = offsets.len(), "tracepoint field offsets populated from tracefs");
+            Ok(())
         }
 
         fn attach_tracepoint(
