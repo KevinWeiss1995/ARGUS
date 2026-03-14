@@ -1,9 +1,18 @@
 use argus_common::{AggregatedMetrics, Alert, AlertKind, HealthState};
 
 /// A detection rule evaluates aggregated metrics and optionally produces an alert.
+///
+/// Stateless rules implement `evaluate`. Stateful rules (with EWMA/trend tracking)
+/// override `evaluate_mut` instead; the engine calls `evaluate_mut` when available.
 pub trait DetectionRule: Send + Sync {
     fn name(&self) -> &str;
     fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert>;
+
+    /// Stateful evaluation. Default delegates to `evaluate`.
+    /// Override for rules that maintain internal state across windows.
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        self.evaluate(metrics)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +247,262 @@ impl DetectionRule for SlabPressureRule {
                 message: format!(
                     "Slab pressure correlated with IB errors: {} allocs/window, {} IB errors",
                     slab.alloc_count, ib_errors
+                ),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predictive: Rising IB Error Trend
+// Fires when IB error deltas have been monotonically increasing for N windows.
+// ---------------------------------------------------------------------------
+
+use super::rolling_stats::{RollingStats, TrendTracker};
+
+pub struct RisingErrorTrendRule {
+    pub min_consecutive_windows: u32,
+    trend: TrendTracker,
+}
+
+impl RisingErrorTrendRule {
+    #[must_use]
+    pub fn new(min_consecutive_windows: u32) -> Self {
+        Self {
+            min_consecutive_windows,
+            trend: TrendTracker::new(),
+        }
+    }
+}
+
+impl Default for RisingErrorTrendRule {
+    fn default() -> Self {
+        Self::new(3)
+    }
+}
+
+impl DetectionRule for RisingErrorTrendRule {
+    fn name(&self) -> &str {
+        "rising_error_trend"
+    }
+
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let total = metrics.ib_counter_deltas.total_error_delta();
+        let consecutive = self.trend.push(total as f64);
+
+        if consecutive >= self.min_consecutive_windows && total > 0 {
+            Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::RisingErrorTrend {
+                    consecutive_windows: consecutive,
+                    current_delta: total,
+                },
+                severity: if consecutive >= self.min_consecutive_windows * 2 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!(
+                    "IB errors rising for {consecutive} consecutive windows (current delta: {total})"
+                ),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predictive: Latency Drift (slab alloc latency deviates from EWMA baseline)
+// ---------------------------------------------------------------------------
+
+pub struct LatencyDriftRule {
+    pub z_threshold: f64,
+    stats: RollingStats,
+}
+
+impl LatencyDriftRule {
+    #[must_use]
+    pub fn new(z_threshold: f64) -> Self {
+        Self {
+            z_threshold,
+            stats: RollingStats::new(0.1),
+        }
+    }
+}
+
+impl Default for LatencyDriftRule {
+    fn default() -> Self {
+        Self::new(3.0)
+    }
+}
+
+impl DetectionRule for LatencyDriftRule {
+    fn name(&self) -> &str {
+        "latency_drift"
+    }
+
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let latency = metrics.slab_metrics.avg_latency_ns() as f64;
+        let z = self.stats.z_score(latency);
+        self.stats.push(latency);
+
+        if self.stats.is_warmed_up() && z.abs() >= self.z_threshold {
+            Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::LatencyDrift {
+                    metric_name: "slab_avg_latency_ns".into(),
+                    z_score: z,
+                    current_value: latency,
+                    ewma: self.stats.mean(),
+                },
+                severity: if z.abs() >= self.z_threshold * 2.0 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!(
+                    "Slab latency drift: {latency:.0}ns (z={z:.1}, baseline={:.0}ns)",
+                    self.stats.mean()
+                ),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predictive: Throughput Drop (port data counters declining significantly)
+// ---------------------------------------------------------------------------
+
+pub struct ThroughputDropRule {
+    pub drop_threshold_pct: f64,
+    stats: RollingStats,
+}
+
+impl ThroughputDropRule {
+    #[must_use]
+    pub fn new(drop_threshold_pct: f64) -> Self {
+        Self {
+            drop_threshold_pct,
+            stats: RollingStats::new(0.1),
+        }
+    }
+}
+
+impl Default for ThroughputDropRule {
+    fn default() -> Self {
+        Self::new(50.0)
+    }
+}
+
+impl DetectionRule for ThroughputDropRule {
+    fn name(&self) -> &str {
+        "throughput_drop"
+    }
+
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let throughput = (metrics.ib_counter_deltas.port_rcv_data_delta
+            + metrics.ib_counter_deltas.port_xmit_data_delta) as f64;
+        let ewma = self.stats.mean();
+        self.stats.push(throughput);
+
+        if !self.stats.is_warmed_up() || ewma < 1.0 {
+            return None;
+        }
+
+        let drop_pct = (1.0 - throughput / ewma) * 100.0;
+        if drop_pct >= self.drop_threshold_pct {
+            Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::ThroughputDrop {
+                    current_throughput: throughput as u64,
+                    ewma_throughput: ewma,
+                    drop_pct,
+                },
+                severity: if drop_pct >= 80.0 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!(
+                    "Throughput drop: {drop_pct:.0}% below baseline ({throughput:.0} vs {ewma:.0})"
+                ),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predictive: NAPI Saturation (work/poll approaching budget)
+// ---------------------------------------------------------------------------
+
+pub struct NapiSaturationRule {
+    pub utilization_threshold_pct: f64,
+    pub min_polls: u64,
+}
+
+impl Default for NapiSaturationRule {
+    fn default() -> Self {
+        Self {
+            utilization_threshold_pct: 85.0,
+            min_polls: 10,
+        }
+    }
+}
+
+impl DetectionRule for NapiSaturationRule {
+    fn name(&self) -> &str {
+        "napi_saturation"
+    }
+
+    fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let net = &metrics.network_metrics;
+        if net.napi_polls < self.min_polls || net.napi_total_budget == 0 {
+            return None;
+        }
+
+        let avg_work = net.napi_total_work as f64 / net.napi_polls as f64;
+        let avg_budget = net.napi_total_budget as f64 / net.napi_polls as f64;
+
+        if avg_budget < 1.0 {
+            return None;
+        }
+
+        let utilization = avg_work / avg_budget * 100.0;
+
+        if utilization >= self.utilization_threshold_pct {
+            Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::NapiSaturation {
+                    avg_work_per_poll: avg_work,
+                    avg_budget,
+                    utilization_pct: utilization,
+                },
+                severity: if utilization >= 95.0 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!(
+                    "NAPI saturation: {utilization:.0}% budget utilization ({avg_work:.0}/{avg_budget:.0} per poll)"
                 ),
             })
         } else {
