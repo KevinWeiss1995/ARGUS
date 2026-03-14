@@ -234,7 +234,7 @@ All detection thresholds are configurable via CLI or the `DetectionConfig` struc
 
 ## Contributing
 
-Contributions are welcome. This project is still young and there's a lot of ground to cover — particularly around:
+Contributions are welcome. This project is still young and there's a lot of ground to cover, particularly around:
 
 - Additional eBPF probes (scheduler latency, page faults, cgroup pressure)
 - Smarter detection rules (ML-based anomaly detection, correlation between signals)
