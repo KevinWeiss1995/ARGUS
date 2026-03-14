@@ -114,6 +114,9 @@ The health endpoint returns JSON:
 {"state":"HEALTHY","uptime_secs":42.3,"events_processed":14200,"last_window_ts":1710000000}
 ```
 
+## Don't have an HPC cluster but want to test ARGUS?
+No problem. Detailed instructions for setting up Lima VMs with soft-roce can be found here: 
+
 ## Architecture
 
 ```
