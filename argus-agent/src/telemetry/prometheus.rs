@@ -13,7 +13,7 @@ pub struct PrometheusExporter {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)] // Fields are held to keep prometheus registry handles alive for scraping
+#[allow(dead_code)] // fields hold prometheus registry handles that must live for scraping
 struct ArgusPrometheusMetrics {
     health_state: Gauge,
     event_count: Counter,
@@ -26,6 +26,7 @@ struct ArgusPrometheusMetrics {
     cq_avg_latency_ns: Gauge,
     cq_max_latency_ns: Gauge,
     cq_error_count: Counter,
+    ib_error_delta_total: Gauge,
 }
 
 impl PrometheusExporter {
@@ -110,6 +111,13 @@ impl PrometheusExporter {
             cq_error_count.clone(),
         );
 
+        let ib_error_delta_total = Gauge::default();
+        registry.register(
+            "argus_ib_error_delta_total",
+            "Total IB hardware counter error deltas in current window",
+            ib_error_delta_total.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             event_count,
@@ -122,6 +130,7 @@ impl PrometheusExporter {
             cq_avg_latency_ns,
             cq_max_latency_ns,
             cq_error_count,
+            ib_error_delta_total,
         };
 
         Self { registry, metrics }
@@ -149,6 +158,10 @@ impl PrometheusExporter {
         self.metrics
             .cq_max_latency_ns
             .set(metrics.rdma_metrics.max_latency_ns as i64);
+
+        self.metrics
+            .ib_error_delta_total
+            .set(metrics.ib_counter_deltas.total_error_delta() as i64);
     }
 
     /// Record an alert in Prometheus counters.
@@ -163,10 +176,10 @@ impl PrometheusExporter {
     }
 
     /// Encode all metrics as Prometheus text format.
-    pub fn encode(&self) -> String {
+    pub fn encode(&self) -> Result<String, std::fmt::Error> {
         let mut buf = String::new();
-        encode(&mut buf, &self.registry).expect("encoding should not fail");
-        buf
+        encode(&mut buf, &self.registry)?;
+        Ok(buf)
     }
 }
 
@@ -179,40 +192,97 @@ impl Default for PrometheusExporter {
 /// Shared state for the metrics HTTP server.
 pub type SharedExporter = Arc<Mutex<PrometheusExporter>>;
 
-/// Start an HTTP server on `addr` that serves `/metrics`.
+/// Shared health state for the /health endpoint.
+pub type SharedHealthState = Arc<Mutex<HealthSnapshot>>;
+
+#[derive(Clone)]
+pub struct HealthSnapshot {
+    pub state: HealthState,
+    pub uptime_secs: f64,
+    pub events_processed: u64,
+    pub last_window_ts: u64,
+}
+
+impl Default for HealthSnapshot {
+    fn default() -> Self {
+        Self {
+            state: HealthState::Healthy,
+            uptime_secs: 0.0,
+            events_processed: 0,
+            last_window_ts: 0,
+        }
+    }
+}
+
+/// Start an HTTP server on `addr` that serves `/metrics` and `/health`.
+/// Binds to the provided address (should be 127.0.0.1 for security unless
+/// explicitly configured otherwise by the operator).
 pub async fn serve_metrics(
     exporter: SharedExporter,
+    health: SharedHealthState,
     addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
     use http_body_util::Full;
     use hyper::body::Bytes;
     use hyper::service::service_fn;
-    use hyper::{Request, Response};
+    use hyper::{Request, Response, StatusCode};
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpListener;
 
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "Prometheus metrics server listening");
+    tracing::info!(%addr, "metrics/health server listening");
 
     loop {
         let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
         let exporter = exporter.clone();
+        let health = health.clone();
 
         tokio::spawn(async move {
-            let service = service_fn(move |_req: Request<hyper::body::Incoming>| {
+            let service = service_fn(move |req: Request<hyper::body::Incoming>| {
                 let exporter = exporter.clone();
+                let health = health.clone();
                 async move {
-                    let body = {
-                        let exp = exporter.lock().unwrap();
-                        exp.encode()
-                    };
-                    Ok::<_, hyper::Error>(
-                        Response::builder()
-                            .header("content-type", "text/plain; version=0.0.4")
-                            .body(Full::new(Bytes::from(body)))
-                            .unwrap(),
-                    )
+                    match req.uri().path() {
+                        "/metrics" => {
+                            let body = match exporter.lock() {
+                                Ok(exp) => exp.encode().unwrap_or_default(),
+                                Err(_) => String::from("# error: lock poisoned\n"),
+                            };
+                            Ok::<_, hyper::Error>(
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header("content-type", "text/plain; version=0.0.4")
+                                    .body(Full::new(Bytes::from(body)))
+                                    .unwrap_or_else(|_| {
+                                        Response::new(Full::new(Bytes::from("internal error")))
+                                    }),
+                            )
+                        }
+                        "/health" => {
+                            let snap = health.lock().map(|h| h.clone()).unwrap_or_default();
+                            let body = format!(
+                                r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
+                                snap.state,
+                                snap.uptime_secs,
+                                snap.events_processed,
+                                snap.last_window_ts,
+                            );
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .unwrap_or_else(|_| {
+                                    Response::new(Full::new(Bytes::from("{}")))
+                                }))
+                        }
+                        _ => Ok(Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Full::new(Bytes::from("not found")))
+                            .unwrap_or_else(|_| {
+                                Response::new(Full::new(Bytes::from("not found")))
+                            })),
+                    }
                 }
             });
 
@@ -255,7 +325,7 @@ mod tests {
         exporter.update(&metrics, HealthState::Healthy, 150);
         exporter.record_alert("interrupt_affinity_skew", "DEGRADED");
 
-        let output = exporter.encode();
+        let output = exporter.encode().expect("encoding should not fail");
         assert!(output.contains("argus_health_state"));
         assert!(output.contains("argus_slab_avg_latency_ns"));
         assert!(output.contains("argus_alerts_total"));
@@ -267,7 +337,7 @@ mod tests {
         let metrics = AggregatedMetrics::default();
 
         exporter.update(&metrics, HealthState::Critical, 0);
-        let output = exporter.encode();
+        let output = exporter.encode().expect("encoding should not fail");
         assert!(output.contains("argus_health_state 2"));
     }
 }
