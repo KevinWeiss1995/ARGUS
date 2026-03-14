@@ -1,4 +1,4 @@
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
 use serde::{Deserialize, Serialize};
@@ -182,6 +182,26 @@ pub enum AlertKind {
         rcv_error_delta: u64,
         xmit_discard_delta: u64,
     },
+    RisingErrorTrend {
+        consecutive_windows: u32,
+        current_delta: u64,
+    },
+    LatencyDrift {
+        metric_name: String,
+        z_score: f64,
+        current_value: f64,
+        ewma: f64,
+    },
+    ThroughputDrop {
+        current_throughput: u64,
+        ewma_throughput: f64,
+        drop_pct: f64,
+    },
+    NapiSaturation {
+        avg_work_per_poll: f64,
+        avg_budget: f64,
+        utilization_pct: f64,
+    },
 }
 
 impl Alert {
@@ -193,6 +213,10 @@ impl Alert {
             AlertKind::SlabPressureCorrelation { .. } => "slab_pressure_correlation",
             AlertKind::LinkEvent { .. } => "link_event",
             AlertKind::RdmaLinkDegradation { .. } => "rdma_link_degradation",
+            AlertKind::RisingErrorTrend { .. } => "rising_error_trend",
+            AlertKind::LatencyDrift { .. } => "latency_drift",
+            AlertKind::ThroughputDrop { .. } => "throughput_drop",
+            AlertKind::NapiSaturation { .. } => "napi_saturation",
         }
     }
 }
@@ -210,6 +234,9 @@ pub struct AggregatedMetrics {
     pub rdma_metrics: RdmaMetrics,
     pub network_metrics: NetworkMetrics,
     pub ib_counter_deltas: IbCounterDeltas,
+    /// Composite health score (0.0 = perfectly healthy, 1.0 = maximally degraded).
+    /// Computed by the detection engine from weighted signal combination.
+    pub composite_health_score: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
