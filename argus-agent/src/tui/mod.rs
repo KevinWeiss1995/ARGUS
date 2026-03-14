@@ -116,7 +116,7 @@ fn render_dashboard(frame: &mut Frame, state: &DashboardState) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
+            Constraint::Length(3), // header
             Constraint::Min(6),    // IRQ distribution
             Constraint::Min(8),    // sparklines / metrics
             Constraint::Length(8), // event log
