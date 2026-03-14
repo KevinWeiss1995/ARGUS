@@ -21,8 +21,7 @@ async fn main() -> Result<()> {
         let log_level: tracing::Level = cli.log_level.parse().unwrap_or(tracing::Level::INFO);
         tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive(log_level.into()),
+                tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()),
             )
             .json()
             .init();
@@ -48,7 +47,10 @@ async fn main() -> Result<()> {
     let hw_reader = if matches!(cli.mode, RunMode::Live) {
         let reader = argus_agent::sources::hwcounters::HwCounterReader::discover();
         if reader.port_count() > 0 {
-            tracing::info!(ports = reader.port_count(), "discovered IB ports for hw counters");
+            tracing::info!(
+                ports = reader.port_count(),
+                "discovered IB ports for hw counters"
+            );
         }
         Some(reader)
     } else {
@@ -210,9 +212,8 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
         tokio::select! {
             _ = ctrl_c => {},
             _ = sigterm.recv() => {},
