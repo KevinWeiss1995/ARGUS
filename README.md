@@ -121,36 +121,36 @@ No problem. Detailed instructions for setting up Lima VMs with soft-roce and run
 
 ```
 ┌─────────────────────────────────────────────┐
-│                  Linux Kernel                │
+│                  Linux Kernel               │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
 │  │ kmem     │ │ irq      │ │ napi         │ │
 │  │ probes   │ │ probes   │ │ probes       │ │
 │  └────┬─────┘ └────┬─────┘ └──────┬───────┘ │
-│       └─────────┬──┘───────────────┘         │
-│            Ring Buffer                       │
+│       └─────────┬──┘───────────────┘        │
+│            Ring Buffer                      │
 └─────────────┬───────────────────────────────┘
               │
      ┌────────▼────────┐    ┌─────────────────┐
-     │  Event Source    │    │  HW Counter     │
+     │  Event Source   │    │  HW Counter     │
      │  (eBPF/mock/    │    │  Reader (sysfs) │
      │   replay)       │    │                 │
      └────────┬────────┘    └────────┬────────┘
               │                      │
      ┌────────▼──────────────────────▼────────┐
-     │              Aggregator                 │
+     │              Aggregator                │
      │  (per-window metrics: IRQ dist, slab,  │
      │   RDMA, NAPI, IB counter deltas)       │
      └────────────────┬───────────────────────┘
                       │
      ┌────────────────▼───────────────────────┐
-     │          Detection Engine               │
+     │          Detection Engine              │
      │  8 rules · EWMA rolling stats ·        │
      │  hysteresis · composite health score   │
      └──────┬──────────────┬──────────────────┘
             │              │
      ┌──────▼──────┐  ┌───▼──────────────┐
-     │  TUI        │  │  Prometheus       │
-     │  Dashboard  │  │  /metrics /health │
+     │  TUI        │  │  Prometheus      │
+     │  Dashboard  │  │  /metrics /health│
      └─────────────┘  └──────────────────┘
 ```
 
