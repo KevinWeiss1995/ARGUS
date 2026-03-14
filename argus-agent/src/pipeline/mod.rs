@@ -36,8 +36,7 @@ impl Pipeline {
     /// Run detection rules against current aggregated metrics.
     /// Call once per window tick, not per event.
     pub fn evaluate(&mut self) -> Vec<Alert> {
-        self.detection
-            .evaluate(self.aggregator.current_metrics())
+        self.detection.evaluate(self.aggregator.current_metrics())
     }
 
     #[must_use]

@@ -274,7 +274,10 @@ mod tests {
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(100),
         }));
-        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 0);
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            0
+        );
 
         // Second reading: delta = 110 - 100 = 10
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
@@ -282,11 +285,17 @@ mod tests {
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(110),
         }));
-        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 10);
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            10
+        );
 
         // Reset clears deltas but retains absolute baseline
         agg.reset();
-        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 0);
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            0
+        );
 
         // Third reading: delta = 115 - 110 = 5
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
@@ -294,7 +303,10 @@ mod tests {
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(115),
         }));
-        assert_eq!(agg.current_metrics().ib_counter_deltas.symbol_error_delta, 5);
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            5
+        );
     }
 
     #[test]
