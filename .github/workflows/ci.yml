@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pin nightly for eBPF builds to avoid toolchain flakiness
+  NIGHTLY_TOOLCHAIN: nightly-2025-12-01
 
 jobs:
   # Tier 0: Pure logic tests - runs on all platforms
@@ -76,20 +78,26 @@ jobs:
         run: cargo install cargo-deny
       - name: Run cargo-deny
         run: cargo deny check
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo-audit
+        run: cargo audit
 
-  # Tier 2: eBPF build verification (Linux only)
+  # Tier 2: eBPF build verification (Linux only, pinned nightly)
   ebpf-build:
     name: eBPF Build Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - name: Install bpf-linker
         run: cargo install bpf-linker
       - name: Build eBPF programs
         working-directory: argus-ebpf
-        run: cargo +nightly build --target=bpfel-unknown-none -Z build-std=core
-        continue-on-error: true
+        run: cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --target=bpfel-unknown-none -Z build-std=core
+      - name: Hash eBPF artifact
+        run: sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf || true
