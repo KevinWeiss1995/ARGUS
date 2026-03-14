@@ -21,7 +21,9 @@ fn run_scenario(scenario_path: &str) {
 
         for expected in &scenario.expected_states {
             if expected.after_event_index == i {
-                // Run detection at checkpoint to get current state
+                // Evaluate multiple times to satisfy hysteresis (2 windows).
+                // Since all events are in the same window, we evaluate twice.
+                let _ = pipeline.evaluate();
                 let _ = pipeline.evaluate();
                 let actual_state = pipeline.detection_engine().current_state();
                 assert_eq!(

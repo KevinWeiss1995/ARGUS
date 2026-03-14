@@ -2,7 +2,6 @@ use argus_agent::pipeline::Pipeline;
 use argus_common::*;
 use proptest::prelude::*;
 
-// Arbitrary event generators for proptest
 fn arb_irq_entry() -> impl Strategy<Value = ArgusEvent> {
     (0u32..16, 0u32..128, any::<u64>()).prop_map(|(cpu, irq, ts)| {
         ArgusEvent::IrqEntry(IrqEntryEvent {
@@ -44,8 +43,20 @@ fn arb_event() -> impl Strategy<Value = ArgusEvent> {
     prop_oneof![arb_irq_entry(), arb_slab_alloc(), arb_cq_completion(),]
 }
 
+/// Helper: run N windows of the same events to satisfy hysteresis.
+fn evaluate_with_hysteresis(pipeline: &mut Pipeline, events: &[ArgusEvent], windows: u32) {
+    for w in 0..windows {
+        for event in events {
+            pipeline.ingest(event);
+        }
+        let _ = pipeline.evaluate();
+        if w < windows - 1 {
+            pipeline.reset_window();
+        }
+    }
+}
+
 proptest! {
-    /// The detection engine should never panic regardless of input.
     #[test]
     fn detection_never_panics(events in proptest::collection::vec(arb_event(), 0..500)) {
         let mut pipeline = Pipeline::new(16);
@@ -56,7 +67,6 @@ proptest! {
         let _ = pipeline.detection_engine().current_state();
     }
 
-    /// Health state must always be one of the three valid values.
     #[test]
     fn health_state_always_valid(events in proptest::collection::vec(arb_event(), 1..200)) {
         let mut pipeline = Pipeline::new(16);
@@ -68,27 +78,27 @@ proptest! {
         prop_assert!(matches!(state, HealthState::Healthy | HealthState::Degraded | HealthState::Critical));
     }
 
-    /// IRQ skew detection is monotonic: higher skew should never produce
-    /// a LESS severe state than lower skew (with the same total count).
+    /// IRQ skew detection: accounts for hysteresis by evaluating 2 windows.
     #[test]
     fn irq_skew_monotonic(skew_pct in 50u32..100) {
         let total = 100u32;
         let skewed = (total as f64 * skew_pct as f64 / 100.0) as u32;
-        let _remaining = total - skewed;
 
-        let mut pipeline_skewed = Pipeline::new(4);
-        for i in 0..total {
-            let cpu = if i < skewed { 0 } else { (i % 3) + 1 };
-            pipeline_skewed.ingest(&ArgusEvent::IrqEntry(IrqEntryEvent {
-                timestamp_ns: u64::from(i) * 1_000_000,
-                cpu,
-                irq: 33,
-                handler_name_hash: 0,
-            }));
-        }
+        let events: Vec<_> = (0..total)
+            .map(|i| {
+                let cpu = if i < skewed { 0 } else { (i % 3) + 1 };
+                ArgusEvent::IrqEntry(IrqEntryEvent {
+                    timestamp_ns: u64::from(i) * 1_000_000,
+                    cpu,
+                    irq: 33,
+                    handler_name_hash: 0,
+                })
+            })
+            .collect();
 
-        let _ = pipeline_skewed.evaluate();
-        let state = pipeline_skewed.detection_engine().current_state();
+        let mut pipeline = Pipeline::new(4);
+        evaluate_with_hysteresis(&mut pipeline, &events, 2);
+        let state = pipeline.detection_engine().current_state();
 
         if skew_pct >= 90 && total >= 10 {
             prop_assert_eq!(state, HealthState::Critical);
@@ -97,25 +107,27 @@ proptest! {
         }
     }
 
-    /// RDMA latency detection: higher latency should produce equal or worse state.
+    /// RDMA latency detection: accounts for hysteresis.
     #[test]
     fn rdma_latency_monotonic(latency_factor in 1.0f64..20.0) {
         let baseline = 2000u64;
         let latency = (baseline as f64 * latency_factor) as u64;
 
-        let mut pipeline = Pipeline::new(4);
-        for i in 0..20 {
-            pipeline.ingest(&ArgusEvent::CqCompletion(CqCompletionEvent {
-                timestamp_ns: i * 1_000_000,
-                cpu: 0,
-                latency_ns: latency,
-                queue_pair_num: 1,
-                is_error: false,
-                opcode: 0,
-            }));
-        }
+        let events: Vec<_> = (0..20)
+            .map(|i| {
+                ArgusEvent::CqCompletion(CqCompletionEvent {
+                    timestamp_ns: i * 1_000_000,
+                    cpu: 0,
+                    latency_ns: latency,
+                    queue_pair_num: 1,
+                    is_error: false,
+                    opcode: 0,
+                })
+            })
+            .collect();
 
-        let _ = pipeline.evaluate();
+        let mut pipeline = Pipeline::new(4);
+        evaluate_with_hysteresis(&mut pipeline, &events, 2);
         let state = pipeline.detection_engine().current_state();
 
         if latency_factor >= 10.0 {
@@ -125,23 +137,24 @@ proptest! {
         }
     }
 
-    /// Slab pressure detection: high alloc rate + IB errors should trigger.
-    /// Without IB errors, slab allocs alone should stay Healthy.
+    /// Slab pressure without IB errors should stay Healthy.
     #[test]
     fn slab_pressure_needs_ib_errors(alloc_count in 100u64..10_000) {
-        let mut pipeline = Pipeline::new(4);
-        for i in 0..alloc_count {
-            pipeline.ingest(&ArgusEvent::SlabAlloc(SlabAllocEvent {
-                timestamp_ns: i * 1_000_000,
-                cpu: 0,
-                bytes_req: 64,
-                bytes_alloc: 64,
-                latency_ns: 0,
-                numa_node: 0,
-            }));
-        }
+        let events: Vec<_> = (0..alloc_count)
+            .map(|i| {
+                ArgusEvent::SlabAlloc(SlabAllocEvent {
+                    timestamp_ns: i * 1_000_000,
+                    cpu: 0,
+                    bytes_req: 64,
+                    bytes_alloc: 64,
+                    latency_ns: 0,
+                    numa_node: 0,
+                })
+            })
+            .collect();
 
-        let _ = pipeline.evaluate();
+        let mut pipeline = Pipeline::new(4);
+        evaluate_with_hysteresis(&mut pipeline, &events, 2);
         let state = pipeline.detection_engine().current_state();
         prop_assert_eq!(state, HealthState::Healthy,
             "Slab allocs without IB errors should never trigger slab pressure");
@@ -165,16 +178,9 @@ proptest! {
         }
 
         let all_alerts = pipeline.evaluate();
-
-        let worst_alert = all_alerts.iter().map(|a| a.severity).max_by_key(|s| match s {
-            HealthState::Healthy => 0,
-            HealthState::Degraded => 1,
-            HealthState::Critical => 2,
-        });
-
         let final_state = pipeline.detection_engine().current_state();
 
-        if worst_alert.is_some() {
+        if !all_alerts.is_empty() {
             prop_assert!(matches!(final_state, HealthState::Healthy | HealthState::Degraded | HealthState::Critical));
         }
     }
