@@ -272,9 +272,7 @@ pub async fn serve_metrics(
                                 .status(StatusCode::OK)
                                 .header("content-type", "application/json")
                                 .body(Full::new(Bytes::from(body)))
-                                .unwrap_or_else(|_| {
-                                    Response::new(Full::new(Bytes::from("{}")))
-                                }))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
                         }
                         _ => Ok(Response::builder()
                             .status(StatusCode::NOT_FOUND)
