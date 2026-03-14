@@ -2,6 +2,7 @@
 
 #[cfg(target_os = "linux")]
 pub mod ebpf;
+pub mod ebpf_parse;
 pub mod hwcounters;
 pub mod mock;
 pub mod replay;

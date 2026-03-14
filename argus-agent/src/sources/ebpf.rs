@@ -18,84 +18,17 @@ mod inner {
     use std::path::Path;
     use tracing::{info, warn};
 
+    use crate::sources::ebpf_parse;
     use crate::sources::{EventSource, EventSourceError};
     use argus_common::*;
-
-    const EVENT_TYPE_SLAB_ALLOC: u32 = 1;
-    const EVENT_TYPE_SLAB_FREE: u32 = 2;
-    const EVENT_TYPE_IRQ_ENTRY: u32 = 3;
-    const EVENT_TYPE_NAPI_POLL: u32 = 4;
-
-    fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
-        data.get(offset..offset + 4)
-            .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
-        data.get(offset..offset + 8)
-            .map(|b| u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-    }
-
-    /// Parse a slab alloc event from raw ring buffer bytes.
-    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_req(4) + bytes_alloc(4) + pad2(4) + latency(8) = 40 bytes
-    fn parse_slab_alloc(data: &[u8]) -> Option<ArgusEvent> {
-        if data.len() < 40 {
-            return None;
-        }
-        Some(ArgusEvent::SlabAlloc(SlabAllocEvent {
-            timestamp_ns: read_u64(data, 8)?,
-            cpu: read_u32(data, 16)?,
-            bytes_req: read_u32(data, 20)?,
-            bytes_alloc: read_u32(data, 24)?,
-            latency_ns: read_u64(data, 32)?,
-            numa_node: 0,
-        }))
-    }
-
-    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_freed(4) = 24 bytes
-    fn parse_slab_free(data: &[u8]) -> Option<ArgusEvent> {
-        if data.len() < 24 {
-            return None;
-        }
-        Some(ArgusEvent::SlabFree(SlabFreeEvent {
-            timestamp_ns: read_u64(data, 8)?,
-            cpu: read_u32(data, 16)?,
-            bytes_freed: read_u32(data, 20)?,
-        }))
-    }
-
-    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + irq(4) = 24 bytes
-    fn parse_irq_entry(data: &[u8]) -> Option<ArgusEvent> {
-        if data.len() < 24 {
-            return None;
-        }
-        Some(ArgusEvent::IrqEntry(IrqEntryEvent {
-            timestamp_ns: read_u64(data, 8)?,
-            cpu: read_u32(data, 16)?,
-            irq: read_u32(data, 20)?,
-            handler_name_hash: 0,
-        }))
-    }
-
-    /// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + budget(4) + work_done(4) + pad2(4) = 32 bytes
-    fn parse_napi_poll(data: &[u8]) -> Option<ArgusEvent> {
-        if data.len() < 32 {
-            return None;
-        }
-        Some(ArgusEvent::NapiPoll(NapiPollEvent {
-            timestamp_ns: read_u64(data, 8)?,
-            cpu: read_u32(data, 16)?,
-            budget: read_u32(data, 20)?,
-            work_done: read_u32(data, 24)?,
-            dev_name_hash: 0,
-        }))
-    }
 
     pub struct EbpfEventSource {
         #[allow(dead_code)]
         ebpf: Ebpf,
         ring_buf: RingBuf<aya::maps::MapData>,
         pending_events: Vec<ArgusEvent>,
+        dropped_events: u64,
+        attached_probes: Vec<String>,
     }
 
     impl EbpfEventSource {
@@ -118,11 +51,13 @@ mod inner {
 
             let mut attached = 0u32;
             let mut failures: Vec<String> = Vec::new();
+            let mut attached_probes: Vec<String> = Vec::new();
             for &(prog, category, name) in probes {
                 match Self::attach_tracepoint(&mut ebpf, prog, category, name) {
                     Ok(()) => {
                         info!("{category}/{name} attached");
                         attached += 1;
+                        attached_probes.push(format!("{category}/{name}"));
                     }
                     Err(e) => {
                         let msg = format!("{category}/{name}: {e}");
@@ -160,6 +95,8 @@ mod inner {
                 ebpf,
                 ring_buf,
                 pending_events: Vec::new(),
+                dropped_events: 0,
+                attached_probes,
             })
         }
 
@@ -192,24 +129,28 @@ mod inner {
         fn drain_ring_buffer(&mut self) {
             while let Some(item) = self.ring_buf.next() {
                 let data = item.as_ref();
-                if data.len() < 8 {
-                    continue;
-                }
-
-                let event_type = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-
-                let event = match event_type {
-                    EVENT_TYPE_SLAB_ALLOC => parse_slab_alloc(data),
-                    EVENT_TYPE_SLAB_FREE => parse_slab_free(data),
-                    EVENT_TYPE_IRQ_ENTRY => parse_irq_entry(data),
-                    EVENT_TYPE_NAPI_POLL => parse_napi_poll(data),
-                    _ => None,
-                };
-
-                if let Some(evt) = event {
-                    self.pending_events.push(evt);
+                match ebpf_parse::parse_event(data) {
+                    Some(evt) => self.pending_events.push(evt),
+                    None => self.dropped_events += 1,
                 }
             }
+        }
+    }
+
+    impl EbpfEventSource {
+        /// Returns the list of successfully attached tracepoint probes.
+        pub fn attached_probes(&self) -> &[String] {
+            &self.attached_probes
+        }
+
+        /// Returns the count of ring buffer items that were too small to parse.
+        pub fn dropped_events(&self) -> u64 {
+            self.dropped_events
+        }
+
+        /// Returns true if the given tracepoint category/name is attached.
+        pub fn has_probe(&self, probe: &str) -> bool {
+            self.attached_probes.iter().any(|p| p == probe)
         }
     }
 
