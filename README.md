@@ -2,7 +2,7 @@
 
 **Adaptive RDMA Guard & Utilization Sentinel**
 
-ARGUS is a lightweight, node-local telemetry agent that uses eBPF to monitor kernel behavior related to RDMA networking, interrupt handling, and memory allocation. It's designed to catch the early warning signs of InfiniBand link degradation and system imbalance *before* your applications notice — not after.
+ARGUS is a lightweight, node-local telemetry agent that uses eBPF to monitor kernel behavior related to RDMA networking, interrupt handling, and memory allocation. It's designed to catch the early warning signs of InfiniBand link degradation and system imbalance *before* your applications notice; not after.
 
 We built this because by the time a GPU training job hangs on an NCCL timeout, the link has usually been degraded for minutes. The hardware counters were screaming the whole time. Nobody was listening at the right layer.
 
