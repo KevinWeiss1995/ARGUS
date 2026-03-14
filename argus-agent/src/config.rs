@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(long)]
     pub ebpf_path: Option<PathBuf>,
 
+    /// Expected SHA-256 hash of the eBPF artifact (hex). Rejects loading if mismatch.
+    #[arg(long)]
+    pub ebpf_hash: Option<String>,
+
     /// Number of CPUs to simulate (for mock mode)
     #[arg(long, default_value = "4")]
     pub num_cpus: u32,
@@ -43,6 +47,19 @@ pub struct Cli {
     /// Detection and sparklines reset each window so they reflect recent behavior.
     #[arg(long, default_value = "3")]
     pub window_secs: u64,
+
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, default_value = "info")]
+    pub log_level: String,
+
+    /// Prometheus metrics listen address (e.g. 127.0.0.1:9090). Disabled if not set.
+    #[arg(long)]
+    pub metrics_addr: Option<String>,
+
+    /// Enable seccomp syscall filtering after initialization (Linux only).
+    /// Restricts the process to only the syscalls needed for operation.
+    #[arg(long)]
+    pub seccomp: bool,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
