@@ -20,6 +20,14 @@ impl Pipeline {
         }
     }
 
+    #[must_use]
+    pub fn with_config(num_cpus: u32, config: &crate::config::DetectionConfig) -> Self {
+        Self {
+            aggregator: Aggregator::new(num_cpus),
+            detection: DetectionEngine::with_config(config),
+        }
+    }
+
     /// Ingest a single event into the aggregator without running detection.
     pub fn ingest(&mut self, event: &ArgusEvent) {
         self.aggregator.ingest(event);
@@ -39,7 +47,8 @@ impl Pipeline {
 
     pub fn reset_window(&mut self) {
         self.aggregator.reset();
-        self.detection.reset();
+        // NOTE: detection engine state (hysteresis counters, rolling stats)
+        // persists across windows intentionally. Only the aggregator resets.
     }
 
     #[must_use]
@@ -76,22 +85,35 @@ mod tests {
     fn pipeline_evaluate_runs_detection() {
         let mut pipeline = Pipeline::new(4);
 
-        for i in 0u32..100 {
-            let cpu: u32 = if i < 75 { 0 } else { (i % 3) + 1 };
-            pipeline.ingest(&ArgusEvent::IrqEntry(IrqEntryEvent {
-                timestamp_ns: u64::from(i) * 1_000_000,
-                cpu,
-                irq: 33,
-                handler_name_hash: 0xaabb,
-            }));
-        }
+        let ingest_skewed = |pipeline: &mut Pipeline| {
+            for i in 0u32..100 {
+                let cpu: u32 = if i < 75 { 0 } else { (i % 3) + 1 };
+                pipeline.ingest(&ArgusEvent::IrqEntry(IrqEntryEvent {
+                    timestamp_ns: u64::from(i) * 1_000_000,
+                    cpu,
+                    irq: 33,
+                    handler_name_hash: 0xaabb,
+                }));
+            }
+        };
 
-        let alerts = pipeline.evaluate();
-        assert!(!alerts.is_empty(), "skewed IRQs should trigger alert on evaluate");
+        // Window 1: skewed, evaluate, reset
+        ingest_skewed(&mut pipeline);
+        let _ = pipeline.evaluate();
+        pipeline.reset_window();
+
+        // Window 2: skewed again, evaluate — hysteresis should now trigger
+        ingest_skewed(&mut pipeline);
+        let _ = pipeline.evaluate();
 
         let metrics = pipeline.current_metrics();
         assert_eq!(metrics.interrupt_distribution.total_count, 100);
         assert!(metrics.interrupt_distribution.dominant_cpu_pct() >= 70.0);
+        assert_eq!(
+            pipeline.detection_engine().current_state(),
+            argus_common::HealthState::Degraded,
+            "skewed IRQs should trigger degraded after hysteresis"
+        );
     }
 
     #[test]
