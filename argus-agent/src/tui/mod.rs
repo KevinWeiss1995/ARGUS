@@ -22,6 +22,7 @@ pub struct DashboardState {
     pub ib_error_history: Vec<f64>,
     pub irq_rate_history: Vec<f64>,
     pub slab_rate_history: Vec<f64>,
+    pub rdma_throughput_history: Vec<f64>,
 }
 
 impl Default for DashboardState {
@@ -36,6 +37,7 @@ impl Default for DashboardState {
             ib_error_history: Vec::new(),
             irq_rate_history: Vec::new(),
             slab_rate_history: Vec::new(),
+            rdma_throughput_history: Vec::new(),
         }
     }
 }
@@ -58,6 +60,15 @@ impl DashboardState {
         self.irq_rate_history.push(irq_total);
         if self.irq_rate_history.len() > 60 {
             self.irq_rate_history.remove(0);
+        }
+
+        // IB data counters are in 4-byte units; convert to KB/window
+        let d = &self.metrics.ib_counter_deltas;
+        let throughput_kb =
+            (d.port_rcv_data_delta + d.port_xmit_data_delta) as f64 * 4.0 / 1024.0;
+        self.rdma_throughput_history.push(throughput_kb);
+        if self.rdma_throughput_history.len() > 60 {
+            self.rdma_throughput_history.remove(0);
         }
     }
 }
@@ -142,14 +153,25 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ),
     };
 
+    let rdma_active = state
+        .rdma_throughput_history
+        .last()
+        .map_or(false, |&v| v > 0.0);
+    let (rdma_indicator, rdma_style) = if rdma_active {
+        ("▲ active", Style::default().fg(Color::Green).bold())
+    } else {
+        ("— idle", Style::default().fg(Color::DarkGray))
+    };
+
     let header_text = Line::from(vec![
         Span::styled(" ARGUS ", Style::default().fg(Color::Cyan).bold()),
         Span::raw("| State: "),
         Span::styled(format!("██ {label}"), style),
         Span::raw(format!(
-            " | Source: {} | Events: {} | Uptime: {:.1}s",
+            " | Source: {} | Events: {} | Uptime: {:.1}s | RDMA: ",
             state.source_name, state.event_count, state.uptime_secs
         )),
+        Span::styled(rdma_indicator, rdma_style),
     ]);
 
     let block = Block::default()
@@ -228,29 +250,37 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ])
         .split(area);
 
     render_sparkline_panel(
         frame,
         chunks[0],
+        " RDMA Throughput (KB/w) ",
+        &state.rdma_throughput_history,
+        Color::Green,
+    );
+    render_sparkline_panel(
+        frame,
+        chunks[1],
         " IB Errors (/window) ",
         &state.ib_error_history,
         Color::Magenta,
     );
     render_sparkline_panel(
         frame,
-        chunks[1],
+        chunks[2],
         " Slab Allocs (/window) ",
         &state.slab_rate_history,
         Color::Yellow,
     );
     render_sparkline_panel(
         frame,
-        chunks[2],
+        chunks[3],
         " IRQ Rate (/window) ",
         &state.irq_rate_history,
         Color::Cyan,
