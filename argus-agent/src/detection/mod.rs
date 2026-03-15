@@ -40,15 +40,14 @@ impl DetectionEngine {
                 // Reactive rules (threshold-based)
                 Box::new(InterruptAffinitySkewRule {
                     threshold_pct: config.irq_skew_threshold_pct,
+                    num_cpus: config.num_cpus,
                 }),
                 Box::new(RdmaLatencySpikeRule {
                     spike_factor: config.rdma_spike_factor,
                     baseline_latency_ns: config.rdma_baseline_latency_ns,
                     min_completions: 10,
                 }),
-                Box::new(RdmaLinkDegradationRule {
-                    min_error_delta: config.rdma_link_min_error_delta,
-                }),
+                Box::new(RdmaLinkDegradationRule::default()),
                 Box::new(SlabPressureRule {
                     min_allocs: config.slab_pressure_min_allocs,
                     alloc_rate_threshold: config.slab_pressure_alloc_rate_threshold,
@@ -126,19 +125,21 @@ impl DetectionEngine {
     /// Compute a composite health score (0.0 = healthy, 1.0 = critical).
     /// Weights multiple signals for a more nuanced view than discrete states.
     #[must_use]
-    pub fn compute_health_score(metrics: &AggregatedMetrics) -> f64 {
+    pub fn compute_health_score(metrics: &AggregatedMetrics, num_cpus: u32) -> f64 {
         let mut score = 0.0_f64;
 
-        // IRQ skew component (0..0.3)
+        // IRQ skew component (0..0.3) — scaled by CPU count
         let irq_pct = metrics.interrupt_distribution.dominant_cpu_pct();
-        if irq_pct > 50.0 {
-            score += ((irq_pct - 50.0) / 50.0).min(1.0) * 0.3;
+        let perfect_share = 100.0 / num_cpus.max(1) as f64;
+        let irq_baseline = perfect_share + 20.0;
+        if irq_pct > irq_baseline {
+            score += ((irq_pct - irq_baseline) / (100.0 - irq_baseline)).min(1.0) * 0.3;
         }
 
-        // IB error component (0..0.35)
-        let ib_errors = metrics.ib_counter_deltas.total_error_delta();
-        if ib_errors > 0 {
-            score += (ib_errors as f64 / 100.0).min(1.0) * 0.25;
+        // Hard IB error component (0..0.35) — only real hardware errors
+        let hard_errors = metrics.ib_counter_deltas.total_hard_error_delta();
+        if hard_errors > 0 {
+            score += (hard_errors as f64 / 50.0).min(1.0) * 0.25;
         }
         if metrics.ib_counter_deltas.link_downed_delta > 0 {
             score += 0.1;
