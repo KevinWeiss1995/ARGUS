@@ -106,20 +106,6 @@ pub fn read_tracepoint_fields(
 pub fn discover_offsets() -> Vec<(u32, u32)> {
     let mut offsets = Vec::new();
 
-    // #region agent log
-    {
-        use std::io::Write;
-        eprintln!("[ARGUS-DEBUG] discover_offsets called");
-        for path in &["/home/kevin/Projects/networking/ARGUS/.cursor/debug.log", "/tmp/argus-debug.log"] {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, r#"{{"id":"log_discover_start","timestamp":{},"location":"tracepoint_format.rs:discover_offsets","message":"discover_offsets called","data":{{}},"runId":"run1","hypothesisId":"H1"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
-            } else {
-                eprintln!("[ARGUS-DEBUG] FAILED to open {path}");
-            }
-        }
-    }
-    // #endregion
-
     if let Ok(fields) = read_tracepoint_fields("irq", "irq_handler_entry") {
         if let Some(f) = fields.get("irq") {
             tracing::info!(field = "irq", offset = f.offset, size = f.size, "irq_handler_entry");
@@ -132,19 +118,6 @@ pub fn discover_offsets() -> Vec<(u32, u32)> {
     }
 
     if let Ok(fields) = read_tracepoint_fields("napi", "napi_poll") {
-        // #region agent log
-        {
-            use std::io::Write;
-            let field_names: Vec<String> = fields.iter().map(|(k, v)| format!("{}@{}({}B)", k, v.offset, v.size)).collect();
-            let msg = format!("[ARGUS-DEBUG] napi_poll fields: {:?}, has_work={}, has_budget={}", field_names, fields.contains_key("work"), fields.contains_key("budget"));
-            eprintln!("{msg}");
-            for path in &["/home/kevin/Projects/networking/ARGUS/.cursor/debug.log", "/tmp/argus-debug.log"] {
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                    let _ = writeln!(f, r#"{{"id":"log_napi_fields","timestamp":{},"location":"tracepoint_format.rs:discover_offsets","message":"napi_poll fields","data":{{"fields":"{}"}},"runId":"run1","hypothesisId":"H3"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), msg);
-                }
-            }
-        }
-        // #endregion
         if let Some(f) = fields.get("work") {
             tracing::info!(field = "work", offset = f.offset, size = f.size, "napi_poll");
             offsets.push((OFF_NAPI_WORK, f.offset));
@@ -177,19 +150,6 @@ pub fn discover_offsets() -> Vec<(u32, u32)> {
     } else {
         tracing::warn!("could not read kmem/kmem_cache_alloc format file");
     }
-
-    // #region agent log
-    {
-        use std::io::Write;
-        let msg = format!("[ARGUS-DEBUG] discover_offsets result: count={}, offsets={:?}", offsets.len(), offsets);
-        eprintln!("{msg}");
-        for path in &["/home/kevin/Projects/networking/ARGUS/.cursor/debug.log", "/tmp/argus-debug.log"] {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, r#"{{"id":"log_discover_result","timestamp":{},"location":"tracepoint_format.rs:discover_offsets","message":"discover result","data":{{"msg":"{}"}},"runId":"run1","hypothesisId":"H1"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), msg.replace('"', "'"));
-            }
-        }
-    }
-    // #endregion
 
     offsets
 }
