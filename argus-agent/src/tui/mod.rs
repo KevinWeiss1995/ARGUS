@@ -62,11 +62,13 @@ impl DashboardState {
             self.irq_rate_history.remove(0);
         }
 
-        // IB data counters are in 4-byte units; convert to KB/window
         let d = &self.metrics.ib_counter_deltas;
-        let throughput_kb =
-            (d.port_rcv_data_delta + d.port_xmit_data_delta) as f64 * 4.0 / 1024.0;
-        self.rdma_throughput_history.push(throughput_kb);
+        let throughput_val = if d.throughput_bytes() > 0 {
+            d.throughput_bytes() as f64 / 1024.0
+        } else {
+            d.throughput_pkts() as f64
+        };
+        self.rdma_throughput_history.push(throughput_val);
         if self.rdma_throughput_history.len() > 60 {
             self.rdma_throughput_history.remove(0);
         }
@@ -153,10 +155,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ),
     };
 
-    let rdma_active = state
-        .rdma_throughput_history
-        .last()
-        .map_or(false, |&v| v > 0.0);
+    let rdma_active = state.metrics.ib_counter_deltas.has_traffic();
     let (rdma_indicator, rdma_style) = if rdma_active {
         ("▲ active", Style::default().fg(Color::Green).bold())
     } else {
@@ -257,19 +256,24 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ])
         .split(area);
 
-    let rdma_color = if state
-        .rdma_throughput_history
-        .last()
-        .map_or(false, |&v| v > 0.0)
-    {
+    let d = &state.metrics.ib_counter_deltas;
+    let rdma_active = d.has_traffic();
+    let rdma_color = if rdma_active {
         Color::Green
     } else {
         Color::DarkGray
     };
+    let rdma_label = if d.throughput_bytes() > 0 {
+        " RDMA Throughput (KB/w) "
+    } else if d.throughput_pkts() > 0 {
+        " RDMA Traffic (pkts/w) "
+    } else {
+        " RDMA Traffic (idle) "
+    };
     render_sparkline_panel(
         frame,
         chunks[0],
-        " RDMA Throughput (KB/w) ",
+        rdma_label,
         &state.rdma_throughput_history,
         rdma_color,
     );

@@ -15,7 +15,7 @@ expression: rendered
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ RDMA Throughput (┐┌ IB Errors (/windo┐┌ Slab Allocs (/win┐┌ IRQ Rate (/window┐
+┌ RDMA Traffic (idl┐┌ IB Errors (/windo┐┌ Slab Allocs (/win┐┌ IRQ Rate (/window┐
 │  Waiting for data││  Waiting for data││  Waiting for data││  Waiting for data│
 │                  ││                  ││                  ││                  │
 │                  ││                  ││                  ││                  │
