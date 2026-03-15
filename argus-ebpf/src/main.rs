@@ -7,12 +7,8 @@ mod interrupts;
 
 use aya_ebpf::{
     macros::map,
-    maps::{Array, RingBuf},
+    maps::{Array, PerCpuArray},
 };
-
-/// Shared ring buffer for all event types. Userspace reads events tagged by type.
-#[map]
-static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 
 /// Tracepoint field offsets, populated by userspace before probes are attached.
 /// Zero means "not configured" — probes skip events when their offsets are zero.
@@ -25,6 +21,21 @@ static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 ///   4 = kmem/kmem_cache_alloc → "bytes_alloc" field
 #[map]
 static OFFSETS: Array<u32> = Array::with_max_entries(8, 0);
+
+/// Per-CPU IRQ event count. Userspace sums across CPUs for per-CPU distribution.
+/// Single entry (index 0): each CPU increments its own counter.
+#[map]
+static IRQ_COUNTS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
+
+/// Per-CPU slab allocation statistics.
+/// Layout: [alloc_count, free_count, total_bytes_req, total_bytes_alloc]
+#[map]
+static SLAB_STATS: PerCpuArray<[u64; 4]> = PerCpuArray::with_max_entries(1, 0);
+
+/// Per-CPU NAPI poll statistics.
+/// Layout: [poll_count, total_work, total_budget]
+#[map]
+static NAPI_STATS: PerCpuArray<[u64; 3]> = PerCpuArray::with_max_entries(1, 0);
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
