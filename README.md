@@ -2,9 +2,9 @@
 
 **Adaptive RDMA Guard & Utilization Sentinel**
 
-ARGUS is a lightweight, node-local telemetry agent that uses eBPF to monitor kernel behavior related to RDMA networking, interrupt handling, and memory allocation. It's designed to catch the early warning signs of InfiniBand link degradation and system imbalance *before* your applications notice; not after.
+ARGUS is a lightweight, node-local telemetry agent that uses eBPF to monitor kernel behavior related to RDMA networking, interrupt handling, and memory allocation. It's designed to catch the early warning signs of InfiniBand link degradation and system imbalance before your applications notice.
 
-We built this to fill a gap we saw in other fabric monitors. In most cases, by the time a job hangs on an NCCL/MPI timeout the link has usually been degraded for minutes. The hardware counters were screaming the whole time, but with nobody listening at the right layer the degradation goes undected until jobs become painfully slow. The ARGUS project intends to fix that.
+We built this to fill a gap we saw in other fabric monitors. In most cases, by the time a job hangs the link has usually been degraded for awhile. At the kernel level, the warning signs are there, but with nothing listening degradation goes unnoticed until jobs are affected. The ARGUS project intends to fix that.
 
 ## What it does
 
