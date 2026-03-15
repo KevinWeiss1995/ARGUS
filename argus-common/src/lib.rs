@@ -112,6 +112,7 @@ pub struct HardwareCounterEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum HardwareCounter {
+    // --- Standard IB counters (from counters/) ---
     SymbolErrors(u64),
     LinkDowned(u64),
     PortRcvErrors(u64),
@@ -123,10 +124,19 @@ pub enum HardwareCounter {
     PortRcvRemotePhysicalErrors(u64),
     LocalLinkIntegrityErrors(u64),
     ExcessiveBufferOverrunErrors(u64),
-    /// hw_counters rcvd_pkts — packet count (rxe hw_counters).
+    // --- hw_counters (rxe/driver-specific) ---
+    /// hw_counters rcvd_pkts — packet count.
     HwRcvPkts(u64),
-    /// hw_counters sent_pkts — packet count (rxe hw_counters).
+    /// hw_counters sent_pkts — packet count.
     HwXmitPkts(u64),
+    /// rxe hw_counters duplicate_request — operational on Soft-RoCE, NOT a link error.
+    RxeDuplicateRequest(u64),
+    /// rxe hw_counters rcvd_seq_err — operational on Soft-RoCE, NOT a link error.
+    RxeSeqError(u64),
+    /// rxe hw_counters retry_exceeded_err.
+    RxeRetryExceeded(u64),
+    /// rxe hw_counters send_err.
+    RxeSendError(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -331,13 +341,16 @@ pub struct NetworkMetrics {
 /// These are computed as (current_absolute - previous_absolute) each window.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IbCounterDeltas {
+    // --- Hard errors (always indicate real problems) ---
     pub symbol_error_delta: u64,
     pub link_downed_delta: u64,
-    pub port_rcv_errors_delta: u64,
-    pub port_xmit_discards_delta: u64,
     pub port_rcv_remote_physical_errors_delta: u64,
     pub local_link_integrity_errors_delta: u64,
     pub excessive_buffer_overrun_errors_delta: u64,
+    // --- Standard IB error counters (from counters/) ---
+    pub port_rcv_errors_delta: u64,
+    pub port_xmit_discards_delta: u64,
+    // --- Throughput counters ---
     /// Standard IB counter delta — in 4-byte units.
     pub port_rcv_data_delta: u64,
     /// Standard IB counter delta — in 4-byte units.
@@ -346,18 +359,40 @@ pub struct IbCounterDeltas {
     pub hw_rcv_pkts_delta: u64,
     /// hw_counters sent_pkts delta — packet count (rxe).
     pub hw_xmit_pkts_delta: u64,
+    // --- Soft/operational errors (normal on Soft-RoCE, tracked separately) ---
+    pub rxe_duplicate_request_delta: u64,
+    pub rxe_seq_error_delta: u64,
+    pub rxe_retry_exceeded_delta: u64,
+    pub rxe_send_error_delta: u64,
 }
 
 impl IbCounterDeltas {
+    /// Hard errors: always indicate real link/hardware problems regardless of device type.
     #[must_use]
-    pub fn total_error_delta(&self) -> u64 {
+    pub fn total_hard_error_delta(&self) -> u64 {
         self.symbol_error_delta
             + self.link_downed_delta
-            + self.port_rcv_errors_delta
-            + self.port_xmit_discards_delta
             + self.port_rcv_remote_physical_errors_delta
             + self.local_link_integrity_errors_delta
             + self.excessive_buffer_overrun_errors_delta
+    }
+
+    /// Soft/operational errors from rxe hw_counters. Normal on Soft-RoCE during
+    /// active traffic; only concerning when rate deviates from baseline.
+    #[must_use]
+    pub fn total_soft_error_delta(&self) -> u64 {
+        self.rxe_duplicate_request_delta
+            + self.rxe_seq_error_delta
+            + self.rxe_retry_exceeded_delta
+            + self.rxe_send_error_delta
+    }
+
+    /// All error deltas (hard + standard IB counters). Does NOT include soft/rxe errors.
+    #[must_use]
+    pub fn total_error_delta(&self) -> u64 {
+        self.total_hard_error_delta()
+            + self.port_rcv_errors_delta
+            + self.port_xmit_discards_delta
     }
 
     /// Throughput in bytes from standard IB counters (4-byte units × 4).
