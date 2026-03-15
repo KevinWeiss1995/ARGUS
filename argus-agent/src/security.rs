@@ -6,8 +6,8 @@
 /// Drop capabilities and set `PR_SET_NO_NEW_PRIVS` after eBPF initialization.
 ///
 /// Keeps only the capabilities needed for ongoing operation:
-/// - Reading the eBPF ring buffer (no capability needed once fd is open)
-/// - Reading sysfs hardware counters (usually no capability needed)
+/// - `CAP_BPF`: required for `bpf(BPF_MAP_LOOKUP_ELEM)` on kernels < 5.19
+/// - Reading sysfs hardware counters (no capability needed)
 ///
 /// This is Linux-only and best-effort: failure to drop is logged but non-fatal,
 /// since running in a container or without ambient caps can cause benign errors.
@@ -48,6 +48,9 @@ fn set_no_new_privs() -> Result<(), String> {
 fn drop_all_caps() -> Result<(), String> {
     use caps::{CapSet, Capability};
 
+    // CAP_BPF is retained: per-CPU BPF map reads use the bpf() syscall which
+    // requires CAP_BPF on kernels < 5.19. The map FDs are already open, but
+    // BPF_MAP_LOOKUP_ELEM still checks capabilities on older kernels.
     let caps_to_drop = [
         Capability::CAP_SYS_ADMIN,
         Capability::CAP_NET_ADMIN,
@@ -55,7 +58,6 @@ fn drop_all_caps() -> Result<(), String> {
         Capability::CAP_SYS_PTRACE,
         Capability::CAP_DAC_OVERRIDE,
         Capability::CAP_DAC_READ_SEARCH,
-        Capability::CAP_BPF,
         Capability::CAP_PERFMON,
     ];
 
