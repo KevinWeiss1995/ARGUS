@@ -27,9 +27,9 @@ pub struct Cli {
     #[arg(long)]
     pub ebpf_hash: Option<String>,
 
-    /// Number of CPUs to simulate (for mock mode)
-    #[arg(long, default_value = "4")]
-    pub num_cpus: u32,
+    /// Number of CPUs (auto-detected if not specified)
+    #[arg(long)]
+    pub num_cpus: Option<u32>,
 
     /// Enable TUI dashboard
     #[arg(long)]
@@ -100,10 +100,28 @@ pub struct DetectionConfig {
     pub slab_pressure_alloc_rate_threshold: u64,
 }
 
+impl Cli {
+    /// Resolve CPU count: use --num-cpus if given, otherwise auto-detect.
+    #[must_use]
+    pub fn resolve_num_cpus(&self) -> u32 {
+        self.num_cpus.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(4)
+        })
+    }
+}
+
+fn detect_cpus() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4)
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            num_cpus: 4,
+            num_cpus: detect_cpus(),
             detection: DetectionConfig::default(),
         }
     }
@@ -112,7 +130,7 @@ impl Default for AgentConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            num_cpus: 4,
+            num_cpus: detect_cpus(),
             irq_skew_threshold_pct: 70.0,
             rdma_spike_factor: 5.0,
             rdma_baseline_latency_ns: 2_000,

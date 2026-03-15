@@ -33,11 +33,14 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx.send(true);
     });
 
+    let num_cpus = cli.resolve_num_cpus();
+    tracing::info!(num_cpus, "CPU count resolved");
+
     let detection_config = argus_agent::config::DetectionConfig {
-        num_cpus: cli.num_cpus,
+        num_cpus,
         ..argus_agent::config::DetectionConfig::default()
     };
-    let pipeline = Pipeline::with_config(cli.num_cpus, &detection_config);
+    let pipeline = Pipeline::with_config(num_cpus, &detection_config);
     let telemetry = TelemetryCollector::default();
     let dash_state = DashboardState::default();
     let start = std::time::Instant::now();
@@ -443,7 +446,7 @@ fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
                 MockProfile::Pressure => MockConfig::slab_pressure(),
             };
             let config = MockConfig {
-                num_cpus: cli.num_cpus,
+                num_cpus: cli.resolve_num_cpus(),
                 max_events: if cli.max_events > 0 {
                     Some(cli.max_events)
                 } else {
