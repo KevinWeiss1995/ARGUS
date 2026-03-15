@@ -23,6 +23,8 @@ pub struct DashboardState {
     pub irq_rate_history: Vec<f64>,
     pub slab_rate_history: Vec<f64>,
     pub rdma_throughput_history: Vec<f64>,
+    /// True when standard IB byte counters are available (mlx5), false for packet-only (rxe).
+    pub rdma_has_byte_counters: bool,
 }
 
 impl Default for DashboardState {
@@ -38,6 +40,7 @@ impl Default for DashboardState {
             irq_rate_history: Vec::new(),
             slab_rate_history: Vec::new(),
             rdma_throughput_history: Vec::new(),
+            rdma_has_byte_counters: false,
         }
     }
 }
@@ -63,7 +66,10 @@ impl DashboardState {
         }
 
         let d = &self.metrics.ib_counter_deltas;
-        let throughput_val = if d.throughput_bytes() > 0 {
+        if d.throughput_bytes() > 0 {
+            self.rdma_has_byte_counters = true;
+        }
+        let throughput_val = if self.rdma_has_byte_counters {
             d.throughput_bytes() as f64 / 1024.0
         } else {
             d.throughput_pkts() as f64
@@ -155,7 +161,10 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ),
     };
 
-    let rdma_active = state.metrics.ib_counter_deltas.has_traffic();
+    let rdma_active = state
+        .rdma_throughput_history
+        .last()
+        .map_or(false, |&v| v > 0.0);
     let (rdma_indicator, rdma_style) = if rdma_active {
         ("▲ active", Style::default().fg(Color::Green).bold())
     } else {
@@ -256,19 +265,21 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ])
         .split(area);
 
-    let d = &state.metrics.ib_counter_deltas;
-    let rdma_active = d.has_traffic();
+    let rdma_active = state
+        .rdma_throughput_history
+        .last()
+        .map_or(false, |&v| v > 0.0);
     let rdma_color = if rdma_active {
         Color::Green
     } else {
         Color::DarkGray
     };
-    let rdma_label = if d.throughput_bytes() > 0 {
-        " RDMA Throughput (KB/w) "
-    } else if d.throughput_pkts() > 0 {
-        " RDMA Traffic (pkts/w) "
-    } else {
+    let rdma_label = if !rdma_active {
         " RDMA Traffic (idle) "
+    } else if state.rdma_has_byte_counters {
+        " RDMA Throughput (KB/w) "
+    } else {
+        " RDMA Traffic (pkts/w) "
     };
     render_sparkline_panel(
         frame,
