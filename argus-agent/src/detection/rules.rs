@@ -21,12 +21,25 @@ pub trait DetectionRule: Send + Sync {
 
 pub struct InterruptAffinitySkewRule {
     pub threshold_pct: f64,
+    pub num_cpus: u32,
+}
+
+impl InterruptAffinitySkewRule {
+    /// Compute the effective threshold, scaled by CPU count.
+    /// On 2 CPUs: perfect = 50%, effective = max(70, 50+35) = 85%
+    /// On 4 CPUs: perfect = 25%, effective = max(70, 25+35) = 70%
+    /// On 64 CPUs: perfect = 1.6%, effective = max(70, 1.6+35) = 70%
+    fn effective_threshold(&self) -> f64 {
+        let perfect_share = 100.0 / self.num_cpus.max(1) as f64;
+        f64::max(self.threshold_pct, perfect_share + 35.0)
+    }
 }
 
 impl Default for InterruptAffinitySkewRule {
     fn default() -> Self {
         Self {
             threshold_pct: 70.0,
+            num_cpus: 4,
         }
     }
 }
@@ -43,7 +56,9 @@ impl DetectionRule for InterruptAffinitySkewRule {
         }
 
         let dominant_pct = dist.dominant_cpu_pct();
-        if dominant_pct >= self.threshold_pct {
+        let effective = self.effective_threshold();
+
+        if dominant_pct >= effective {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::InterruptAffinitySkew {
@@ -124,18 +139,56 @@ impl DetectionRule for RdmaLatencySpikeRule {
 }
 
 // ---------------------------------------------------------------------------
-// RDMA Link Degradation: fires on IB hardware counter deltas from sysfs
+// RDMA Link Degradation: hard errors fire immediately, soft errors use EWMA
 // ---------------------------------------------------------------------------
 
 pub struct RdmaLinkDegradationRule {
-    /// Minimum total error delta across all counters to trigger.
-    pub min_error_delta: u64,
+    /// EWMA tracker for soft error rate (soft_errors / traffic_volume).
+    soft_error_rate_stats: RollingStats,
+    /// Z-score threshold for soft error rate anomaly.
+    z_threshold: f64,
+}
+
+impl RdmaLinkDegradationRule {
+    #[must_use]
+    pub fn new(z_threshold: f64) -> Self {
+        Self {
+            soft_error_rate_stats: RollingStats::new(0.1),
+            z_threshold,
+        }
+    }
 }
 
 impl Default for RdmaLinkDegradationRule {
     fn default() -> Self {
-        Self { min_error_delta: 1 }
+        Self::new(3.0)
     }
+}
+
+fn format_error_parts(d: &argus_common::IbCounterDeltas) -> String {
+    let mut parts = Vec::new();
+    if d.symbol_error_delta > 0 {
+        parts.push(format!("symbol_err+{}", d.symbol_error_delta));
+    }
+    if d.link_downed_delta > 0 {
+        parts.push(format!("link_down+{}", d.link_downed_delta));
+    }
+    if d.port_rcv_errors_delta > 0 {
+        parts.push(format!("rcv_err+{}", d.port_rcv_errors_delta));
+    }
+    if d.port_xmit_discards_delta > 0 {
+        parts.push(format!("xmit_disc+{}", d.port_xmit_discards_delta));
+    }
+    if d.port_rcv_remote_physical_errors_delta > 0 {
+        parts.push(format!("remote_phys+{}", d.port_rcv_remote_physical_errors_delta));
+    }
+    if d.local_link_integrity_errors_delta > 0 {
+        parts.push(format!("link_integ+{}", d.local_link_integrity_errors_delta));
+    }
+    if d.excessive_buffer_overrun_errors_delta > 0 {
+        parts.push(format!("buf_overrun+{}", d.excessive_buffer_overrun_errors_delta));
+    }
+    parts.join(", ")
 }
 
 impl DetectionRule for RdmaLinkDegradationRule {
@@ -143,62 +196,88 @@ impl DetectionRule for RdmaLinkDegradationRule {
         "rdma_link_degradation"
     }
 
-    fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert> {
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
         let d = &metrics.ib_counter_deltas;
-        let total = d.total_error_delta();
-        if total < self.min_error_delta {
-            return None;
+        let hard = d.total_hard_error_delta();
+
+        // Hard errors (link_downed, symbol_error, etc.) fire immediately — always real.
+        if hard > 0 {
+            let is_critical = d.link_downed_delta > 0
+                || d.excessive_buffer_overrun_errors_delta > 0
+                || hard > 10;
+            return Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::RdmaLinkDegradation {
+                    symbol_error_delta: d.symbol_error_delta,
+                    link_downed_delta: d.link_downed_delta,
+                    rcv_error_delta: d.port_rcv_errors_delta,
+                    xmit_discard_delta: d.port_xmit_discards_delta,
+                },
+                severity: if is_critical {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!("IB hard error: {}", format_error_parts(d)),
+            });
         }
 
-        let is_critical = d.link_downed_delta > 0 || d.port_rcv_errors_delta > 100;
-
-        let mut parts = Vec::new();
-        if d.symbol_error_delta > 0 {
-            parts.push(format!("symbol_err+{}", d.symbol_error_delta));
-        }
-        if d.link_downed_delta > 0 {
-            parts.push(format!("link_down+{}", d.link_downed_delta));
-        }
-        if d.port_rcv_errors_delta > 0 {
-            parts.push(format!("rcv_err+{}", d.port_rcv_errors_delta));
-        }
-        if d.port_xmit_discards_delta > 0 {
-            parts.push(format!("xmit_disc+{}", d.port_xmit_discards_delta));
-        }
-        if d.port_rcv_remote_physical_errors_delta > 0 {
-            parts.push(format!(
-                "remote_phys+{}",
-                d.port_rcv_remote_physical_errors_delta
-            ));
-        }
-        if d.local_link_integrity_errors_delta > 0 {
-            parts.push(format!(
-                "link_integ+{}",
-                d.local_link_integrity_errors_delta
-            ));
-        }
-        if d.excessive_buffer_overrun_errors_delta > 0 {
-            parts.push(format!(
-                "buf_overrun+{}",
-                d.excessive_buffer_overrun_errors_delta
-            ));
+        // Standard IB counter errors (port_rcv_errors, port_xmit_discards from counters/)
+        // also fire immediately — these only appear on real hardware.
+        let standard_errors = d.port_rcv_errors_delta + d.port_xmit_discards_delta;
+        if standard_errors > 0 {
+            return Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::RdmaLinkDegradation {
+                    symbol_error_delta: d.symbol_error_delta,
+                    link_downed_delta: d.link_downed_delta,
+                    rcv_error_delta: d.port_rcv_errors_delta,
+                    xmit_discard_delta: d.port_xmit_discards_delta,
+                },
+                severity: if d.port_rcv_errors_delta > 100 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!("IB link degradation: {}", format_error_parts(d)),
+            });
         }
 
-        Some(Alert {
-            timestamp_ns: metrics.window_end_ns,
-            kind: AlertKind::RdmaLinkDegradation {
-                symbol_error_delta: d.symbol_error_delta,
-                link_downed_delta: d.link_downed_delta,
-                rcv_error_delta: d.port_rcv_errors_delta,
-                xmit_discard_delta: d.port_xmit_discards_delta,
-            },
-            severity: if is_critical {
-                HealthState::Critical
-            } else {
-                HealthState::Degraded
-            },
-            message: format!("IB link degradation: {}", parts.join(", ")),
-        })
+        // Soft errors (rxe operational counters): use EWMA-based anomaly detection.
+        // Normalize against traffic volume to get an error rate.
+        let soft = d.total_soft_error_delta();
+        let traffic = d.throughput_pkts().max(1) as f64;
+        let error_rate = soft as f64 / traffic;
+
+        let z = self.soft_error_rate_stats.z_score(error_rate);
+        self.soft_error_rate_stats.push(error_rate);
+
+        // Only alert when warmed up AND rate is anomalous AND there are actual errors.
+        if self.soft_error_rate_stats.is_warmed_up() && soft > 0 && z >= self.z_threshold {
+            Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::RdmaLinkDegradation {
+                    symbol_error_delta: 0,
+                    link_downed_delta: 0,
+                    rcv_error_delta: soft,
+                    xmit_discard_delta: 0,
+                },
+                severity: if z >= self.z_threshold * 2.0 {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                },
+                message: format!(
+                    "Soft error rate anomaly: {soft} errors/{traffic:.0} pkts (z={z:.1}, rate={error_rate:.4})"
+                ),
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -525,7 +604,7 @@ mod tests {
 
     #[test]
     fn irq_skew_below_threshold() {
-        let rule = InterruptAffinitySkewRule::default();
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 4 };
         let metrics = AggregatedMetrics {
             interrupt_distribution: InterruptDistribution {
                 per_cpu_counts: vec![30, 25, 25, 20],
@@ -538,7 +617,7 @@ mod tests {
 
     #[test]
     fn irq_skew_above_threshold_degraded() {
-        let rule = InterruptAffinitySkewRule::default();
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 4 };
         let metrics = AggregatedMetrics {
             interrupt_distribution: InterruptDistribution {
                 per_cpu_counts: vec![75, 10, 10, 5],
@@ -552,7 +631,7 @@ mod tests {
 
     #[test]
     fn irq_skew_extreme_is_critical() {
-        let rule = InterruptAffinitySkewRule::default();
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 4 };
         let metrics = AggregatedMetrics {
             interrupt_distribution: InterruptDistribution {
                 per_cpu_counts: vec![95, 2, 2, 1],
@@ -566,7 +645,7 @@ mod tests {
 
     #[test]
     fn irq_skew_needs_minimum_samples() {
-        let rule = InterruptAffinitySkewRule::default();
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 4 };
         let metrics = AggregatedMetrics {
             interrupt_distribution: InterruptDistribution {
                 per_cpu_counts: vec![5, 0, 0, 0],
@@ -575,6 +654,38 @@ mod tests {
             ..Default::default()
         };
         assert!(rule.evaluate(&metrics).is_none());
+    }
+
+    #[test]
+    fn irq_skew_2cpu_relaxed_threshold() {
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 2 };
+        // 70% on 2 CPUs: effective threshold = max(70, 50+35) = 85%, so no alert
+        let metrics = AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![70, 30],
+                total_count: 100,
+            },
+            ..Default::default()
+        };
+        assert!(
+            rule.evaluate(&metrics).is_none(),
+            "70% on 2 CPUs should NOT trigger (effective threshold ~85%)"
+        );
+    }
+
+    #[test]
+    fn irq_skew_2cpu_above_relaxed_threshold() {
+        let rule = InterruptAffinitySkewRule { threshold_pct: 70.0, num_cpus: 2 };
+        // 90% on 2 CPUs: above effective threshold of 85%
+        let metrics = AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![90, 10],
+                total_count: 100,
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate(&metrics).unwrap();
+        assert_eq!(alert.severity, HealthState::Critical);
     }
 
     #[test]
@@ -613,14 +724,14 @@ mod tests {
 
     #[test]
     fn link_degradation_no_errors() {
-        let rule = RdmaLinkDegradationRule::default();
+        let mut rule = RdmaLinkDegradationRule::default();
         let metrics = AggregatedMetrics::default();
-        assert!(rule.evaluate(&metrics).is_none());
+        assert!(rule.evaluate_mut(&metrics).is_none());
     }
 
     #[test]
-    fn link_degradation_symbol_errors_degraded() {
-        let rule = RdmaLinkDegradationRule::default();
+    fn link_degradation_hard_error_fires_immediately() {
+        let mut rule = RdmaLinkDegradationRule::default();
         let metrics = AggregatedMetrics {
             ib_counter_deltas: IbCounterDeltas {
                 symbol_error_delta: 5,
@@ -628,13 +739,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let alert = rule.evaluate(&metrics).unwrap();
+        let alert = rule.evaluate_mut(&metrics).unwrap();
         assert_eq!(alert.severity, HealthState::Degraded);
+        assert!(alert.message.contains("hard error"));
     }
 
     #[test]
     fn link_degradation_link_down_critical() {
-        let rule = RdmaLinkDegradationRule::default();
+        let mut rule = RdmaLinkDegradationRule::default();
         let metrics = AggregatedMetrics {
             ib_counter_deltas: IbCounterDeltas {
                 link_downed_delta: 1,
@@ -642,13 +754,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let alert = rule.evaluate(&metrics).unwrap();
+        let alert = rule.evaluate_mut(&metrics).unwrap();
         assert_eq!(alert.severity, HealthState::Critical);
     }
 
     #[test]
-    fn link_degradation_many_rcv_errors_critical() {
-        let rule = RdmaLinkDegradationRule::default();
+    fn link_degradation_standard_ib_errors_fire() {
+        let mut rule = RdmaLinkDegradationRule::default();
         let metrics = AggregatedMetrics {
             ib_counter_deltas: IbCounterDeltas {
                 port_rcv_errors_delta: 200,
@@ -656,8 +768,52 @@ mod tests {
             },
             ..Default::default()
         };
-        let alert = rule.evaluate(&metrics).unwrap();
+        let alert = rule.evaluate_mut(&metrics).unwrap();
         assert_eq!(alert.severity, HealthState::Critical);
+    }
+
+    #[test]
+    fn link_degradation_rxe_soft_errors_no_alert_during_warmup() {
+        let mut rule = RdmaLinkDegradationRule::default();
+        // Simulate normal rxe traffic: ~150 soft errors among ~200K packets per window
+        for _ in 0..4 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    rxe_duplicate_request_delta: 100,
+                    rxe_seq_error_delta: 50,
+                    hw_rcv_pkts_delta: 100_000,
+                    hw_xmit_pkts_delta: 100_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                rule.evaluate_mut(&metrics).is_none(),
+                "should not alert during warmup"
+            );
+        }
+    }
+
+    #[test]
+    fn link_degradation_rxe_steady_soft_errors_no_alert() {
+        let mut rule = RdmaLinkDegradationRule::default();
+        // Warm up with steady soft error rate
+        for _ in 0..10 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    rxe_duplicate_request_delta: 100,
+                    rxe_seq_error_delta: 50,
+                    hw_rcv_pkts_delta: 100_000,
+                    hw_xmit_pkts_delta: 100_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                rule.evaluate_mut(&metrics).is_none(),
+                "steady soft error rate should never alert"
+            );
+        }
     }
 
     #[test]
