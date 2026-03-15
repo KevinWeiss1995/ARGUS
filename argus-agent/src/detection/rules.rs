@@ -420,8 +420,12 @@ impl DetectionRule for ThroughputDropRule {
     }
 
     fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
-        let throughput = (metrics.ib_counter_deltas.port_rcv_data_delta
-            + metrics.ib_counter_deltas.port_xmit_data_delta) as f64;
+        let d = &metrics.ib_counter_deltas;
+        let throughput = if d.throughput_bytes() > 0 {
+            d.throughput_bytes() as f64
+        } else {
+            d.throughput_pkts() as f64
+        };
         let ewma = self.stats.mean();
         self.stats.push(throughput);
 
