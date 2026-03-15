@@ -47,7 +47,7 @@ impl Default for DashboardState {
 
 impl DashboardState {
     pub fn push_metrics_snapshot(&mut self) {
-        let ib_errors = self.metrics.ib_counter_deltas.total_error_delta() as f64;
+        let ib_errors = self.metrics.ib_counter_deltas.total_all_errors_delta() as f64;
         self.ib_error_history.push(ib_errors);
         if self.ib_error_history.len() > 60 {
             self.ib_error_history.remove(0);

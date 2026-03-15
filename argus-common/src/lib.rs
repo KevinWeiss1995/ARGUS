@@ -395,6 +395,13 @@ impl IbCounterDeltas {
             + self.port_xmit_discards_delta
     }
 
+    /// All error deltas across all device types (hard + standard + soft/rxe).
+    /// Used for display — shows any error activity regardless of source.
+    #[must_use]
+    pub fn total_all_errors_delta(&self) -> u64 {
+        self.total_error_delta() + self.total_soft_error_delta()
+    }
+
     /// Throughput in bytes from standard IB counters (4-byte units × 4).
     /// Returns 0 on rxe/Soft-RoCE where these counters don't exist.
     #[must_use]
