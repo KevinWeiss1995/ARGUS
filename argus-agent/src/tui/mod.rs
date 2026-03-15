@@ -257,12 +257,21 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ])
         .split(area);
 
+    let rdma_color = if state
+        .rdma_throughput_history
+        .last()
+        .map_or(false, |&v| v > 0.0)
+    {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
     render_sparkline_panel(
         frame,
         chunks[0],
         " RDMA Throughput (KB/w) ",
         &state.rdma_throughput_history,
-        Color::Green,
+        rdma_color,
     );
     render_sparkline_panel(
         frame,
