@@ -92,10 +92,10 @@ pub struct AgentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionConfig {
+    pub num_cpus: u32,
     pub irq_skew_threshold_pct: f64,
     pub rdma_spike_factor: f64,
     pub rdma_baseline_latency_ns: u64,
-    pub rdma_link_min_error_delta: u64,
     pub slab_pressure_min_allocs: u64,
     pub slab_pressure_alloc_rate_threshold: u64,
 }
@@ -112,10 +112,10 @@ impl Default for AgentConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
+            num_cpus: 4,
             irq_skew_threshold_pct: 70.0,
             rdma_spike_factor: 5.0,
             rdma_baseline_latency_ns: 2_000,
-            rdma_link_min_error_delta: 1,
             slab_pressure_min_allocs: 100,
             slab_pressure_alloc_rate_threshold: 5_000,
         }

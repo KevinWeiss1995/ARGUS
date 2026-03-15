@@ -57,7 +57,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    let detection_config = argus_agent::config::DetectionConfig::default();
+    let detection_config = argus_agent::config::DetectionConfig {
+        num_cpus: cli.num_cpus,
+        ..argus_agent::config::DetectionConfig::default()
+    };
     let mut pipeline = Pipeline::with_config(cli.num_cpus, &detection_config);
     let mut telemetry = TelemetryCollector::default();
     let mut dash_state = DashboardState {
