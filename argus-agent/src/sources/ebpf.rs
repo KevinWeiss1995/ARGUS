@@ -124,6 +124,16 @@ mod inner {
                     .map_err(|e| EventSourceError::Other(format!("failed to set OFFSETS[{idx}]={val}: {e}")))?;
             }
 
+            // #region agent log
+            {
+                use std::io::Write;
+                let readback: Vec<(u32, u32)> = (0..5u32).filter_map(|i| arr.get(&i, 0).ok().map(|v| (i, v))).collect();
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/home/kevin/Projects/networking/ARGUS/.cursor/debug.log") {
+                    let _ = writeln!(f, r#"{{"id":"log_offsets_readback","timestamp":{},"location":"ebpf.rs:populate_offsets","message":"OFFSETS map readback after write","data":{{"readback":"{:?}"}},"runId":"run1","hypothesisId":"H1"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), readback);
+                }
+            }
+            // #endregion
+
             info!(count = offsets.len(), "tracepoint field offsets populated from tracefs");
             Ok(())
         }
@@ -158,7 +168,21 @@ mod inner {
             while let Some(item) = self.ring_buf.next() {
                 let data = item.as_ref();
                 match ebpf_parse::parse_event(data) {
-                    Some(evt) => self.pending_events.push(evt),
+                    Some(evt) => {
+                        // #region agent log
+                        if let ArgusEvent::NapiPoll(ref napi) = evt {
+                            static NAPI_LOG_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            let count = NAPI_LOG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if count < 5 {
+                                use std::io::Write;
+                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/home/kevin/Projects/networking/ARGUS/.cursor/debug.log") {
+                                    let _ = writeln!(f, r#"{{"id":"log_napi_event_{count}","timestamp":{},"location":"ebpf.rs:drain_ring_buffer","message":"raw NAPI event","data":{{"cpu":{},"budget":{},"work_done":{},"raw_len":{}}},"runId":"run1","hypothesisId":"H5"}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), napi.cpu, napi.budget, napi.work_done, data.len());
+                                }
+                            }
+                        }
+                        // #endregion
+                        self.pending_events.push(evt);
+                    }
                     None => self.dropped_events += 1,
                 }
             }
