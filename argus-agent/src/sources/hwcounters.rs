@@ -8,6 +8,37 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::info;
 
+/// Classification of the IB device driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceType {
+    /// Real IB HCA (mlx5, mlx4, hfi1, qib, etc.)
+    HardwareIB,
+    /// Software RDMA over Ethernet (rxe, siw)
+    SoftRoCE,
+    /// Unknown driver — treat conservatively
+    Unknown,
+}
+
+impl DeviceType {
+    fn classify(device_name: &str) -> Self {
+        let lower = device_name.to_ascii_lowercase();
+        if lower.starts_with("rxe") || lower.starts_with("siw") {
+            Self::SoftRoCE
+        } else if lower.starts_with("mlx5")
+            || lower.starts_with("mlx4")
+            || lower.starts_with("hfi1")
+            || lower.starts_with("qib")
+            || lower.starts_with("irdma")
+            || lower.starts_with("bnxt")
+            || lower.starts_with("erdma")
+        {
+            Self::HardwareIB
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
 /// Discovers and reads InfiniBand hardware counters from sysfs.
 pub struct HwCounterReader {
     ports: Vec<IbPort>,
@@ -16,6 +47,7 @@ pub struct HwCounterReader {
 struct IbPort {
     device: String,
     port_num: u32,
+    device_type: DeviceType,
     counter_dir: Option<PathBuf>,
     hw_counter_dir: Option<PathBuf>,
 }
@@ -42,14 +74,15 @@ const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
     ),
 ];
 
-/// hw_counters/ exposed by rxe and other drivers (packet counts, error counters).
+/// hw_counters/ exposed by rxe and other drivers.
+/// These map to their own HardwareCounter variants — NOT to IB error fields.
 const HW_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
     ("rcvd_pkts", HardwareCounter::HwRcvPkts),
     ("sent_pkts", HardwareCounter::HwXmitPkts),
-    ("duplicate_request", HardwareCounter::PortRcvErrors),
-    ("rcvd_seq_err", HardwareCounter::PortRcvErrors),
-    ("retry_exceeded_err", HardwareCounter::PortXmitDiscards),
-    ("send_err", HardwareCounter::PortXmitDiscards),
+    ("duplicate_request", HardwareCounter::RxeDuplicateRequest),
+    ("rcvd_seq_err", HardwareCounter::RxeSeqError),
+    ("retry_exceeded_err", HardwareCounter::RxeRetryExceeded),
+    ("send_err", HardwareCounter::RxeSendError),
 ];
 
 fn read_counter(dir: &Path, filename: &str) -> Option<u64> {
@@ -82,9 +115,11 @@ impl HwCounterReader {
                             let has_hw_counters = hw_counter_dir.exists();
 
                             if has_counters || has_hw_counters {
+                                let device_type = DeviceType::classify(&device_name);
                                 info!(
                                     device = %device_name,
                                     port = port_num,
+                                    device_type = ?device_type,
                                     counters = has_counters,
                                     hw_counters = has_hw_counters,
                                     "discovered IB port"
@@ -92,6 +127,7 @@ impl HwCounterReader {
                                 ports.push(IbPort {
                                     device: device_name.clone(),
                                     port_num,
+                                    device_type,
                                     counter_dir: has_counters.then_some(counter_dir),
                                     hw_counter_dir: has_hw_counters.then_some(hw_counter_dir),
                                 });
@@ -150,6 +186,19 @@ impl HwCounterReader {
     #[must_use]
     pub fn port_count(&self) -> usize {
         self.ports.len()
+    }
+
+    /// Returns the dominant device type across all discovered ports.
+    /// If any port is HardwareIB, returns HardwareIB. Otherwise SoftRoCE if any, else Unknown.
+    #[must_use]
+    pub fn device_type(&self) -> DeviceType {
+        if self.ports.iter().any(|p| p.device_type == DeviceType::HardwareIB) {
+            DeviceType::HardwareIB
+        } else if self.ports.iter().any(|p| p.device_type == DeviceType::SoftRoCE) {
+            DeviceType::SoftRoCE
+        } else {
+            DeviceType::Unknown
+        }
     }
 
     /// Returns device names and port numbers for logging.
