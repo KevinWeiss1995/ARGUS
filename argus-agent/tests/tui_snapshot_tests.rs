@@ -30,6 +30,7 @@ fn healthy_state() -> DashboardState {
         slab_rate_history: vec![200.0, 198.0, 205.0, 200.0, 195.0, 210.0, 200.0, 198.0],
         irq_rate_history: vec![100.0, 120.0, 110.0, 115.0, 105.0, 125.0, 130.0, 120.0],
         rdma_throughput_history: vec![1024.0, 1100.0, 1050.0, 1080.0, 1024.0, 1150.0, 1090.0, 1060.0],
+        rdma_has_byte_counters: true,
         recent_alerts: Vec::new(),
     }
 }
@@ -64,6 +65,7 @@ fn degraded_state() -> DashboardState {
         slab_rate_history: vec![400.0, 410.0, 400.0, 600.0, 800.0, 900.0, 850.0, 800.0],
         irq_rate_history: vec![250.0, 260.0, 280.0, 500.0, 700.0, 750.0, 740.0, 720.0],
         rdma_throughput_history: vec![512.0, 480.0, 520.0, 300.0, 150.0, 80.0, 100.0, 90.0],
+        rdma_has_byte_counters: false,
         recent_alerts: vec![Alert {
             timestamp_ns: 20_000_000_000,
             kind: AlertKind::InterruptAffinitySkew {
