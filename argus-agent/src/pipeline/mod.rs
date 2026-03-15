@@ -33,6 +33,12 @@ impl Pipeline {
         self.aggregator.ingest(event);
     }
 
+    /// Ingest a BPF map snapshot (live mode only).
+    #[cfg(target_os = "linux")]
+    pub fn ingest_bpf_snapshot(&mut self, snap: &crate::sources::ebpf::BpfMapSnapshot) {
+        self.aggregator.ingest_bpf_snapshot(snap);
+    }
+
     /// Run detection rules against current aggregated metrics.
     /// Call once per window tick, not per event.
     pub fn evaluate(&mut self) -> Vec<Alert> {

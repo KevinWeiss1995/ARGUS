@@ -154,6 +154,30 @@ impl Aggregator {
         }
     }
 
+    /// Ingest a BPF map snapshot (per-window deltas from in-kernel counters).
+    /// Sets metrics fields directly — called once per window from the map reader.
+    #[cfg(target_os = "linux")]
+    pub fn ingest_bpf_snapshot(&mut self, snap: &crate::sources::ebpf::BpfMapSnapshot) {
+        let dist = &mut self.metrics.interrupt_distribution;
+        for (i, &delta) in snap.per_cpu_irq_deltas.iter().enumerate() {
+            if i < dist.per_cpu_counts.len() {
+                dist.per_cpu_counts[i] = delta;
+            }
+        }
+        dist.total_count = snap.total_irq_count;
+
+        let slab = &mut self.metrics.slab_metrics;
+        slab.alloc_count = snap.slab_alloc_count;
+        slab.free_count = snap.slab_free_count;
+        slab.total_bytes_req = snap.slab_total_bytes_req;
+        slab.total_bytes_alloc = snap.slab_total_bytes_alloc;
+
+        let net = &mut self.metrics.network_metrics;
+        net.napi_polls = snap.napi_poll_count;
+        net.napi_total_work = snap.napi_total_work;
+        net.napi_total_budget = snap.napi_total_budget;
+    }
+
     #[must_use]
     pub fn current_metrics(&self) -> &AggregatedMetrics {
         &self.metrics
