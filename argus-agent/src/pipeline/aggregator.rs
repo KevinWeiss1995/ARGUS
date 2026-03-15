@@ -24,6 +24,10 @@ fn counter_discriminant(c: &HardwareCounter) -> u8 {
         HardwareCounter::ExcessiveBufferOverrunErrors(_) => 8,
         HardwareCounter::HwRcvPkts(_) => 9,
         HardwareCounter::HwXmitPkts(_) => 10,
+        HardwareCounter::RxeDuplicateRequest(_) => 11,
+        HardwareCounter::RxeSeqError(_) => 12,
+        HardwareCounter::RxeRetryExceeded(_) => 13,
+        HardwareCounter::RxeSendError(_) => 14,
     }
 }
 
@@ -39,7 +43,11 @@ fn counter_value(c: &HardwareCounter) -> u64 {
         | HardwareCounter::LocalLinkIntegrityErrors(v)
         | HardwareCounter::ExcessiveBufferOverrunErrors(v)
         | HardwareCounter::HwRcvPkts(v)
-        | HardwareCounter::HwXmitPkts(v) => *v,
+        | HardwareCounter::HwXmitPkts(v)
+        | HardwareCounter::RxeDuplicateRequest(v)
+        | HardwareCounter::RxeSeqError(v)
+        | HardwareCounter::RxeRetryExceeded(v)
+        | HardwareCounter::RxeSendError(v) => *v,
     }
 }
 
@@ -139,6 +147,10 @@ impl Aggregator {
             }
             HardwareCounter::HwRcvPkts(_) => d.hw_rcv_pkts_delta += delta,
             HardwareCounter::HwXmitPkts(_) => d.hw_xmit_pkts_delta += delta,
+            HardwareCounter::RxeDuplicateRequest(_) => d.rxe_duplicate_request_delta += delta,
+            HardwareCounter::RxeSeqError(_) => d.rxe_seq_error_delta += delta,
+            HardwareCounter::RxeRetryExceeded(_) => d.rxe_retry_exceeded_delta += delta,
+            HardwareCounter::RxeSendError(_) => d.rxe_send_error_delta += delta,
         }
     }
 
