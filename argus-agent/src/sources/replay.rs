@@ -84,6 +84,15 @@ impl EventSource for ReplayEventSource {
         Ok(event)
     }
 
+    fn try_next(&mut self) -> Option<ArgusEvent> {
+        if self.index >= self.events.len() {
+            return None;
+        }
+        let event = self.events[self.index].clone();
+        self.index += 1;
+        Some(event)
+    }
+
     fn name(&self) -> &str {
         "replay"
     }

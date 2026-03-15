@@ -1,35 +1,65 @@
 //! Live eBPF event source - only compiles and runs on Linux.
 //!
-//! Loads compiled eBPF programs, attaches tracepoints, and reads events
-//! from the shared ring buffer.
+//! Loads compiled eBPF programs, attaches tracepoints, and provides
+//! aggregated metrics from in-kernel per-CPU BPF maps.
+//!
+//! # Architecture
+//! High-frequency tracepoints (IRQ, slab, NAPI) write to per-CPU BPF array
+//! maps in kernel space. Userspace reads these maps on a timer (once per
+//! aggregation window) — no ring buffer polling, no per-event overhead.
 //!
 //! # Safety
 //! This module is the kernel/eBPF FFI boundary. It allows `unsafe_code`
-//! because reading from the eBPF ring buffer requires interpreting raw bytes
-//! from kernel memory. All unsafe blocks are size-checked before access.
+//! because BPF map operations require `Pod` trait implementations.
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod inner {
-    use aya::maps::RingBuf;
+    use aya::maps::PerCpuArray;
     use aya::programs::TracePoint;
-    use aya::{Ebpf, EbpfLoader};
-    use aya_log::EbpfLogger;
+    use aya::{Ebpf, EbpfLoader, Pod};
     use std::path::Path;
     use tracing::{info, warn};
 
-    use crate::sources::ebpf_parse;
     use crate::sources::tracepoint_format;
-    use crate::sources::{EventSource, EventSourceError};
-    use argus_common::*;
+    use crate::sources::EventSourceError;
+
+    /// Aggregated BPF map data for one window, computed as deltas from previous read.
+    #[derive(Debug, Clone, Default)]
+    pub struct BpfMapSnapshot {
+        pub per_cpu_irq_deltas: Vec<u64>,
+        pub total_irq_count: u64,
+        pub slab_alloc_count: u64,
+        pub slab_free_count: u64,
+        pub slab_total_bytes_req: u64,
+        pub slab_total_bytes_alloc: u64,
+        pub napi_poll_count: u64,
+        pub napi_total_work: u64,
+        pub napi_total_budget: u64,
+    }
+
+    // SAFETY: [u64; 4] and [u64; 3] are plain arrays of Pod types, trivially safe.
+    unsafe impl Pod for SlabStatsArray {}
+    unsafe impl Pod for NapiStatsArray {}
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct SlabStatsArray([u64; 4]);
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct NapiStatsArray([u64; 3]);
 
     pub struct EbpfEventSource {
         #[allow(dead_code)]
         ebpf: Ebpf,
-        ring_buf: RingBuf<aya::maps::MapData>,
-        pending_events: Vec<ArgusEvent>,
-        dropped_events: u64,
         attached_probes: Vec<String>,
+        irq_counts_map: PerCpuArray<aya::maps::MapData, u64>,
+        slab_stats_map: PerCpuArray<aya::maps::MapData, SlabStatsArray>,
+        napi_stats_map: PerCpuArray<aya::maps::MapData, NapiStatsArray>,
+        prev_irq_per_cpu: Vec<u64>,
+        prev_slab_totals: [u64; 4],
+        prev_napi_totals: [u64; 3],
+        read_count: u32,
     }
 
     impl EbpfEventSource {
@@ -39,7 +69,7 @@ mod inner {
                 .load_file(ebpf_path)
                 .map_err(|e| EventSourceError::Other(format!("failed to load eBPF: {e}")))?;
 
-            if let Err(e) = EbpfLogger::init(&mut ebpf) {
+            if let Err(e) = aya_log::EbpfLogger::init(&mut ebpf) {
                 warn!("Failed to init eBPF logger (non-fatal): {e}");
             }
 
@@ -88,18 +118,37 @@ mod inner {
                 info!(attached, "all eBPF probes attached");
             }
 
-            let events_map = ebpf
-                .take_map("EVENTS")
-                .ok_or_else(|| EventSourceError::Other("EVENTS map not found".into()))?;
-            let ring_buf = RingBuf::try_from(events_map)
-                .map_err(|e| EventSourceError::Other(format!("EVENTS is not a RingBuf: {e}")))?;
+            let irq_map = ebpf
+                .take_map("IRQ_COUNTS")
+                .ok_or_else(|| EventSourceError::Other("IRQ_COUNTS map not found".into()))?;
+            let irq_counts_map: PerCpuArray<_, u64> = irq_map
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("IRQ_COUNTS not a PerCpuArray: {e}")))?;
+
+            let slab_map = ebpf
+                .take_map("SLAB_STATS")
+                .ok_or_else(|| EventSourceError::Other("SLAB_STATS map not found".into()))?;
+            let slab_stats_map: PerCpuArray<_, SlabStatsArray> = slab_map
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("SLAB_STATS not a PerCpuArray: {e}")))?;
+
+            let napi_map = ebpf
+                .take_map("NAPI_STATS")
+                .ok_or_else(|| EventSourceError::Other("NAPI_STATS map not found".into()))?;
+            let napi_stats_map: PerCpuArray<_, NapiStatsArray> = napi_map
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("NAPI_STATS not a PerCpuArray: {e}")))?;
 
             Ok(Self {
                 ebpf,
-                ring_buf,
-                pending_events: Vec::new(),
-                dropped_events: 0,
                 attached_probes,
+                irq_counts_map,
+                slab_stats_map,
+                napi_stats_map,
+                prev_irq_per_cpu: Vec::new(),
+                prev_slab_totals: [0; 4],
+                prev_napi_totals: [0; 3],
+                read_count: 0,
             })
         }
 
@@ -154,26 +203,91 @@ mod inner {
             Ok(())
         }
 
-        fn drain_ring_buffer(&mut self) {
-            while let Some(item) = self.ring_buf.next() {
-                let data = item.as_ref();
-                match ebpf_parse::parse_event(data) {
-                    Some(evt) => self.pending_events.push(evt),
-                    None => self.dropped_events += 1,
+        /// Read all per-CPU BPF maps and return aggregated deltas since last read.
+        /// Called once per aggregation window from the main loop timer.
+        pub fn read_bpf_snapshot(&mut self) -> BpfMapSnapshot {
+            let mut snap = BpfMapSnapshot::default();
+            self.read_count += 1;
+            let diagnostic = self.read_count <= 3;
+
+            // --- IRQ counts (per-CPU) ---
+            match self.irq_counts_map.get(&0, 0) {
+                Ok(percpu_vals) => {
+                    let current: Vec<u64> = percpu_vals.iter().copied().collect();
+                    if diagnostic {
+                        info!(read = self.read_count, ?current, "IRQ_COUNTS raw per-cpu values");
+                    }
+
+                    if self.prev_irq_per_cpu.is_empty() {
+                        self.prev_irq_per_cpu = vec![0; current.len()];
+                    }
+
+                    let mut deltas = Vec::with_capacity(current.len());
+                    for (i, &cur) in current.iter().enumerate() {
+                        let prev = self.prev_irq_per_cpu.get(i).copied().unwrap_or(0);
+                        deltas.push(cur.saturating_sub(prev));
+                    }
+                    snap.total_irq_count = deltas.iter().sum();
+                    snap.per_cpu_irq_deltas = deltas;
+                    self.prev_irq_per_cpu = current;
+                }
+                Err(e) => {
+                    warn!("IRQ_COUNTS map read failed: {e}");
                 }
             }
-        }
-    }
 
-    impl EbpfEventSource {
+            // --- Slab stats ---
+            match self.slab_stats_map.get(&0, 0) {
+                Ok(percpu_vals) => {
+                    let mut totals = [0u64; 4];
+                    for val in percpu_vals.iter() {
+                        for (i, t) in totals.iter_mut().enumerate() {
+                            *t += val.0[i];
+                        }
+                    }
+                    if diagnostic {
+                        info!(read = self.read_count, ?totals, "SLAB_STATS summed totals");
+                    }
+
+                    let prev = &self.prev_slab_totals;
+                    snap.slab_alloc_count = totals[0].saturating_sub(prev[0]);
+                    snap.slab_free_count = totals[1].saturating_sub(prev[1]);
+                    snap.slab_total_bytes_req = totals[2].saturating_sub(prev[2]);
+                    snap.slab_total_bytes_alloc = totals[3].saturating_sub(prev[3]);
+                    self.prev_slab_totals = totals;
+                }
+                Err(e) => {
+                    warn!("SLAB_STATS map read failed: {e}");
+                }
+            }
+
+            // --- NAPI stats ---
+            match self.napi_stats_map.get(&0, 0) {
+                Ok(percpu_vals) => {
+                    let mut totals = [0u64; 3];
+                    for val in percpu_vals.iter() {
+                        for (i, t) in totals.iter_mut().enumerate() {
+                            *t += val.0[i];
+                        }
+                    }
+
+                    let prev = &self.prev_napi_totals;
+                    snap.napi_poll_count = totals[0].saturating_sub(prev[0]);
+                    snap.napi_total_work = totals[1].saturating_sub(prev[1]);
+                    snap.napi_total_budget = totals[2].saturating_sub(prev[2]);
+                    self.prev_napi_totals = totals;
+                }
+                Err(e) => {
+                    warn!("NAPI_STATS map read failed: {e}");
+                }
+            }
+
+            snap
+        }
+
         /// Returns the list of successfully attached tracepoint probes.
         pub fn attached_probes(&self) -> &[String] {
             &self.attached_probes
-        }
-
-        /// Returns the count of ring buffer items that were too small to parse.
-        pub fn dropped_events(&self) -> u64 {
-            self.dropped_events
         }
 
         /// Returns true if the given tracepoint category/name is attached.
@@ -181,24 +295,7 @@ mod inner {
             self.attached_probes.iter().any(|p| p == probe)
         }
     }
-
-    impl EventSource for EbpfEventSource {
-        async fn next_event(&mut self) -> Result<ArgusEvent, EventSourceError> {
-            loop {
-                if let Some(event) = self.pending_events.pop() {
-                    return Ok(event);
-                }
-
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                self.drain_ring_buffer();
-            }
-        }
-
-        fn name(&self) -> &str {
-            "ebpf"
-        }
-    }
 }
 
 #[cfg(target_os = "linux")]
-pub use inner::EbpfEventSource;
+pub use inner::{BpfMapSnapshot, EbpfEventSource};
