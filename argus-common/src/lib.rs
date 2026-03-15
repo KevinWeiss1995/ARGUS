@@ -116,11 +116,17 @@ pub enum HardwareCounter {
     LinkDowned(u64),
     PortRcvErrors(u64),
     PortXmitDiscards(u64),
+    /// Standard IB counter — value is in 4-byte units.
     PortRcvData(u64),
+    /// Standard IB counter — value is in 4-byte units.
     PortXmitData(u64),
     PortRcvRemotePhysicalErrors(u64),
     LocalLinkIntegrityErrors(u64),
     ExcessiveBufferOverrunErrors(u64),
+    /// hw_counters rcvd_pkts — packet count (rxe hw_counters).
+    HwRcvPkts(u64),
+    /// hw_counters sent_pkts — packet count (rxe hw_counters).
+    HwXmitPkts(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -332,8 +338,14 @@ pub struct IbCounterDeltas {
     pub port_rcv_remote_physical_errors_delta: u64,
     pub local_link_integrity_errors_delta: u64,
     pub excessive_buffer_overrun_errors_delta: u64,
+    /// Standard IB counter delta — in 4-byte units.
     pub port_rcv_data_delta: u64,
+    /// Standard IB counter delta — in 4-byte units.
     pub port_xmit_data_delta: u64,
+    /// hw_counters rcvd_pkts delta — packet count (rxe).
+    pub hw_rcv_pkts_delta: u64,
+    /// hw_counters sent_pkts delta — packet count (rxe).
+    pub hw_xmit_pkts_delta: u64,
 }
 
 impl IbCounterDeltas {
@@ -346,6 +358,26 @@ impl IbCounterDeltas {
             + self.port_rcv_remote_physical_errors_delta
             + self.local_link_integrity_errors_delta
             + self.excessive_buffer_overrun_errors_delta
+    }
+
+    /// Throughput in bytes from standard IB counters (4-byte units × 4).
+    /// Returns 0 on rxe/Soft-RoCE where these counters don't exist.
+    #[must_use]
+    pub fn throughput_bytes(&self) -> u64 {
+        (self.port_rcv_data_delta + self.port_xmit_data_delta) * 4
+    }
+
+    /// Throughput in packets from hw_counters (rxe rcvd_pkts + sent_pkts).
+    /// Returns 0 on real IB where byte counters are used instead.
+    #[must_use]
+    pub fn throughput_pkts(&self) -> u64 {
+        self.hw_rcv_pkts_delta + self.hw_xmit_pkts_delta
+    }
+
+    /// True if any traffic was observed in this window, from either source.
+    #[must_use]
+    pub fn has_traffic(&self) -> bool {
+        self.throughput_bytes() > 0 || self.throughput_pkts() > 0
     }
 }
 
