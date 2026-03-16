@@ -121,23 +121,25 @@ mod inner {
             let irq_map = ebpf
                 .take_map("IRQ_COUNTS")
                 .ok_or_else(|| EventSourceError::Other("IRQ_COUNTS map not found".into()))?;
-            let irq_counts_map: PerCpuArray<_, u64> = irq_map
-                .try_into()
-                .map_err(|e| EventSourceError::Other(format!("IRQ_COUNTS not a PerCpuArray: {e}")))?;
+            let irq_counts_map: PerCpuArray<_, u64> = irq_map.try_into().map_err(|e| {
+                EventSourceError::Other(format!("IRQ_COUNTS not a PerCpuArray: {e}"))
+            })?;
 
             let slab_map = ebpf
                 .take_map("SLAB_STATS")
                 .ok_or_else(|| EventSourceError::Other("SLAB_STATS map not found".into()))?;
-            let slab_stats_map: PerCpuArray<_, SlabStatsArray> = slab_map
-                .try_into()
-                .map_err(|e| EventSourceError::Other(format!("SLAB_STATS not a PerCpuArray: {e}")))?;
+            let slab_stats_map: PerCpuArray<_, SlabStatsArray> =
+                slab_map.try_into().map_err(|e| {
+                    EventSourceError::Other(format!("SLAB_STATS not a PerCpuArray: {e}"))
+                })?;
 
             let napi_map = ebpf
                 .take_map("NAPI_STATS")
                 .ok_or_else(|| EventSourceError::Other("NAPI_STATS map not found".into()))?;
-            let napi_stats_map: PerCpuArray<_, NapiStatsArray> = napi_map
-                .try_into()
-                .map_err(|e| EventSourceError::Other(format!("NAPI_STATS not a PerCpuArray: {e}")))?;
+            let napi_stats_map: PerCpuArray<_, NapiStatsArray> =
+                napi_map.try_into().map_err(|e| {
+                    EventSourceError::Other(format!("NAPI_STATS not a PerCpuArray: {e}"))
+                })?;
 
             Ok(Self {
                 ebpf,
@@ -161,19 +163,23 @@ mod inner {
                 return Ok(());
             }
 
-            let offsets_map = ebpf
-                .map_mut("OFFSETS")
-                .ok_or_else(|| EventSourceError::Other("OFFSETS map not found in eBPF object".into()))?;
+            let offsets_map = ebpf.map_mut("OFFSETS").ok_or_else(|| {
+                EventSourceError::Other("OFFSETS map not found in eBPF object".into())
+            })?;
             let mut arr: aya::maps::Array<_, u32> = offsets_map
                 .try_into()
                 .map_err(|e| EventSourceError::Other(format!("OFFSETS is not an Array: {e}")))?;
 
             for (idx, val) in &offsets {
-                arr.set(*idx, *val, 0)
-                    .map_err(|e| EventSourceError::Other(format!("failed to set OFFSETS[{idx}]={val}: {e}")))?;
+                arr.set(*idx, *val, 0).map_err(|e| {
+                    EventSourceError::Other(format!("failed to set OFFSETS[{idx}]={val}: {e}"))
+                })?;
             }
 
-            info!(count = offsets.len(), "tracepoint field offsets populated from tracefs");
+            info!(
+                count = offsets.len(),
+                "tracepoint field offsets populated from tracefs"
+            );
             Ok(())
         }
 
@@ -215,7 +221,11 @@ mod inner {
                 Ok(percpu_vals) => {
                     let current: Vec<u64> = percpu_vals.iter().copied().collect();
                     if diagnostic {
-                        info!(read = self.read_count, ?current, "IRQ_COUNTS raw per-cpu values");
+                        info!(
+                            read = self.read_count,
+                            ?current,
+                            "IRQ_COUNTS raw per-cpu values"
+                        );
                     }
 
                     if self.prev_irq_per_cpu.is_empty() {

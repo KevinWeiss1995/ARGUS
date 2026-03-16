@@ -90,8 +90,8 @@ pub fn read_tracepoint_fields(
 
     for path in &paths {
         if Path::new(path).exists() {
-            let content = std::fs::read_to_string(path)
-                .map_err(|e| format!("failed to read {path}: {e}"))?;
+            let content =
+                std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
             return Ok(parse_format_file(&content));
         }
     }
@@ -108,7 +108,12 @@ pub fn discover_offsets() -> Vec<(u32, u32)> {
 
     if let Ok(fields) = read_tracepoint_fields("irq", "irq_handler_entry") {
         if let Some(f) = fields.get("irq") {
-            tracing::info!(field = "irq", offset = f.offset, size = f.size, "irq_handler_entry");
+            tracing::info!(
+                field = "irq",
+                offset = f.offset,
+                size = f.size,
+                "irq_handler_entry"
+            );
             offsets.push((OFF_IRQ_IRQ, f.offset));
         } else {
             tracing::warn!("irq_handler_entry: 'irq' field not found in format file");
@@ -119,13 +124,23 @@ pub fn discover_offsets() -> Vec<(u32, u32)> {
 
     if let Ok(fields) = read_tracepoint_fields("napi", "napi_poll") {
         if let Some(f) = fields.get("work") {
-            tracing::info!(field = "work", offset = f.offset, size = f.size, "napi_poll");
+            tracing::info!(
+                field = "work",
+                offset = f.offset,
+                size = f.size,
+                "napi_poll"
+            );
             offsets.push((OFF_NAPI_WORK, f.offset));
         } else {
             tracing::warn!("napi_poll: 'work' field not found in format file");
         }
         if let Some(f) = fields.get("budget") {
-            tracing::info!(field = "budget", offset = f.offset, size = f.size, "napi_poll");
+            tracing::info!(
+                field = "budget",
+                offset = f.offset,
+                size = f.size,
+                "napi_poll"
+            );
             offsets.push((OFF_NAPI_BUDGET, f.offset));
         } else {
             tracing::warn!("napi_poll: 'budget' field not found in format file");
@@ -136,13 +151,23 @@ pub fn discover_offsets() -> Vec<(u32, u32)> {
 
     if let Ok(fields) = read_tracepoint_fields("kmem", "kmem_cache_alloc") {
         if let Some(f) = fields.get("bytes_req") {
-            tracing::info!(field = "bytes_req", offset = f.offset, size = f.size, "kmem_cache_alloc");
+            tracing::info!(
+                field = "bytes_req",
+                offset = f.offset,
+                size = f.size,
+                "kmem_cache_alloc"
+            );
             offsets.push((OFF_SLAB_BYTES_REQ, f.offset));
         } else {
             tracing::warn!("kmem_cache_alloc: 'bytes_req' field not found in format file");
         }
         if let Some(f) = fields.get("bytes_alloc") {
-            tracing::info!(field = "bytes_alloc", offset = f.offset, size = f.size, "kmem_cache_alloc");
+            tracing::info!(
+                field = "bytes_alloc",
+                offset = f.offset,
+                size = f.size,
+                "kmem_cache_alloc"
+            );
             offsets.push((OFF_SLAB_BYTES_ALLOC, f.offset));
         } else {
             tracing::warn!("kmem_cache_alloc: 'bytes_alloc' field not found in format file");

@@ -29,7 +29,9 @@ fn healthy_state() -> DashboardState {
         ib_error_history: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         slab_rate_history: vec![200.0, 198.0, 205.0, 200.0, 195.0, 210.0, 200.0, 198.0],
         irq_rate_history: vec![100.0, 120.0, 110.0, 115.0, 105.0, 125.0, 130.0, 120.0],
-        rdma_throughput_history: vec![1024.0, 1100.0, 1050.0, 1080.0, 1024.0, 1150.0, 1090.0, 1060.0],
+        rdma_throughput_history: vec![
+            1024.0, 1100.0, 1050.0, 1080.0, 1024.0, 1150.0, 1090.0, 1060.0,
+        ],
         rdma_has_byte_counters: true,
         recent_alerts: Vec::new(),
     }

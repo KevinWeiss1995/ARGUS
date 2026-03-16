@@ -125,8 +125,12 @@ fn run_live_mode(
     mut dash_state: DashboardState,
     mut dashboard: Option<Dashboard>,
     start: std::time::Instant,
-    prom_exporter: std::sync::Arc<std::sync::Mutex<argus_agent::telemetry::prometheus::PrometheusExporter>>,
-    health_snapshot: std::sync::Arc<std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>>,
+    prom_exporter: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::PrometheusExporter>,
+    >,
+    health_snapshot: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>,
+    >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let ebpf_path = cli
@@ -192,8 +196,10 @@ fn run_live_mode(
         if window_start.elapsed() >= window_duration {
             // Read BPF maps (aggregated in-kernel, single syscall per map)
             let snap = ebpf_source.read_bpf_snapshot();
-            event_count += snap.total_irq_count + snap.slab_alloc_count
-                + snap.slab_free_count + snap.napi_poll_count;
+            event_count += snap.total_irq_count
+                + snap.slab_alloc_count
+                + snap.slab_free_count
+                + snap.napi_poll_count;
             pipeline.ingest_bpf_snapshot(&snap);
 
             // Read hardware counters from sysfs
@@ -264,8 +270,12 @@ async fn run_event_mode(
     mut dash_state: DashboardState,
     mut dashboard: Option<Dashboard>,
     start: std::time::Instant,
-    prom_exporter: std::sync::Arc<std::sync::Mutex<argus_agent::telemetry::prometheus::PrometheusExporter>>,
-    health_snapshot: std::sync::Arc<std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>>,
+    prom_exporter: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::PrometheusExporter>,
+    >,
+    health_snapshot: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>,
+    >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     dash_state.source_name = source_name;
