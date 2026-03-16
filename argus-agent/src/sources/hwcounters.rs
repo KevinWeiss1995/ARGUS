@@ -72,6 +72,7 @@ const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
         "excessive_buffer_overrun_errors",
         HardwareCounter::ExcessiveBufferOverrunErrors,
     ),
+    ("link_error_recovery", HardwareCounter::LinkErrorRecovery),
 ];
 
 /// hw_counters/ exposed by rxe and other drivers.
@@ -192,9 +193,17 @@ impl HwCounterReader {
     /// If any port is HardwareIB, returns HardwareIB. Otherwise SoftRoCE if any, else Unknown.
     #[must_use]
     pub fn device_type(&self) -> DeviceType {
-        if self.ports.iter().any(|p| p.device_type == DeviceType::HardwareIB) {
+        if self
+            .ports
+            .iter()
+            .any(|p| p.device_type == DeviceType::HardwareIB)
+        {
             DeviceType::HardwareIB
-        } else if self.ports.iter().any(|p| p.device_type == DeviceType::SoftRoCE) {
+        } else if self
+            .ports
+            .iter()
+            .any(|p| p.device_type == DeviceType::SoftRoCE)
+        {
             DeviceType::SoftRoCE
         } else {
             DeviceType::Unknown

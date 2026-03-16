@@ -124,6 +124,9 @@ pub enum HardwareCounter {
     PortRcvRemotePhysicalErrors(u64),
     LocalLinkIntegrityErrors(u64),
     ExcessiveBufferOverrunErrors(u64),
+    /// Automatic link recovery attempts — increments *before* link_downed.
+    /// The key early-warning signal for cable faults.
+    LinkErrorRecovery(u64),
     // --- hw_counters (rxe/driver-specific) ---
     /// hw_counters rcvd_pkts — packet count.
     HwRcvPkts(u64),
@@ -347,6 +350,9 @@ pub struct IbCounterDeltas {
     pub port_rcv_remote_physical_errors_delta: u64,
     pub local_link_integrity_errors_delta: u64,
     pub excessive_buffer_overrun_errors_delta: u64,
+    /// Link recovery attempts — the key early-warning predictor of cable faults.
+    /// Increments before link_downed; any delta > 0 is significant.
+    pub link_error_recovery_delta: u64,
     // --- Standard IB error counters (from counters/) ---
     pub port_rcv_errors_delta: u64,
     pub port_xmit_discards_delta: u64,
@@ -390,9 +396,7 @@ impl IbCounterDeltas {
     /// All error deltas (hard + standard IB counters). Does NOT include soft/rxe errors.
     #[must_use]
     pub fn total_error_delta(&self) -> u64 {
-        self.total_hard_error_delta()
-            + self.port_rcv_errors_delta
-            + self.port_xmit_discards_delta
+        self.total_hard_error_delta() + self.port_rcv_errors_delta + self.port_xmit_discards_delta
     }
 
     /// All error deltas across all device types (hard + standard + soft/rxe).

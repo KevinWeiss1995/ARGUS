@@ -22,6 +22,7 @@ fn counter_discriminant(c: &HardwareCounter) -> u8 {
         HardwareCounter::PortRcvRemotePhysicalErrors(_) => 6,
         HardwareCounter::LocalLinkIntegrityErrors(_) => 7,
         HardwareCounter::ExcessiveBufferOverrunErrors(_) => 8,
+        HardwareCounter::LinkErrorRecovery(_) => 15,
         HardwareCounter::HwRcvPkts(_) => 9,
         HardwareCounter::HwXmitPkts(_) => 10,
         HardwareCounter::RxeDuplicateRequest(_) => 11,
@@ -42,6 +43,7 @@ fn counter_value(c: &HardwareCounter) -> u64 {
         | HardwareCounter::PortRcvRemotePhysicalErrors(v)
         | HardwareCounter::LocalLinkIntegrityErrors(v)
         | HardwareCounter::ExcessiveBufferOverrunErrors(v)
+        | HardwareCounter::LinkErrorRecovery(v)
         | HardwareCounter::HwRcvPkts(v)
         | HardwareCounter::HwXmitPkts(v)
         | HardwareCounter::RxeDuplicateRequest(v)
@@ -144,6 +146,9 @@ impl Aggregator {
             }
             HardwareCounter::ExcessiveBufferOverrunErrors(_) => {
                 d.excessive_buffer_overrun_errors_delta += delta;
+            }
+            HardwareCounter::LinkErrorRecovery(_) => {
+                d.link_error_recovery_delta += delta;
             }
             HardwareCounter::HwRcvPkts(_) => d.hw_rcv_pkts_delta += delta,
             HardwareCounter::HwXmitPkts(_) => d.hw_xmit_pkts_delta += delta,
