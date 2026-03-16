@@ -1,0 +1,61 @@
+{
+  "name": "noisy_but_healthy",
+  "description": "Normal IB fabric noise: a few symbol errors over time with high throughput. Total errors stay within budget. System should remain Healthy throughout.",
+  "events": [
+    {"HardwareCounter": {"timestamp_ns": 100000000, "port_num": 1, "counter": {"SymbolErrors": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000001, "port_num": 1, "counter": {"LinkDowned": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000002, "port_num": 1, "counter": {"PortRcvData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000003, "port_num": 1, "counter": {"PortXmitData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000004, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 200000000, "port_num": 1, "counter": {"SymbolErrors": 1}}},
+    {"HardwareCounter": {"timestamp_ns": 200000001, "port_num": 1, "counter": {"PortRcvData": 2000000}}},
+    {"HardwareCounter": {"timestamp_ns": 200000002, "port_num": 1, "counter": {"PortXmitData": 2000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 300000000, "port_num": 1, "counter": {"SymbolErrors": 1}}},
+    {"HardwareCounter": {"timestamp_ns": 300000001, "port_num": 1, "counter": {"PortRcvData": 3000000}}},
+    {"HardwareCounter": {"timestamp_ns": 300000002, "port_num": 1, "counter": {"PortXmitData": 3000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 400000000, "port_num": 1, "counter": {"SymbolErrors": 2}}},
+    {"HardwareCounter": {"timestamp_ns": 400000001, "port_num": 1, "counter": {"PortRcvData": 4000000}}},
+    {"HardwareCounter": {"timestamp_ns": 400000002, "port_num": 1, "counter": {"PortXmitData": 4000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 500000000, "port_num": 1, "counter": {"SymbolErrors": 2}}},
+    {"HardwareCounter": {"timestamp_ns": 500000001, "port_num": 1, "counter": {"PortRcvData": 5000000}}},
+    {"HardwareCounter": {"timestamp_ns": 500000002, "port_num": 1, "counter": {"PortXmitData": 5000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 600000000, "port_num": 1, "counter": {"SymbolErrors": 3}}},
+    {"HardwareCounter": {"timestamp_ns": 600000001, "port_num": 1, "counter": {"PortRcvData": 6000000}}},
+    {"HardwareCounter": {"timestamp_ns": 600000002, "port_num": 1, "counter": {"PortXmitData": 6000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 700000000, "port_num": 1, "counter": {"SymbolErrors": 3}}},
+    {"HardwareCounter": {"timestamp_ns": 700000001, "port_num": 1, "counter": {"PortRcvData": 7000000}}},
+    {"HardwareCounter": {"timestamp_ns": 700000002, "port_num": 1, "counter": {"PortXmitData": 7000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 800000000, "port_num": 1, "counter": {"SymbolErrors": 4}}},
+    {"HardwareCounter": {"timestamp_ns": 800000001, "port_num": 1, "counter": {"PortRcvData": 8000000}}},
+    {"HardwareCounter": {"timestamp_ns": 800000002, "port_num": 1, "counter": {"PortXmitData": 8000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 900000000, "port_num": 1, "counter": {"SymbolErrors": 4}}},
+    {"HardwareCounter": {"timestamp_ns": 900000001, "port_num": 1, "counter": {"PortRcvData": 9000000}}},
+    {"HardwareCounter": {"timestamp_ns": 900000002, "port_num": 1, "counter": {"PortXmitData": 9000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 1000000000, "port_num": 1, "counter": {"SymbolErrors": 5}}},
+    {"HardwareCounter": {"timestamp_ns": 1000000001, "port_num": 1, "counter": {"PortRcvData": 10000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1000000002, "port_num": 1, "counter": {"PortXmitData": 10000000}}},
+
+    {"HardwareCounter": {"timestamp_ns": 1100000000, "port_num": 1, "counter": {"SymbolErrors": 5}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000001, "port_num": 1, "counter": {"PortRcvData": 11000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000002, "port_num": 1, "counter": {"PortXmitData": 11000000}}}
+  ],
+  "expected_states": [
+    {
+      "after_event_index": 10,
+      "expected_state": "Healthy"
+    },
+    {
+      "after_event_index": 34,
+      "expected_state": "Healthy"
+    }
+  ]
+}
