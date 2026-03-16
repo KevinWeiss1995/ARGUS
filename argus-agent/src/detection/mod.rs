@@ -127,31 +127,42 @@ impl DetectionEngine {
     #[must_use]
     pub fn compute_health_score(metrics: &AggregatedMetrics, num_cpus: u32) -> f64 {
         let mut score = 0.0_f64;
+        let d = &metrics.ib_counter_deltas;
 
-        // IRQ skew component (0..0.3) — scaled by CPU count
+        // IRQ skew component (0..0.15) — scaled by CPU count
         let irq_pct = metrics.interrupt_distribution.dominant_cpu_pct();
         let perfect_share = 100.0 / num_cpus.max(1) as f64;
         let irq_baseline = perfect_share + 20.0;
         if irq_pct > irq_baseline {
-            score += ((irq_pct - irq_baseline) / (100.0 - irq_baseline)).min(1.0) * 0.3;
+            score += ((irq_pct - irq_baseline) / (100.0 - irq_baseline)).min(1.0) * 0.15;
         }
 
-        // Hard IB error component (0..0.35) — only real hardware errors
-        let hard_errors = metrics.ib_counter_deltas.total_hard_error_delta();
+        // link_error_recovery: highest-weight signal (0..0.35)
+        // Any increment means the link is actively trying to recover — cable is failing.
+        if d.link_error_recovery_delta > 0 {
+            score += 0.35;
+        }
+
+        // link_downed: immediate critical (0..0.25)
+        if d.link_downed_delta > 0 {
+            score += 0.25;
+        }
+
+        // Hard IB error rate (0..0.15) — normalized by throughput when available
+        let hard_errors = d.total_hard_error_delta();
         if hard_errors > 0 {
-            score += (hard_errors as f64 / 50.0).min(1.0) * 0.25;
-        }
-        if metrics.ib_counter_deltas.link_downed_delta > 0 {
-            score += 0.1;
+            let throughput = d.throughput_bytes().max(d.throughput_pkts()).max(1) as f64;
+            let error_rate = hard_errors as f64 / throughput;
+            score += (error_rate * 1000.0).min(1.0) * 0.15;
         }
 
-        // Slab pressure component (0..0.15)
+        // Slab pressure component (0..0.05)
         let slab_latency = metrics.slab_metrics.avg_latency_ns();
         if slab_latency > 1000 {
-            score += ((slab_latency as f64 - 1000.0) / 10000.0).min(1.0) * 0.15;
+            score += ((slab_latency as f64 - 1000.0) / 10000.0).min(1.0) * 0.05;
         }
 
-        // NAPI saturation component (0..0.2)
+        // NAPI saturation component (0..0.05)
         if metrics.network_metrics.napi_polls > 0 && metrics.network_metrics.napi_total_budget > 0 {
             let avg_work = metrics.network_metrics.napi_total_work as f64
                 / metrics.network_metrics.napi_polls as f64;
@@ -160,7 +171,7 @@ impl DetectionEngine {
             if avg_budget > 0.0 {
                 let util = avg_work / avg_budget;
                 if util > 0.7 {
-                    score += ((util - 0.7) / 0.3).min(1.0) * 0.2;
+                    score += ((util - 0.7) / 0.3).min(1.0) * 0.05;
                 }
             }
         }
