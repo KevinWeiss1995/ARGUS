@@ -1,0 +1,37 @@
+{
+  "name": "cable_fault_fast",
+  "description": "Sudden cable pull: immediate link_error_recovery and link_downed with no prior warning. System should go Critical instantly.",
+  "events": [
+    {"HardwareCounter": {"timestamp_ns": 100000000, "port_num": 1, "counter": {"SymbolErrors": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000001, "port_num": 1, "counter": {"LinkDowned": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000002, "port_num": 1, "counter": {"PortRcvData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000003, "port_num": 1, "counter": {"PortXmitData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000004, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 200000000, "port_num": 1, "counter": {"SymbolErrors": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 200000001, "port_num": 1, "counter": {"PortRcvData": 2000000}}},
+    {"HardwareCounter": {"timestamp_ns": 200000002, "port_num": 1, "counter": {"PortXmitData": 2000000}}},
+    {"HardwareCounter": {"timestamp_ns": 200000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 300000000, "port_num": 1, "counter": {"SymbolErrors": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 300000001, "port_num": 1, "counter": {"PortRcvData": 3000000}}},
+    {"HardwareCounter": {"timestamp_ns": 300000002, "port_num": 1, "counter": {"PortXmitData": 3000000}}},
+    {"HardwareCounter": {"timestamp_ns": 300000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 400000000, "port_num": 1, "counter": {"SymbolErrors": 50}}},
+    {"HardwareCounter": {"timestamp_ns": 400000001, "port_num": 1, "counter": {"PortRcvData": 3500000}}},
+    {"HardwareCounter": {"timestamp_ns": 400000002, "port_num": 1, "counter": {"PortXmitData": 3500000}}},
+    {"HardwareCounter": {"timestamp_ns": 400000003, "port_num": 1, "counter": {"LinkErrorRecovery": 5}}},
+    {"HardwareCounter": {"timestamp_ns": 400000004, "port_num": 1, "counter": {"LinkDowned": 2}}}
+  ],
+  "expected_states": [
+    {
+      "after_event_index": 8,
+      "expected_state": "Healthy"
+    },
+    {
+      "after_event_index": 17,
+      "expected_state": "Critical"
+    }
+  ]
+}
