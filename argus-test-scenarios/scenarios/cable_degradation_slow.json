@@ -1,0 +1,72 @@
+{
+  "name": "cable_degradation_slow",
+  "description": "Gradual cable degradation: symbol errors rising over 20 windows, then link_error_recovery, then link_downed. Models the textbook cable failure progression that ARGUS must detect.",
+  "events": [
+    {"HardwareCounter": {"timestamp_ns": 100000000, "port_num": 1, "counter": {"SymbolErrors": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000001, "port_num": 1, "counter": {"LinkDowned": 0}}},
+    {"HardwareCounter": {"timestamp_ns": 100000002, "port_num": 1, "counter": {"PortRcvData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000003, "port_num": 1, "counter": {"PortXmitData": 1000000}}},
+    {"HardwareCounter": {"timestamp_ns": 100000004, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 200000000, "port_num": 1, "counter": {"SymbolErrors": 2}}},
+    {"HardwareCounter": {"timestamp_ns": 200000001, "port_num": 1, "counter": {"PortRcvData": 2000000}}},
+    {"HardwareCounter": {"timestamp_ns": 200000002, "port_num": 1, "counter": {"PortXmitData": 2000000}}},
+    {"HardwareCounter": {"timestamp_ns": 200000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 300000000, "port_num": 1, "counter": {"SymbolErrors": 5}}},
+    {"HardwareCounter": {"timestamp_ns": 300000001, "port_num": 1, "counter": {"PortRcvData": 3000000}}},
+    {"HardwareCounter": {"timestamp_ns": 300000002, "port_num": 1, "counter": {"PortXmitData": 3000000}}},
+    {"HardwareCounter": {"timestamp_ns": 300000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 400000000, "port_num": 1, "counter": {"SymbolErrors": 9}}},
+    {"HardwareCounter": {"timestamp_ns": 400000001, "port_num": 1, "counter": {"PortRcvData": 4000000}}},
+    {"HardwareCounter": {"timestamp_ns": 400000002, "port_num": 1, "counter": {"PortXmitData": 4000000}}},
+    {"HardwareCounter": {"timestamp_ns": 400000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 500000000, "port_num": 1, "counter": {"SymbolErrors": 15}}},
+    {"HardwareCounter": {"timestamp_ns": 500000001, "port_num": 1, "counter": {"PortRcvData": 5000000}}},
+    {"HardwareCounter": {"timestamp_ns": 500000002, "port_num": 1, "counter": {"PortXmitData": 5000000}}},
+    {"HardwareCounter": {"timestamp_ns": 500000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 600000000, "port_num": 1, "counter": {"SymbolErrors": 25}}},
+    {"HardwareCounter": {"timestamp_ns": 600000001, "port_num": 1, "counter": {"PortRcvData": 6000000}}},
+    {"HardwareCounter": {"timestamp_ns": 600000002, "port_num": 1, "counter": {"PortXmitData": 6000000}}},
+    {"HardwareCounter": {"timestamp_ns": 600000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 700000000, "port_num": 1, "counter": {"SymbolErrors": 40}}},
+    {"HardwareCounter": {"timestamp_ns": 700000001, "port_num": 1, "counter": {"PortRcvData": 7000000}}},
+    {"HardwareCounter": {"timestamp_ns": 700000002, "port_num": 1, "counter": {"PortXmitData": 7000000}}},
+    {"HardwareCounter": {"timestamp_ns": 700000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 800000000, "port_num": 1, "counter": {"SymbolErrors": 65}}},
+    {"HardwareCounter": {"timestamp_ns": 800000001, "port_num": 1, "counter": {"PortRcvData": 8000000}}},
+    {"HardwareCounter": {"timestamp_ns": 800000002, "port_num": 1, "counter": {"PortXmitData": 8000000}}},
+    {"HardwareCounter": {"timestamp_ns": 800000003, "port_num": 1, "counter": {"LinkErrorRecovery": 0}}},
+
+    {"HardwareCounter": {"timestamp_ns": 900000000, "port_num": 1, "counter": {"SymbolErrors": 100}}},
+    {"HardwareCounter": {"timestamp_ns": 900000001, "port_num": 1, "counter": {"PortRcvData": 9000000}}},
+    {"HardwareCounter": {"timestamp_ns": 900000002, "port_num": 1, "counter": {"PortXmitData": 9000000}}},
+    {"HardwareCounter": {"timestamp_ns": 900000003, "port_num": 1, "counter": {"LinkErrorRecovery": 1}}},
+
+    {"HardwareCounter": {"timestamp_ns": 1000000000, "port_num": 1, "counter": {"SymbolErrors": 160}}},
+    {"HardwareCounter": {"timestamp_ns": 1000000001, "port_num": 1, "counter": {"PortRcvData": 10000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1000000002, "port_num": 1, "counter": {"PortXmitData": 10000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1000000003, "port_num": 1, "counter": {"LinkErrorRecovery": 3}}},
+
+    {"HardwareCounter": {"timestamp_ns": 1100000000, "port_num": 1, "counter": {"SymbolErrors": 250}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000001, "port_num": 1, "counter": {"PortRcvData": 11000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000002, "port_num": 1, "counter": {"PortXmitData": 11000000}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000003, "port_num": 1, "counter": {"LinkErrorRecovery": 5}}},
+    {"HardwareCounter": {"timestamp_ns": 1100000004, "port_num": 1, "counter": {"LinkDowned": 1}}}
+  ],
+  "expected_states": [
+    {
+      "after_event_index": 8,
+      "expected_state": "Healthy"
+    },
+    {
+      "after_event_index": 45,
+      "expected_state": "Critical"
+    }
+  ]
+}
