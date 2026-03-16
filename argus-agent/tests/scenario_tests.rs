@@ -60,3 +60,18 @@ fn scenario_slab_pressure_cascade() {
 fn scenario_link_flap_critical() {
     run_scenario("argus-test-scenarios/scenarios/link_flap_critical.json");
 }
+
+#[test]
+fn scenario_cable_degradation_slow() {
+    run_scenario("argus-test-scenarios/scenarios/cable_degradation_slow.json");
+}
+
+#[test]
+fn scenario_cable_fault_fast() {
+    run_scenario("argus-test-scenarios/scenarios/cable_fault_fast.json");
+}
+
+#[test]
+fn scenario_noisy_but_healthy() {
+    run_scenario("argus-test-scenarios/scenarios/noisy_but_healthy.json");
+}
