@@ -177,19 +177,25 @@ pub struct RdmaLinkDegradationRule {
     z_threshold: f64,
     /// Consecutive windows spent in ElevatedErrors state.
     elevated_windows: u32,
+    /// Absolute error rate ceiling (errors / traffic). Above this = always alert,
+    /// regardless of EWMA. Prevents "boiling frog" where sustained errors
+    /// become the new normal.
+    absolute_error_rate_ceiling: f64,
 }
 
 impl RdmaLinkDegradationRule {
     #[must_use]
     pub fn new(z_threshold: f64, error_budget: u64) -> Self {
         Self {
-            symbol_error_rate: RollingStats::new(0.1),
-            rcv_error_rate: RollingStats::new(0.1),
-            soft_error_rate: RollingStats::new(0.1),
+            // Clamped at 3x baseline: EWMA can't adapt beyond 3× the initial error rate
+            symbol_error_rate: RollingStats::with_clamp(0.1, 3.0),
+            rcv_error_rate: RollingStats::with_clamp(0.1, 3.0),
+            soft_error_rate: RollingStats::with_clamp(0.1, 3.0),
             link_state: LinkHealthState::Nominal,
             error_budget,
             z_threshold,
             elevated_windows: 0,
+            absolute_error_rate_ceiling: 0.05,
         }
     }
 }
@@ -331,10 +337,45 @@ impl DetectionRule for RdmaLinkDegradationRule {
             });
         }
 
-        // --- Rate-based anomaly detection (only after warmup) ---
+        // --- Absolute error rate ceiling (layer 2: catches sustained degradation) ---
+        // If the error-to-traffic ratio exceeds the ceiling, alert regardless of
+        // EWMA state. This prevents the "boiling frog" scenario where the EWMA
+        // adapts to elevated errors and stops flagging them.
+        let total_errors = d.total_all_errors_delta();
+        if total_errors > 0 && d.has_traffic() {
+            let total_rate = total_errors as f64 / throughput;
+            if total_rate >= self.absolute_error_rate_ceiling {
+                self.elevated_windows += 1;
+                self.link_state = LinkHealthState::ElevatedErrors;
+                let severity = if total_rate >= self.absolute_error_rate_ceiling * 3.0
+                    || self.elevated_windows >= 3
+                {
+                    HealthState::Critical
+                } else {
+                    HealthState::Degraded
+                };
+                return Some(Alert {
+                    timestamp_ns: ts,
+                    kind: AlertKind::RdmaLinkDegradation {
+                        symbol_error_delta: d.symbol_error_delta,
+                        link_downed_delta: 0,
+                        rcv_error_delta: d.port_rcv_errors_delta,
+                        xmit_discard_delta: d.port_xmit_discards_delta,
+                    },
+                    severity,
+                    message: format!(
+                        "Error rate {:.1}% exceeds ceiling ({:.1}%): {error_summary} (elevated {}/window)",
+                        total_rate * 100.0,
+                        self.absolute_error_rate_ceiling * 100.0,
+                        self.elevated_windows
+                    ),
+                });
+            }
+        }
+
+        // --- Rate-based anomaly detection (layer 3: only after warmup) ---
         if warmed {
             let max_z = sym_z.max(rcv_z).max(soft_z);
-            let total_errors = d.total_all_errors_delta();
 
             if max_z >= self.z_threshold && total_errors > 0 {
                 self.elevated_windows += 1;
@@ -579,7 +620,10 @@ impl ThroughputDropRule {
     pub fn new(drop_threshold_pct: f64) -> Self {
         Self {
             drop_threshold_pct,
-            stats: RollingStats::new(0.1),
+            // Floor clamp at 0.5: EWMA can't drop below 50% of initial throughput.
+            // This prevents the baseline from adapting to degraded throughput,
+            // keeping drops detectable even when sustained.
+            stats: RollingStats::with_floor(0.1, 0.5),
         }
     }
 }
@@ -1078,6 +1122,86 @@ mod tests {
         }
         let clean = AggregatedMetrics::default();
         assert!(rule.evaluate_mut(&clean).is_none());
+    }
+
+    #[test]
+    fn link_degradation_absolute_ceiling_catches_sustained_errors() {
+        let mut rule = RdmaLinkDegradationRule::new(3.0, 5);
+        // Warm up with low soft error rate (0.075% = 150/200K)
+        for _ in 0..10 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    rxe_duplicate_request_delta: 100,
+                    rxe_seq_error_delta: 50,
+                    hw_rcv_pkts_delta: 100_000,
+                    hw_xmit_pkts_delta: 100_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            rule.evaluate_mut(&metrics);
+        }
+
+        // Now inject sustained 20% error rate (40K errors / 200K pkts).
+        // The EWMA z-score alone would eventually adapt and stop alerting.
+        // The absolute ceiling (5%) should catch this every window.
+        for i in 0..20 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    rxe_duplicate_request_delta: 20_000,
+                    rxe_seq_error_delta: 20_000,
+                    hw_rcv_pkts_delta: 100_000,
+                    hw_xmit_pkts_delta: 100_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let result = rule.evaluate_mut(&metrics);
+            assert!(
+                result.is_some(),
+                "window {i}: 20% error rate should always alert (absolute ceiling)"
+            );
+        }
+    }
+
+    #[test]
+    fn link_degradation_ewma_clamped_keeps_detecting() {
+        let mut rule = RdmaLinkDegradationRule::new(3.0, 5);
+        // Warm up
+        for _ in 0..10 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    symbol_error_delta: 1,
+                    port_rcv_data_delta: 1_000_000,
+                    port_xmit_data_delta: 1_000_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            rule.evaluate_mut(&metrics);
+        }
+
+        // Sustained elevated errors (above budget). Because the EWMA is clamped,
+        // the z-score should remain high even after many windows.
+        let mut alert_count = 0;
+        for _ in 0..30 {
+            let metrics = AggregatedMetrics {
+                ib_counter_deltas: IbCounterDeltas {
+                    symbol_error_delta: 100,
+                    port_rcv_data_delta: 1_000_000,
+                    port_xmit_data_delta: 1_000_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            if rule.evaluate_mut(&metrics).is_some() {
+                alert_count += 1;
+            }
+        }
+        assert!(
+            alert_count >= 25,
+            "clamped EWMA should keep alerting on sustained errors, got {alert_count}/30"
+        );
     }
 
     #[test]
