@@ -1,6 +1,10 @@
 /// Exponentially Weighted Moving Average (EWMA) tracker for a single metric.
 /// Maintains mean, variance, trend (first derivative), and supports anomaly
 /// scoring via z-score.
+///
+/// Supports optional baseline clamping: once warmed up, the EWMA is prevented
+/// from drifting beyond `clamp_factor × initial_baseline`. This stops sustained
+/// bad conditions from becoming the new "normal."
 #[derive(Debug, Clone)]
 pub struct RollingStats {
     ewma: f64,
@@ -9,6 +13,12 @@ pub struct RollingStats {
     trend: f64,
     prev_ewma: f64,
     samples: u64,
+    /// Baseline captured at the end of warmup. None until warmed up.
+    baseline: Option<f64>,
+    /// Upper clamp: EWMA cannot exceed baseline × clamp_factor. None = unclamped.
+    clamp_factor: Option<f64>,
+    /// Lower clamp: EWMA cannot drop below baseline × clamp_floor. None = no floor.
+    clamp_floor: Option<f64>,
 }
 
 impl RollingStats {
@@ -23,6 +33,30 @@ impl RollingStats {
             trend: 0.0,
             prev_ewma: 0.0,
             samples: 0,
+            baseline: None,
+            clamp_factor: None,
+            clamp_floor: None,
+        }
+    }
+
+    /// Create a tracker with an upper clamp. After warmup, the EWMA cannot
+    /// exceed `clamp_factor × baseline`. Use for error rates (e.g., 3.0).
+    #[must_use]
+    pub fn with_clamp(alpha: f64, clamp_factor: f64) -> Self {
+        Self {
+            clamp_factor: Some(clamp_factor),
+            ..Self::new(alpha)
+        }
+    }
+
+    /// Create a tracker with a lower-bound clamp. After warmup, the EWMA cannot
+    /// drop below `clamp_floor × baseline`. Use for throughput (e.g., 0.5 = can't
+    /// adapt below 50% of initial throughput, keeping drops detectable).
+    #[must_use]
+    pub fn with_floor(alpha: f64, clamp_floor: f64) -> Self {
+        Self {
+            clamp_floor: Some(clamp_floor),
+            ..Self::new(alpha)
         }
     }
 
@@ -40,10 +74,39 @@ impl RollingStats {
         self.prev_ewma = self.ewma;
 
         let diff = value - self.ewma;
-        self.ewma += self.alpha * diff;
+        let new_ewma = self.ewma + self.alpha * diff;
         self.ewma_var = (1.0 - self.alpha) * (self.ewma_var + self.alpha * diff * diff);
 
+        // Capture baseline at end of warmup
+        if self.baseline.is_none() && self.samples == 5 {
+            self.baseline = Some(new_ewma);
+        }
+
+        // Apply clamps: prevent EWMA from drifting too far from baseline
+        self.ewma = if let Some(bl) = self.baseline {
+            let mut clamped = new_ewma;
+            if let Some(cf) = self.clamp_factor {
+                if bl > f64::EPSILON {
+                    clamped = clamped.min(bl * cf);
+                }
+            }
+            if let Some(cf) = self.clamp_floor {
+                if bl > f64::EPSILON {
+                    clamped = clamped.max(bl * cf);
+                }
+            }
+            clamped
+        } else {
+            new_ewma
+        };
+
         self.trend = self.ewma - self.prev_ewma;
+    }
+
+    /// The frozen baseline captured at the end of warmup (if any).
+    #[must_use]
+    pub fn baseline(&self) -> Option<f64> {
+        self.baseline
     }
 
     /// Current EWMA value.
@@ -183,6 +246,65 @@ mod tests {
             rs.trend() > 0.0,
             "trend should be positive for increasing data"
         );
+    }
+
+    #[test]
+    fn ewma_clamp_prevents_drift() {
+        let mut rs = RollingStats::with_clamp(0.1, 3.0);
+        // Warmup with low error rate
+        for _ in 0..5 {
+            rs.push(0.001);
+        }
+        let bl = rs.baseline().expect("baseline should be set after warmup");
+        assert!(bl > 0.0);
+
+        // Push very high values — EWMA should be clamped
+        for _ in 0..50 {
+            rs.push(1.0);
+        }
+        assert!(
+            rs.mean() <= bl * 3.0 + f64::EPSILON,
+            "EWMA {} should be clamped to {} (3x baseline {})",
+            rs.mean(),
+            bl * 3.0,
+            bl
+        );
+    }
+
+    #[test]
+    fn ewma_floor_prevents_downward_drift() {
+        let mut rs = RollingStats::with_floor(0.1, 0.5);
+        // Warmup with healthy throughput
+        for _ in 0..5 {
+            rs.push(1000.0);
+        }
+        let bl = rs.baseline().expect("baseline should be set");
+        assert!((bl - 1000.0).abs() < 100.0);
+
+        // Push degraded throughput — EWMA should be floored at 50% of baseline
+        for _ in 0..50 {
+            rs.push(100.0);
+        }
+        assert!(
+            rs.mean() >= bl * 0.5 - f64::EPSILON,
+            "EWMA {} should be floored at {} (50% of baseline {})",
+            rs.mean(),
+            bl * 0.5,
+            bl
+        );
+    }
+
+    #[test]
+    fn ewma_unclamped_drifts_freely() {
+        let mut rs = RollingStats::new(0.1);
+        for _ in 0..5 {
+            rs.push(0.001);
+        }
+        for _ in 0..50 {
+            rs.push(1.0);
+        }
+        // Without clamping, EWMA should be close to 1.0
+        assert!(rs.mean() > 0.5, "unclamped EWMA should drift to ~1.0");
     }
 
     #[test]
