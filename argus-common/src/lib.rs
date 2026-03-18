@@ -140,6 +140,55 @@ pub enum HardwareCounter {
     RxeRetryExceeded(u64),
     /// rxe hw_counters send_err.
     RxeSendError(u64),
+    /// Time spent waiting for credits to send. Non-zero indicates upstream congestion
+    /// (the "victim buffer" effect on lossless IB fabrics).
+    PortXmitWait(u64),
+}
+
+// ---------------------------------------------------------------------------
+// CQ Jitter / Micro-Stall metrics (from eBPF kprobes on mlx5/rxe CQ path)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CqJitterMetrics {
+    /// Total CQ completions observed this window.
+    pub completion_count: u64,
+    /// Sum of all completion latencies (ns).
+    pub total_latency_ns: u64,
+    /// Maximum single-completion latency (ns).
+    pub max_latency_ns: u64,
+    /// Completions exceeding the stall threshold (>50us).
+    pub stall_count: u64,
+}
+
+impl CqJitterMetrics {
+    #[must_use]
+    pub fn avg_latency_ns(&self) -> f64 {
+        if self.completion_count == 0 {
+            return 0.0;
+        }
+        self.total_latency_ns as f64 / self.completion_count as f64
+    }
+
+    /// Estimated p99 latency. With only count/sum/max available from the BPF
+    /// stats map, we approximate p99 as max_latency * 0.9 when stalls are
+    /// present, or avg * 2 otherwise. This is intentionally conservative —
+    /// if we ever add histogram buckets in BPF, we can compute this exactly.
+    #[must_use]
+    pub fn estimated_p99_ns(&self) -> f64 {
+        if self.stall_count > 0 {
+            self.max_latency_ns as f64 * 0.9
+        } else if self.completion_count > 0 {
+            self.avg_latency_ns() * 2.0
+        } else {
+            0.0
+        }
+    }
+
+    #[must_use]
+    pub fn has_data(&self) -> bool {
+        self.completion_count > 0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +270,19 @@ pub enum AlertKind {
         avg_budget: f64,
         utilization_pct: f64,
     },
+    CqJitterStall {
+        stall_count: u64,
+        max_latency_ns: u64,
+        p99_estimate_ns: f64,
+    },
+    CongestionSpread {
+        xmit_wait_delta: u64,
+    },
+    PcieBottleneck {
+        cq_stalls: u64,
+        slab_pressure: u64,
+        ib_errors: u64,
+    },
 }
 
 impl Alert {
@@ -236,6 +298,9 @@ impl Alert {
             AlertKind::LatencyDrift { .. } => "latency_drift",
             AlertKind::ThroughputDrop { .. } => "throughput_drop",
             AlertKind::NapiSaturation { .. } => "napi_saturation",
+            AlertKind::CqJitterStall { .. } => "cq_jitter_stall",
+            AlertKind::CongestionSpread { .. } => "congestion_spread",
+            AlertKind::PcieBottleneck { .. } => "pcie_bottleneck",
         }
     }
 }
@@ -253,6 +318,7 @@ pub struct AggregatedMetrics {
     pub rdma_metrics: RdmaMetrics,
     pub network_metrics: NetworkMetrics,
     pub ib_counter_deltas: IbCounterDeltas,
+    pub cq_jitter: CqJitterMetrics,
     /// Composite health score (0.0 = perfectly healthy, 1.0 = maximally degraded).
     /// Computed by the detection engine from weighted signal combination.
     pub composite_health_score: f64,
@@ -365,6 +431,8 @@ pub struct IbCounterDeltas {
     pub hw_rcv_pkts_delta: u64,
     /// hw_counters sent_pkts delta — packet count (rxe).
     pub hw_xmit_pkts_delta: u64,
+    /// Credit stall time — nonzero means upstream congestion is propagating.
+    pub port_xmit_wait_delta: u64,
     // --- Soft/operational errors (normal on Soft-RoCE, tracked separately) ---
     pub rxe_duplicate_request_delta: u64,
     pub rxe_seq_error_delta: u64,
