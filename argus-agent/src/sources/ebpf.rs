@@ -15,12 +15,13 @@
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod inner {
-    use aya::maps::PerCpuArray;
-    use aya::programs::TracePoint;
+    use aya::maps::{HashMap as AyaHashMap, PerCpuArray};
+    use aya::programs::{KProbe, TracePoint};
     use aya::{Ebpf, EbpfLoader, Pod};
     use std::path::Path;
     use tracing::{info, warn};
 
+    use crate::sources::kallsyms;
     use crate::sources::tracepoint_format;
     use crate::sources::EventSourceError;
 
@@ -36,11 +37,17 @@ mod inner {
         pub napi_poll_count: u64,
         pub napi_total_work: u64,
         pub napi_total_budget: u64,
+        // CQ jitter fields
+        pub cq_completion_count: u64,
+        pub cq_total_latency_ns: u64,
+        pub cq_max_latency_ns: u64,
+        pub cq_stall_count: u64,
     }
 
     // SAFETY: [u64; 4] and [u64; 3] are plain arrays of Pod types, trivially safe.
     unsafe impl Pod for SlabStatsArray {}
     unsafe impl Pod for NapiStatsArray {}
+    unsafe impl Pod for CqJitterStatsArray {}
 
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
@@ -48,6 +55,9 @@ mod inner {
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct NapiStatsArray([u64; 3]);
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct CqJitterStatsArray([u64; 4]);
 
     pub struct EbpfEventSource {
         #[allow(dead_code)]
@@ -56,14 +66,17 @@ mod inner {
         irq_counts_map: PerCpuArray<aya::maps::MapData, u64>,
         slab_stats_map: PerCpuArray<aya::maps::MapData, SlabStatsArray>,
         napi_stats_map: PerCpuArray<aya::maps::MapData, NapiStatsArray>,
+        cq_jitter_stats_map: Option<PerCpuArray<aya::maps::MapData, CqJitterStatsArray>>,
+        qp_owners_map: Option<AyaHashMap<aya::maps::MapData, u32, u32>>,
         prev_irq_per_cpu: Vec<u64>,
         prev_slab_totals: [u64; 4],
         prev_napi_totals: [u64; 3],
+        prev_cq_totals: [u64; 4],
         read_count: u32,
     }
 
     impl EbpfEventSource {
-        /// Load the eBPF program and attach tracepoints.
+        /// Load the eBPF program and attach tracepoints + kprobes.
         pub fn new(ebpf_path: &Path) -> Result<Self, EventSourceError> {
             let mut ebpf = EbpfLoader::new()
                 .load_file(ebpf_path)
@@ -98,6 +111,40 @@ mod inner {
                         failures.push(msg);
                     }
                 }
+            }
+
+            // Attach CQ jitter kprobes (optional — graceful degradation)
+            let kprobe_targets = kallsyms::discover_kprobe_targets();
+            let mut cq_kprobes_attached = false;
+            if kprobe_targets.is_available() {
+                let submit_fn = kprobe_targets.wr_submit.as_deref().unwrap();
+                let poll_fn = kprobe_targets.cq_poll.as_deref().unwrap();
+
+                match Self::attach_kprobe(&mut ebpf, "kprobe_wr_submit", submit_fn) {
+                    Ok(()) => {
+                        info!(func = submit_fn, "WR submit kprobe attached");
+                        attached += 1;
+                        attached_probes.push(format!("kprobe/{submit_fn}"));
+                    }
+                    Err(e) => {
+                        warn!(func = submit_fn, "WR submit kprobe failed: {e}");
+                        failures.push(format!("kprobe/{submit_fn}: {e}"));
+                    }
+                }
+                match Self::attach_kprobe(&mut ebpf, "kprobe_cq_poll", poll_fn) {
+                    Ok(()) => {
+                        info!(func = poll_fn, "CQ poll kprobe attached");
+                        attached += 1;
+                        attached_probes.push(format!("kprobe/{poll_fn}"));
+                        cq_kprobes_attached = true;
+                    }
+                    Err(e) => {
+                        warn!(func = poll_fn, "CQ poll kprobe failed: {e}");
+                        failures.push(format!("kprobe/{poll_fn}: {e}"));
+                    }
+                }
+            } else {
+                info!("CQ jitter kprobe targets not available — micro-stall detection disabled");
             }
 
             if attached == 0 {
@@ -141,15 +188,49 @@ mod inner {
                     EventSourceError::Other(format!("NAPI_STATS not a PerCpuArray: {e}"))
                 })?;
 
+            // CQ jitter maps (only if kprobes were attached)
+            let cq_jitter_stats_map = if cq_kprobes_attached {
+                ebpf.take_map("CQ_JITTER_STATS").and_then(|m| {
+                    let arr: Result<PerCpuArray<_, CqJitterStatsArray>, _> = m.try_into();
+                    match arr {
+                        Ok(a) => Some(a),
+                        Err(e) => {
+                            warn!("CQ_JITTER_STATS map error: {e}");
+                            None
+                        }
+                    }
+                })
+            } else {
+                None
+            };
+
+            let qp_owners_map = if cq_kprobes_attached {
+                ebpf.take_map("QP_OWNERS").and_then(|m| {
+                    let hm: Result<AyaHashMap<_, u32, u32>, _> = m.try_into();
+                    match hm {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            warn!("QP_OWNERS map error: {e}");
+                            None
+                        }
+                    }
+                })
+            } else {
+                None
+            };
+
             Ok(Self {
                 ebpf,
                 attached_probes,
                 irq_counts_map,
                 slab_stats_map,
                 napi_stats_map,
+                cq_jitter_stats_map,
+                qp_owners_map,
                 prev_irq_per_cpu: Vec::new(),
                 prev_slab_totals: [0; 4],
                 prev_napi_totals: [0; 3],
+                prev_cq_totals: [0; 4],
                 read_count: 0,
             })
         }
@@ -180,6 +261,28 @@ mod inner {
                 count = offsets.len(),
                 "tracepoint field offsets populated from tracefs"
             );
+            Ok(())
+        }
+
+        fn attach_kprobe(
+            ebpf: &mut Ebpf,
+            prog_name: &str,
+            func_name: &str,
+        ) -> Result<(), EventSourceError> {
+            let prog: &mut KProbe = ebpf
+                .program_mut(prog_name)
+                .ok_or_else(|| {
+                    EventSourceError::Other(format!("program {prog_name} not found in eBPF object"))
+                })?
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("not a kprobe: {e}")))?;
+
+            prog.load()
+                .map_err(|e| EventSourceError::Other(format!("failed to load {prog_name}: {e}")))?;
+            prog.attach(func_name, 0).map_err(|e| {
+                EventSourceError::Other(format!("failed to attach {prog_name} to {func_name}: {e}"))
+            })?;
+
             Ok(())
         }
 
@@ -292,7 +395,61 @@ mod inner {
                 }
             }
 
+            // --- CQ jitter stats (optional) ---
+            if let Some(ref map) = self.cq_jitter_stats_map {
+                match map.get(&0, 0) {
+                    Ok(percpu_vals) => {
+                        let mut totals = [0u64; 4];
+                        for val in percpu_vals.iter() {
+                            for (i, t) in totals.iter_mut().enumerate() {
+                                if i == 2 {
+                                    // max_latency_ns: take max across CPUs
+                                    *t = (*t).max(val.0[i]);
+                                } else {
+                                    *t += val.0[i];
+                                }
+                            }
+                        }
+
+                        let prev = &self.prev_cq_totals;
+                        snap.cq_completion_count = totals[0].saturating_sub(prev[0]);
+                        snap.cq_total_latency_ns = totals[1].saturating_sub(prev[1]);
+                        // For max, take the raw max this window (not a delta)
+                        snap.cq_max_latency_ns = totals[2];
+                        snap.cq_stall_count = totals[3].saturating_sub(prev[3]);
+                        self.prev_cq_totals = totals;
+
+                        if diagnostic && snap.cq_completion_count > 0 {
+                            info!(
+                                read = self.read_count,
+                                completions = snap.cq_completion_count,
+                                stalls = snap.cq_stall_count,
+                                max_ns = snap.cq_max_latency_ns,
+                                "CQ_JITTER_STATS"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("CQ_JITTER_STATS map read failed: {e}");
+                    }
+                }
+            }
+
             snap
+        }
+
+        /// Read the QP→PID mapping from the BPF HashMap.
+        /// Returns a mapping of QP numbers to PIDs for blast radius attribution.
+        pub fn read_qp_owners(&self) -> std::collections::HashMap<u32, u32> {
+            let mut owners = std::collections::HashMap::new();
+            if let Some(ref map) = self.qp_owners_map {
+                for item in map.iter() {
+                    if let Ok((qp, pid)) = item {
+                        owners.insert(qp, pid);
+                    }
+                }
+            }
+            owners
         }
 
         /// Returns the list of successfully attached tracepoint probes.
