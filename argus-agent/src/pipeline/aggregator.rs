@@ -29,6 +29,7 @@ fn counter_discriminant(c: &HardwareCounter) -> u8 {
         HardwareCounter::RxeSeqError(_) => 12,
         HardwareCounter::RxeRetryExceeded(_) => 13,
         HardwareCounter::RxeSendError(_) => 14,
+        HardwareCounter::PortXmitWait(_) => 16,
     }
 }
 
@@ -49,7 +50,8 @@ fn counter_value(c: &HardwareCounter) -> u64 {
         | HardwareCounter::RxeDuplicateRequest(v)
         | HardwareCounter::RxeSeqError(v)
         | HardwareCounter::RxeRetryExceeded(v)
-        | HardwareCounter::RxeSendError(v) => *v,
+        | HardwareCounter::RxeSendError(v)
+        | HardwareCounter::PortXmitWait(v) => *v,
     }
 }
 
@@ -156,6 +158,7 @@ impl Aggregator {
             HardwareCounter::RxeSeqError(_) => d.rxe_seq_error_delta += delta,
             HardwareCounter::RxeRetryExceeded(_) => d.rxe_retry_exceeded_delta += delta,
             HardwareCounter::RxeSendError(_) => d.rxe_send_error_delta += delta,
+            HardwareCounter::PortXmitWait(_) => d.port_xmit_wait_delta += delta,
         }
     }
 
@@ -181,6 +184,12 @@ impl Aggregator {
         net.napi_polls = snap.napi_poll_count;
         net.napi_total_work = snap.napi_total_work;
         net.napi_total_budget = snap.napi_total_budget;
+
+        let cq = &mut self.metrics.cq_jitter;
+        cq.completion_count = snap.cq_completion_count;
+        cq.total_latency_ns = snap.cq_total_latency_ns;
+        cq.max_latency_ns = snap.cq_max_latency_ns;
+        cq.stall_count = snap.cq_stall_count;
     }
 
     #[must_use]

@@ -60,6 +60,23 @@ pub struct Cli {
     /// Restricts the process to only the syscalls needed for operation.
     #[arg(long)]
     pub seccomp: bool,
+
+    // --- Autonomous action flags ---
+    /// Webhook URL for alert notifications (POST JSON).
+    #[arg(long)]
+    pub action_webhook: Option<String>,
+
+    /// Enable SLURM node drain on critical link-down events.
+    #[arg(long)]
+    pub action_slurm_drain: bool,
+
+    /// Enable IB port disable on critical link-down events (DANGEROUS).
+    #[arg(long)]
+    pub action_port_disable: bool,
+
+    /// Dry-run mode: log actions without executing them.
+    #[arg(long)]
+    pub action_dry_run: bool,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -109,6 +126,17 @@ impl Cli {
                 .map(|n| n.get() as u32)
                 .unwrap_or(4)
         })
+    }
+
+    /// Build action config from CLI flags.
+    #[must_use]
+    pub fn action_config(&self) -> crate::actions::ActionConfig {
+        crate::actions::ActionConfig {
+            webhook_url: self.action_webhook.clone(),
+            slurm_drain: self.action_slurm_drain,
+            port_disable: self.action_port_disable,
+            dry_run: self.action_dry_run,
+        }
     }
 }
 

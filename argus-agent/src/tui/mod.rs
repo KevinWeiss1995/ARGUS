@@ -23,6 +23,7 @@ pub struct DashboardState {
     pub irq_rate_history: Vec<f64>,
     pub slab_rate_history: Vec<f64>,
     pub rdma_throughput_history: Vec<f64>,
+    pub cq_latency_history: Vec<f64>,
     /// True when standard IB byte counters are available (mlx5), false for packet-only (rxe).
     pub rdma_has_byte_counters: bool,
 }
@@ -40,6 +41,7 @@ impl Default for DashboardState {
             irq_rate_history: Vec::new(),
             slab_rate_history: Vec::new(),
             rdma_throughput_history: Vec::new(),
+            cq_latency_history: Vec::new(),
             rdma_has_byte_counters: false,
         }
     }
@@ -63,6 +65,12 @@ impl DashboardState {
         self.irq_rate_history.push(irq_total);
         if self.irq_rate_history.len() > 60 {
             self.irq_rate_history.remove(0);
+        }
+
+        let cq_p99_us = self.metrics.cq_jitter.estimated_p99_ns() / 1000.0;
+        self.cq_latency_history.push(cq_p99_us);
+        if self.cq_latency_history.len() > 60 {
+            self.cq_latency_history.remove(0);
         }
 
         let d = &self.metrics.ib_counter_deltas;
@@ -258,10 +266,11 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
         ])
         .split(area);
 
@@ -288,23 +297,38 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
         &state.rdma_throughput_history,
         rdma_color,
     );
+
+    let cq_has_data = state.cq_latency_history.last().map_or(false, |&v| v > 0.0);
+    let cq_color = if cq_has_data {
+        Color::LightRed
+    } else {
+        Color::DarkGray
+    };
     render_sparkline_panel(
         frame,
         chunks[1],
+        " CQ Latency p99 (us) ",
+        &state.cq_latency_history,
+        cq_color,
+    );
+
+    render_sparkline_panel(
+        frame,
+        chunks[2],
         " IB Errors (/window) ",
         &state.ib_error_history,
         Color::Magenta,
     );
     render_sparkline_panel(
         frame,
-        chunks[2],
+        chunks[3],
         " Slab Allocs (/window) ",
         &state.slab_rate_history,
         Color::Yellow,
     );
     render_sparkline_panel(
         frame,
-        chunks[3],
+        chunks[4],
         " IRQ Rate (/window) ",
         &state.irq_rate_history,
         Color::Cyan,

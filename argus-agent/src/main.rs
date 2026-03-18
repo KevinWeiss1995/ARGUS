@@ -170,6 +170,9 @@ fn run_live_mode(
         reader
     };
 
+    let mut process_resolver = argus_agent::sources::process_resolver::ProcessResolver::new();
+    let mut action_engine = argus_agent::actions::ActionEngine::from_config(&cli.action_config());
+
     let window_duration = std::time::Duration::from_secs(cli.window_secs);
     let tick_interval = std::time::Duration::from_millis(200);
     let mut window_start = std::time::Instant::now();
@@ -207,15 +210,30 @@ fn run_live_mode(
                 pipeline.ingest(&hw_event);
             }
 
-            // Detection
+            // Detection + autonomous response
             let alerts = pipeline.evaluate();
-            for alert in alerts {
-                telemetry.record_alert(alert.clone());
-                dash_state.recent_alerts.push(alert);
-                if dash_state.recent_alerts.len() > 100 {
-                    dash_state.recent_alerts.remove(0);
+            if !alerts.is_empty() {
+                let qp_owners = ebpf_source.read_qp_owners();
+                let blast = process_resolver.resolve_blast_radius(&qp_owners);
+                if !blast.is_empty() {
+                    tracing::info!(affected = blast.summary(), "blast radius resolved");
+                }
+                for mut alert in alerts {
+                    // Dispatch to action handlers (webhook, drain, etc.)
+                    action_engine.dispatch(&alert, &blast);
+
+                    if !blast.is_empty() {
+                        alert.message =
+                            format!("{} | Affected: {}", alert.message, blast.summary());
+                    }
+                    telemetry.record_alert(alert.clone());
+                    dash_state.recent_alerts.push(alert);
+                    if dash_state.recent_alerts.len() > 100 {
+                        dash_state.recent_alerts.remove(0);
+                    }
                 }
             }
+            process_resolver.gc();
 
             dash_state.health = pipeline.detection_engine().current_state();
             dash_state.metrics = pipeline.current_metrics().clone();

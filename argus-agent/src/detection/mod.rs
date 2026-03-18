@@ -3,9 +3,9 @@ pub mod rules;
 
 use argus_common::{AggregatedMetrics, Alert, HealthState};
 use rules::{
-    DetectionRule, InterruptAffinitySkewRule, LatencyDriftRule, NapiSaturationRule,
-    RdmaLatencySpikeRule, RdmaLinkDegradationRule, RisingErrorTrendRule, SlabPressureRule,
-    ThroughputDropRule,
+    CongestionSpreadRule, CqJitterRule, DetectionRule, InterruptAffinitySkewRule, LatencyDriftRule,
+    NapiSaturationRule, PcieBottleneckRule, RdmaLatencySpikeRule, RdmaLinkDegradationRule,
+    RisingErrorTrendRule, SlabPressureRule, ThroughputDropRule,
 };
 
 use crate::config::DetectionConfig;
@@ -57,6 +57,9 @@ impl DetectionEngine {
                 Box::new(LatencyDriftRule::default()),
                 Box::new(ThroughputDropRule::default()),
                 Box::new(NapiSaturationRule::default()),
+                Box::new(CqJitterRule::default()),
+                Box::new(CongestionSpreadRule::default()),
+                Box::new(PcieBottleneckRule::default()),
             ],
             current_state: HealthState::Healthy,
             consecutive_degraded: 0,
@@ -174,6 +177,19 @@ impl DetectionEngine {
                     score += ((util - 0.7) / 0.3).min(1.0) * 0.05;
                 }
             }
+        }
+
+        // CQ jitter / micro-stall component (0..0.15)
+        if metrics.cq_jitter.stall_count > 0 {
+            let stall_ratio = (metrics.cq_jitter.stall_count as f64
+                / metrics.cq_jitter.completion_count.max(1) as f64)
+                .min(1.0);
+            score += stall_ratio * 0.15;
+        }
+
+        // Congestion spread / victim buffer (0..0.10)
+        if d.port_xmit_wait_delta > 0 && d.total_hard_error_delta() == 0 {
+            score += 0.10;
         }
 
         score.min(1.0)

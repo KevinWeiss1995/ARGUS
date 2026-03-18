@@ -2,6 +2,7 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod actions;
 pub mod config;
 pub mod detection;
 pub mod pipeline;
