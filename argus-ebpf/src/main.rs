@@ -2,12 +2,13 @@
 #![no_main]
 #![allow(nonstandard_style, dead_code)]
 
-mod slab;
 mod interrupts;
+mod rdma_jitter;
+mod slab;
 
 use aya_ebpf::{
     macros::map,
-    maps::{Array, PerCpuArray},
+    maps::{Array, LruHashMap, PerCpuArray},
 };
 
 /// Tracepoint field offsets, populated by userspace before probes are attached.
@@ -36,6 +37,25 @@ static SLAB_STATS: PerCpuArray<[u64; 4]> = PerCpuArray::with_max_entries(1, 0);
 /// Layout: [poll_count, total_work, total_budget]
 #[map]
 static NAPI_STATS: PerCpuArray<[u64; 3]> = PerCpuArray::with_max_entries(1, 0);
+
+// ---------------------------------------------------------------------------
+// RDMA CQ Jitter maps (Phase 1: micro-stall detection)
+// ---------------------------------------------------------------------------
+
+/// Work Request submit timestamps keyed by QP number.
+/// LRU eviction prevents unbounded growth under heavy QP load.
+#[map]
+static WR_TIMESTAMPS: LruHashMap<u64, u64> = LruHashMap::with_max_entries(4096, 0);
+
+/// Per-CPU CQ completion latency stats.
+/// Layout: [completion_count, total_latency_ns, max_latency_ns, stall_count(>50us)]
+#[map]
+static CQ_JITTER_STATS: PerCpuArray<[u64; 4]> = PerCpuArray::with_max_entries(1, 0);
+
+/// QP number → PID mapping for blast radius attribution.
+/// Updated on every work request submit with the calling process's TGID.
+#[map]
+static QP_OWNERS: LruHashMap<u32, u32> = LruHashMap::with_max_entries(4096, 0);
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
