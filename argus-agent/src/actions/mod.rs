@@ -1,0 +1,377 @@
+//! Autonomous response engine for ARGUS.
+//!
+//! When the detection engine fires a critical alert, configured action handlers
+//! can take automated responses: webhook notifications, SLURM node draining,
+//! or port disabling. All actions are opt-in, rate-limited, and audit-logged.
+//!
+//! # Safety
+//! Actions that affect node state (drain, port-disable) require explicit CLI
+//! flags and cannot be triggered without operator consent. A dry-run mode
+//! is available for testing. All actions are logged to an audit trail.
+
+use argus_common::Alert;
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
+
+use crate::sources::process_resolver::BlastRadius;
+
+/// Trait for autonomous response handlers.
+pub trait ActionHandler: Send + Sync {
+    fn name(&self) -> &str;
+    fn on_alert(&self, alert: &Alert, blast_radius: &BlastRadius) -> Result<(), String>;
+}
+
+/// Configuration for the action engine, parsed from CLI.
+#[derive(Debug, Clone, Default)]
+pub struct ActionConfig {
+    pub webhook_url: Option<String>,
+    pub slurm_drain: bool,
+    pub port_disable: bool,
+    pub dry_run: bool,
+}
+
+/// Central action dispatcher with rate limiting and audit logging.
+pub struct ActionEngine {
+    handlers: Vec<Box<dyn ActionHandler>>,
+    rate_limit: Duration,
+    last_action: Option<Instant>,
+    dry_run: bool,
+    audit_log: Vec<AuditEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditEntry {
+    pub timestamp: Instant,
+    pub handler: String,
+    pub alert_kind: String,
+    pub result: String,
+    pub dry_run: bool,
+}
+
+impl ActionEngine {
+    pub fn from_config(config: &ActionConfig) -> Self {
+        let mut handlers: Vec<Box<dyn ActionHandler>> = Vec::new();
+
+        // Log action is always enabled
+        handlers.push(Box::new(LogAction));
+
+        if let Some(ref url) = config.webhook_url {
+            handlers.push(Box::new(WebhookAction { url: url.clone() }));
+        }
+
+        if config.slurm_drain {
+            handlers.push(Box::new(SlurmDrainAction));
+        }
+
+        if config.port_disable {
+            handlers.push(Box::new(PortDisableAction));
+        }
+
+        Self {
+            handlers,
+            rate_limit: Duration::from_secs(60),
+            last_action: None,
+            dry_run: config.dry_run,
+            audit_log: Vec::new(),
+        }
+    }
+
+    /// Dispatch an alert to all configured handlers, respecting rate limiting.
+    pub fn dispatch(&mut self, alert: &Alert, blast_radius: &BlastRadius) {
+        if let Some(last) = self.last_action {
+            if last.elapsed() < self.rate_limit {
+                return;
+            }
+        }
+
+        let now = Instant::now();
+        self.last_action = Some(now);
+
+        for handler in &self.handlers {
+            let result = if self.dry_run {
+                info!(
+                    handler = handler.name(),
+                    alert = alert.kind_name(),
+                    "[DRY RUN] would execute action"
+                );
+                Ok(())
+            } else {
+                handler.on_alert(alert, blast_radius)
+            };
+
+            let entry = AuditEntry {
+                timestamp: now,
+                handler: handler.name().into(),
+                alert_kind: alert.kind_name().into(),
+                result: match &result {
+                    Ok(()) => "ok".into(),
+                    Err(e) => format!("error: {e}"),
+                },
+                dry_run: self.dry_run,
+            };
+            self.audit_log.push(entry);
+
+            if let Err(e) = result {
+                warn!(handler = handler.name(), "action failed: {e}");
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn audit_log(&self) -> &[AuditEntry] {
+        &self.audit_log
+    }
+
+    #[must_use]
+    pub fn handler_count(&self) -> usize {
+        self.handlers.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in action handlers
+// ---------------------------------------------------------------------------
+
+/// Always-on structured logging of actions.
+struct LogAction;
+
+impl ActionHandler for LogAction {
+    fn name(&self) -> &str {
+        "log"
+    }
+
+    fn on_alert(&self, alert: &Alert, blast_radius: &BlastRadius) -> Result<(), String> {
+        info!(
+            kind = alert.kind_name(),
+            severity = %alert.severity,
+            message = %alert.message,
+            affected = blast_radius.summary(),
+            "ARGUS action: alert"
+        );
+        Ok(())
+    }
+}
+
+/// POST alert JSON to a configurable webhook URL (PagerDuty, Slack, custom).
+struct WebhookAction {
+    url: String,
+}
+
+impl ActionHandler for WebhookAction {
+    fn name(&self) -> &str {
+        "webhook"
+    }
+
+    fn on_alert(&self, alert: &Alert, blast_radius: &BlastRadius) -> Result<(), String> {
+        let payload = serde_json::json!({
+            "source": "argus",
+            "severity": alert.severity.to_string(),
+            "kind": alert.kind_name(),
+            "message": alert.message,
+            "affected": blast_radius.summary(),
+            "timestamp_ns": alert.timestamp_ns,
+        });
+
+        // Use a blocking HTTP client to avoid async in the action path.
+        // In production, this would use reqwest or ureq.
+        // For now, we shell out to curl for simplicity and zero extra deps.
+        let json_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+
+        let output = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                &json_str,
+                "--max-time",
+                "5",
+                &self.url,
+            ])
+            .output()
+            .map_err(|e| format!("curl failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("webhook POST failed: {stderr}"));
+        }
+
+        info!(url = %self.url, "webhook delivered");
+        Ok(())
+    }
+}
+
+/// Drain this node via SLURM. Only fires on Critical alerts with link_downed.
+struct SlurmDrainAction;
+
+impl ActionHandler for SlurmDrainAction {
+    fn name(&self) -> &str {
+        "slurm_drain"
+    }
+
+    fn on_alert(&self, alert: &Alert, _blast_radius: &BlastRadius) -> Result<(), String> {
+        if alert.severity != argus_common::HealthState::Critical {
+            return Ok(());
+        }
+
+        // Only drain on actual link down events
+        if let argus_common::AlertKind::RdmaLinkDegradation {
+            link_downed_delta, ..
+        } = &alert.kind
+        {
+            if *link_downed_delta == 0 {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        }
+
+        let hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+
+        let reason = format!("ARGUS: {}", alert.message);
+        let output = std::process::Command::new("scontrol")
+            .args([
+                "update",
+                &format!("NodeName={hostname}"),
+                "State=DRAIN",
+                &format!("Reason={reason}"),
+            ])
+            .output()
+            .map_err(|e| format!("scontrol failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("scontrol drain failed: {stderr}"));
+        }
+
+        info!(hostname, "SLURM node drained");
+        Ok(())
+    }
+}
+
+/// Disable an IB port via sysfs admin_state. Requires --enable-port-disable.
+struct PortDisableAction;
+
+impl ActionHandler for PortDisableAction {
+    fn name(&self) -> &str {
+        "port_disable"
+    }
+
+    fn on_alert(&self, alert: &Alert, _blast_radius: &BlastRadius) -> Result<(), String> {
+        if alert.severity != argus_common::HealthState::Critical {
+            return Ok(());
+        }
+
+        // Only on link downed
+        if let argus_common::AlertKind::RdmaLinkDegradation {
+            link_downed_delta, ..
+        } = &alert.kind
+        {
+            if *link_downed_delta == 0 {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        }
+
+        // Find IB ports to disable
+        let ib_path = std::path::Path::new("/sys/class/infiniband");
+        if let Ok(devices) = std::fs::read_dir(ib_path) {
+            for device in devices.flatten() {
+                let ports_dir = device.path().join("ports");
+                if let Ok(ports) = std::fs::read_dir(&ports_dir) {
+                    for port in ports.flatten() {
+                        let admin_state = port.path().join("admin_state");
+                        if admin_state.exists() {
+                            if let Err(e) = std::fs::write(&admin_state, "0") {
+                                warn!(
+                                    path = %admin_state.display(),
+                                    "failed to disable port: {e}"
+                                );
+                            } else {
+                                info!(
+                                    path = %admin_state.display(),
+                                    "IB port disabled"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argus_common::{AlertKind, HealthState};
+
+    fn make_alert(severity: HealthState) -> Alert {
+        Alert {
+            timestamp_ns: 1_000_000_000,
+            kind: AlertKind::RdmaLinkDegradation {
+                symbol_error_delta: 10,
+                link_downed_delta: 1,
+                rcv_error_delta: 0,
+                xmit_discard_delta: 0,
+            },
+            severity,
+            message: "test alert".into(),
+        }
+    }
+
+    #[test]
+    fn action_engine_from_default_config() {
+        let config = ActionConfig::default();
+        let engine = ActionEngine::from_config(&config);
+        // LogAction is always present
+        assert_eq!(engine.handler_count(), 1);
+    }
+
+    #[test]
+    fn action_engine_with_all_handlers() {
+        let config = ActionConfig {
+            webhook_url: Some("http://example.com/hook".into()),
+            slurm_drain: true,
+            port_disable: true,
+            dry_run: true,
+        };
+        let engine = ActionEngine::from_config(&config);
+        assert_eq!(engine.handler_count(), 4);
+    }
+
+    #[test]
+    fn dry_run_does_not_execute() {
+        let config = ActionConfig {
+            dry_run: true,
+            ..Default::default()
+        };
+        let mut engine = ActionEngine::from_config(&config);
+        let alert = make_alert(HealthState::Critical);
+        let blast = BlastRadius::default();
+
+        engine.dispatch(&alert, &blast);
+        assert_eq!(engine.audit_log().len(), 1);
+        assert!(engine.audit_log()[0].dry_run);
+    }
+
+    #[test]
+    fn rate_limiting_skips_rapid_fire() {
+        let config = ActionConfig::default();
+        let mut engine = ActionEngine::from_config(&config);
+        let alert = make_alert(HealthState::Critical);
+        let blast = BlastRadius::default();
+
+        engine.dispatch(&alert, &blast);
+        engine.dispatch(&alert, &blast);
+        // Second dispatch should be rate-limited
+        assert_eq!(engine.audit_log().len(), 1);
+    }
+}
