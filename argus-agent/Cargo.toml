@@ -34,6 +34,7 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 http-body-util = "0.1"
 sha2 = "0.10"
 hex = "0.4.3"
+hostname = "0.4.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = "0.13"
