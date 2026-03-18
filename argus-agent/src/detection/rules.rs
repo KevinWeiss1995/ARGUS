@@ -682,6 +682,100 @@ impl DetectionRule for ThroughputDropRule {
 }
 
 // ---------------------------------------------------------------------------
+// CQ Jitter / Micro-Stall Detection
+// Fires when CQ completions show >50us stalls, indicating silent degradation
+// that traditional counter-based tools (UFM) completely miss.
+// ---------------------------------------------------------------------------
+
+pub struct CqJitterRule {
+    p99_stats: RollingStats,
+    z_threshold: f64,
+    min_completions: u64,
+}
+
+impl CqJitterRule {
+    #[must_use]
+    pub fn new(z_threshold: f64) -> Self {
+        Self {
+            p99_stats: RollingStats::with_clamp(0.1, 5.0),
+            z_threshold,
+            min_completions: 10,
+        }
+    }
+}
+
+impl Default for CqJitterRule {
+    fn default() -> Self {
+        Self::new(3.0)
+    }
+}
+
+impl DetectionRule for CqJitterRule {
+    fn name(&self) -> &str {
+        "cq_jitter_stall"
+    }
+
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let cq = &metrics.cq_jitter;
+        if cq.completion_count < self.min_completions {
+            return None;
+        }
+
+        let p99 = cq.estimated_p99_ns();
+        let z = self.p99_stats.z_score(p99);
+        self.p99_stats.push(p99);
+
+        // Immediate alert on any stalls (>50us completions)
+        if cq.stall_count > 0 {
+            let severity = if cq.stall_count > 10 || cq.max_latency_ns > 1_000_000 {
+                HealthState::Critical
+            } else {
+                HealthState::Degraded
+            };
+            return Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::CqJitterStall {
+                    stall_count: cq.stall_count,
+                    max_latency_ns: cq.max_latency_ns,
+                    p99_estimate_ns: p99,
+                },
+                severity,
+                message: format!(
+                    "CQ micro-stalls detected: {} stalls, max {:.0}us, p99≈{:.0}us",
+                    cq.stall_count,
+                    cq.max_latency_ns as f64 / 1000.0,
+                    p99 / 1000.0,
+                ),
+            });
+        }
+
+        // p99 anomaly detection after warmup
+        if self.p99_stats.is_warmed_up() && z >= self.z_threshold {
+            return Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::CqJitterStall {
+                    stall_count: 0,
+                    max_latency_ns: cq.max_latency_ns,
+                    p99_estimate_ns: p99,
+                },
+                severity: HealthState::Degraded,
+                message: format!(
+                    "CQ latency anomaly: p99≈{:.0}us (z={z:.1}, baseline≈{:.0}us)",
+                    p99 / 1000.0,
+                    self.p99_stats.mean() / 1000.0,
+                ),
+            });
+        }
+
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Predictive: NAPI Saturation (work/poll approaching budget)
 // ---------------------------------------------------------------------------
 
@@ -739,6 +833,141 @@ impl DetectionRule for NapiSaturationRule {
         } else {
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Congestion Spread / Victim Buffer Detection
+// On lossless IB fabrics, a bad upstream link causes credit stalls that
+// propagate to healthy nodes. Detects rising port_xmit_wait with no
+// local errors — "this node is healthy but being starved by a neighbor".
+// ---------------------------------------------------------------------------
+
+pub struct CongestionSpreadRule {
+    xmit_wait_stats: RollingStats,
+    z_threshold: f64,
+}
+
+impl CongestionSpreadRule {
+    #[must_use]
+    pub fn new(z_threshold: f64) -> Self {
+        Self {
+            xmit_wait_stats: RollingStats::with_clamp(0.1, 5.0),
+            z_threshold,
+        }
+    }
+}
+
+impl Default for CongestionSpreadRule {
+    fn default() -> Self {
+        Self::new(3.0)
+    }
+}
+
+impl DetectionRule for CongestionSpreadRule {
+    fn name(&self) -> &str {
+        "congestion_spread"
+    }
+
+    fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
+        None
+    }
+
+    fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let d = &metrics.ib_counter_deltas;
+        let xmit_wait = d.port_xmit_wait_delta as f64;
+
+        let z = self.xmit_wait_stats.z_score(xmit_wait);
+        self.xmit_wait_stats.push(xmit_wait);
+
+        if !self.xmit_wait_stats.is_warmed_up() || xmit_wait < 1.0 {
+            return None;
+        }
+
+        // Only flag congestion spread if THIS port has no hard errors —
+        // the problem is upstream, not local.
+        let local_errors = d.total_hard_error_delta() + d.link_error_recovery_delta;
+        if local_errors > 0 {
+            return None;
+        }
+
+        if z >= self.z_threshold {
+            let severity = if z >= self.z_threshold * 2.0 {
+                HealthState::Critical
+            } else {
+                HealthState::Degraded
+            };
+            return Some(Alert {
+                timestamp_ns: metrics.window_end_ns,
+                kind: AlertKind::CongestionSpread {
+                    xmit_wait_delta: d.port_xmit_wait_delta,
+                },
+                severity,
+                message: format!(
+                    "Credit stall detected — congestion spreading from upstream (xmit_wait +{}, z={z:.1})",
+                    d.port_xmit_wait_delta
+                ),
+            });
+        }
+
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PCIe Bottleneck Correlation
+// If CQ jitter correlates with high slab pressure but NO IB errors,
+// it's a PCIe-to-IB bottleneck, not a cable fault.
+// ---------------------------------------------------------------------------
+
+pub struct PcieBottleneckRule {
+    pub min_stalls: u64,
+    pub min_slab_allocs: u64,
+}
+
+impl Default for PcieBottleneckRule {
+    fn default() -> Self {
+        Self {
+            min_stalls: 5,
+            min_slab_allocs: 1000,
+        }
+    }
+}
+
+impl DetectionRule for PcieBottleneckRule {
+    fn name(&self) -> &str {
+        "pcie_bottleneck"
+    }
+
+    fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert> {
+        let cq = &metrics.cq_jitter;
+        let slab = &metrics.slab_metrics;
+        let d = &metrics.ib_counter_deltas;
+
+        if cq.stall_count < self.min_stalls {
+            return None;
+        }
+        if slab.alloc_count < self.min_slab_allocs {
+            return None;
+        }
+        // Key insight: CQ stalls + slab pressure WITHOUT IB errors = PCIe bottleneck
+        if d.total_all_errors_delta() > 0 {
+            return None;
+        }
+
+        Some(Alert {
+            timestamp_ns: metrics.window_end_ns,
+            kind: AlertKind::PcieBottleneck {
+                cq_stalls: cq.stall_count,
+                slab_pressure: slab.alloc_count,
+                ib_errors: 0,
+            },
+            severity: HealthState::Degraded,
+            message: format!(
+                "PCIe bottleneck suspected: {} CQ stalls + {} slab allocs, no IB errors — not a cable fault",
+                cq.stall_count, slab.alloc_count
+            ),
+        })
     }
 }
 
