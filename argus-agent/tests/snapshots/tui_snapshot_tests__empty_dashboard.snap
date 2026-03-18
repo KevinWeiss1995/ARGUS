@@ -15,15 +15,15 @@ expression: rendered
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ RDMA Traffic (idl┐┌ IB Errors (/windo┐┌ Slab Allocs (/win┐┌ IRQ Rate (/window┐
-│  Waiting for data││  Waiting for data││  Waiting for data││  Waiting for data│
-│                  ││                  ││                  ││                  │
-│                  ││                  ││                  ││                  │
-│                  ││                  ││                  ││                  │
-│                  ││                  ││                  ││                  │
-│                  ││                  ││                  ││                  │
-│                  ││                  ││                  ││                  │
-└──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
+┌ RDMA Traffic ┐┌ CQ Latency p9┐┌ IB Errors (/w┐┌ Slab Allocs (┐┌ IRQ Rate (/wi┐
+│  Waiting for ││  Waiting for ││  Waiting for ││  Waiting for ││  Waiting for │
+│              ││              ││              ││              ││              │
+│              ││              ││              ││              ││              │
+│              ││              ││              ││              ││              │
+│              ││              ││              ││              ││              │
+│              ││              ││              ││              ││              │
+│              ││              ││              ││              ││              │
+└──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
 ┌ Recent Alerts ───────────────────────────────────────────────────────────────┐
 │  No alerts - system nominal                                                  │
 │                                                                              │
