@@ -73,6 +73,7 @@ const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
         HardwareCounter::ExcessiveBufferOverrunErrors,
     ),
     ("link_error_recovery", HardwareCounter::LinkErrorRecovery),
+    ("port_xmit_wait", HardwareCounter::PortXmitWait),
 ];
 
 /// hw_counters/ exposed by rxe and other drivers.

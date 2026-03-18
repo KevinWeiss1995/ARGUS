@@ -4,7 +4,10 @@
 pub mod ebpf;
 pub mod ebpf_parse;
 pub mod hwcounters;
+#[cfg(target_os = "linux")]
+pub mod kallsyms;
 pub mod mock;
+pub mod process_resolver;
 pub mod replay;
 #[cfg(target_os = "linux")]
 pub mod tracepoint_format;
