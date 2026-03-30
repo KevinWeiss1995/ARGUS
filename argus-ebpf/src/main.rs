@@ -11,7 +11,7 @@ use aya_ebpf::{
     maps::{Array, LruHashMap, PerCpuArray},
 };
 
-/// Tracepoint field offsets, populated by userspace before probes are attached.
+/// Field offsets, populated by userspace before probes are attached.
 /// Zero means "not configured" — probes skip events when their offsets are zero.
 ///
 /// Index assignments (must match argus-agent/src/sources/tracepoint_format.rs):
@@ -20,6 +20,8 @@ use aya_ebpf::{
 ///   2 = napi/napi_poll → "budget" field
 ///   3 = kmem/kmem_cache_alloc → "bytes_req" field
 ///   4 = kmem/kmem_cache_alloc → "bytes_alloc" field
+///   5 = struct ib_qp → "qp_num" field (byte offset, from BTF)
+///   6 = struct ib_wc → "qp" pointer field (byte offset, from BTF)
 #[map]
 static OFFSETS: Array<u32> = Array::with_max_entries(8, 0);
 
@@ -56,6 +58,12 @@ static CQ_JITTER_STATS: PerCpuArray<[u64; 4]> = PerCpuArray::with_max_entries(1,
 /// Updated on every work request submit with the calling process's TGID.
 #[map]
 static QP_OWNERS: LruHashMap<u32, u32> = LruHashMap::with_max_entries(4096, 0);
+
+/// Scratch space for CQ poll entry→return correlation.
+/// Key = pid_tgid (identifies the thread calling poll_cq).
+/// Value = wc pointer (saved at function entry, read at function return).
+#[map]
+static CQ_POLL_SCRATCH: LruHashMap<u64, u64> = LruHashMap::with_max_entries(256, 0);
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
