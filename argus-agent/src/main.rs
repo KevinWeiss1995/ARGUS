@@ -219,8 +219,12 @@ fn run_live_mode(
                     tracing::info!(affected = blast.summary(), "blast radius resolved");
                 }
                 for mut alert in alerts {
-                    // Dispatch to action handlers (webhook, drain, etc.)
                     action_engine.dispatch(&alert, &blast);
+
+                    // Record to Prometheus
+                    if let Ok(exp) = prom_exporter.lock() {
+                        exp.record_alert(alert.kind_name(), &alert.severity.to_string());
+                    }
 
                     if !blast.is_empty() {
                         alert.message =
@@ -241,9 +245,17 @@ fn run_live_mode(
             dash_state.event_count = event_count;
             dash_state.uptime_secs = start.elapsed().as_secs_f64();
 
-            // Prometheus
-            if let Ok(exp) = prom_exporter.lock() {
+            // Prometheus — update metrics and per-device IB counters
+            if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
+                // Per-device IB counters
+                for (device, port, _dev_type) in hw_reader.discovered_ports() {
+                    exp.update_ib_counters(
+                        &device,
+                        &port.to_string(),
+                        &pipeline.current_metrics().ib_counter_deltas,
+                    );
+                }
             }
             if let Ok(mut hs) = health_snapshot.lock() {
                 hs.state = dash_state.health;
@@ -340,6 +352,9 @@ async fn run_event_mode(
 
             let alerts = pipeline.evaluate();
             for alert in alerts {
+                if let Ok(exp) = prom_exporter.lock() {
+                    exp.record_alert(alert.kind_name(), &alert.severity.to_string());
+                }
                 telemetry.record_alert(alert.clone());
                 dash_state.recent_alerts.push(alert);
                 if dash_state.recent_alerts.len() > 100 {
@@ -350,7 +365,7 @@ async fn run_event_mode(
             dash_state.metrics = pipeline.current_metrics().clone();
             dash_state.push_metrics_snapshot();
 
-            if let Ok(exp) = prom_exporter.lock() {
+            if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
             }
             if let Ok(mut hs) = health_snapshot.lock() {
