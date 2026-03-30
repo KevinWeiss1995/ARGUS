@@ -211,6 +211,14 @@ impl HwCounterReader {
         }
     }
 
+    /// Returns `(device_name, port_num, device_type)` tuples for all discovered ports.
+    pub fn discovered_ports(&self) -> Vec<(String, u32, DeviceType)> {
+        self.ports
+            .iter()
+            .map(|p| (p.device.clone(), p.port_num, p.device_type))
+            .collect()
+    }
+
     /// Returns device names and port numbers for logging.
     pub fn describe(&self) -> Vec<String> {
         self.ports
