@@ -131,16 +131,34 @@ mod inner {
                         failures.push(format!("kprobe/{submit_fn}: {e}"));
                     }
                 }
-                match Self::attach_kprobe(&mut ebpf, "kprobe_cq_poll", poll_fn) {
+
+                // CQ poll uses an entry kprobe + kretprobe pair
+                let mut poll_entry_ok = false;
+                match Self::attach_kprobe(&mut ebpf, "kprobe_cq_poll_entry", poll_fn) {
                     Ok(()) => {
-                        info!(func = poll_fn, "CQ poll kprobe attached");
+                        info!(func = poll_fn, "CQ poll entry kprobe attached");
                         attached += 1;
                         attached_probes.push(format!("kprobe/{poll_fn}"));
-                        cq_kprobes_attached = true;
+                        poll_entry_ok = true;
                     }
                     Err(e) => {
-                        warn!(func = poll_fn, "CQ poll kprobe failed: {e}");
+                        warn!(func = poll_fn, "CQ poll entry kprobe failed: {e}");
                         failures.push(format!("kprobe/{poll_fn}: {e}"));
+                    }
+                }
+
+                if poll_entry_ok {
+                    match Self::attach_kretprobe(&mut ebpf, "kretprobe_cq_poll", poll_fn) {
+                        Ok(()) => {
+                            info!(func = poll_fn, "CQ poll kretprobe attached");
+                            attached += 1;
+                            attached_probes.push(format!("kretprobe/{poll_fn}"));
+                            cq_kprobes_attached = true;
+                        }
+                        Err(e) => {
+                            warn!(func = poll_fn, "CQ poll kretprobe failed: {e}");
+                            failures.push(format!("kretprobe/{poll_fn}: {e}"));
+                        }
                     }
                 }
             } else {
@@ -237,10 +255,25 @@ mod inner {
 
         /// Read tracepoint format files from tracefs and populate the BPF OFFSETS map
         /// so probes read fields at the correct kernel-specific byte offsets.
+        /// Also populates struct field offsets (ib_qp, ib_wc) from BTF/fallback.
         fn populate_offsets(ebpf: &mut Ebpf) -> Result<(), EventSourceError> {
-            let offsets = tracepoint_format::discover_offsets();
+            let mut offsets = tracepoint_format::discover_offsets();
+
+            // Discover kprobe struct field offsets (ib_qp.qp_num, ib_wc.qp)
+            let field_offsets = kallsyms::discover_kprobe_field_offsets();
+            if let Some(off) = field_offsets.ib_qp_qp_num {
+                info!(offset = off, "ib_qp.qp_num offset");
+                offsets.push((tracepoint_format::OFF_IB_QP_QP_NUM, off));
+            }
+            if let Some(off) = field_offsets.ib_wc_qp {
+                info!(offset = off, "ib_wc.qp offset");
+                offsets.push((tracepoint_format::OFF_IB_WC_QP, off));
+            }
+
             if offsets.is_empty() {
-                warn!("no tracepoint offsets discovered — probes will skip events until offsets are populated");
+                warn!(
+                    "no offsets discovered — probes will skip events until offsets are populated"
+                );
                 return Ok(());
             }
 
@@ -259,7 +292,7 @@ mod inner {
 
             info!(
                 count = offsets.len(),
-                "tracepoint field offsets populated from tracefs"
+                "field offsets populated (tracefs + BTF)"
             );
             Ok(())
         }
@@ -276,6 +309,28 @@ mod inner {
                 })?
                 .try_into()
                 .map_err(|e| EventSourceError::Other(format!("not a kprobe: {e}")))?;
+
+            prog.load()
+                .map_err(|e| EventSourceError::Other(format!("failed to load {prog_name}: {e}")))?;
+            prog.attach(func_name, 0).map_err(|e| {
+                EventSourceError::Other(format!("failed to attach {prog_name} to {func_name}: {e}"))
+            })?;
+
+            Ok(())
+        }
+
+        fn attach_kretprobe(
+            ebpf: &mut Ebpf,
+            prog_name: &str,
+            func_name: &str,
+        ) -> Result<(), EventSourceError> {
+            let prog: &mut KProbe = ebpf
+                .program_mut(prog_name)
+                .ok_or_else(|| {
+                    EventSourceError::Other(format!("program {prog_name} not found in eBPF object"))
+                })?
+                .try_into()
+                .map_err(|e| EventSourceError::Other(format!("not a kretprobe: {e}")))?;
 
             prog.load()
                 .map_err(|e| EventSourceError::Other(format!("failed to load {prog_name}: {e}")))?;
