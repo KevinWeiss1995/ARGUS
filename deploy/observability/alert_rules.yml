@@ -1,0 +1,58 @@
+groups:
+  - name: argus.rules
+    rules:
+      - alert: ArgusNodeDegraded
+        expr: argus_health_state == 1
+        for: 30s
+        labels:
+          severity: DEGRADED
+        annotations:
+          summary: "ARGUS node {{ $labels.instance }} is degraded"
+
+      - alert: ArgusNodeCritical
+        expr: argus_health_state == 2
+        for: 15s
+        labels:
+          severity: CRITICAL
+        annotations:
+          summary: "ARGUS node {{ $labels.instance }} is critical"
+
+      - alert: ArgusLinkDowned
+        expr: argus_ib_link_downed_delta > 0
+        for: 0s
+        labels:
+          severity: CRITICAL
+        annotations:
+          summary: "IB link down on {{ $labels.device }}/{{ $labels.port }}"
+
+      - alert: ArgusHighErrorRate
+        expr: (argus_ib_symbol_errors_delta + argus_ib_port_rcv_errors_delta) > 10
+        for: 15s
+        labels:
+          severity: DEGRADED
+        annotations:
+          summary: "High IB error rate on {{ $labels.device }}/{{ $labels.port }}"
+
+      - alert: ArgusCqStalls
+        expr: argus_cq_max_latency_ns > 1000000
+        for: 15s
+        labels:
+          severity: DEGRADED
+        annotations:
+          summary: "CQ stalls detected on {{ $labels.instance }}"
+
+      - alert: ArgusLinkRecovery
+        expr: argus_ib_link_error_recovery_delta > 0
+        for: 0s
+        labels:
+          severity: DEGRADED
+        annotations:
+          summary: "IB link recovery on {{ $labels.device }}/{{ $labels.port }}"
+
+      - alert: ArgusCongestion
+        expr: argus_ib_port_xmit_wait_delta > 0
+        for: 30s
+        labels:
+          severity: DEGRADED
+        annotations:
+          summary: "IB congestion on {{ $labels.device }}/{{ $labels.port }}"

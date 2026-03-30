@@ -1,0 +1,25 @@
+global:
+  resolve_timeout: 1m
+
+route:
+  group_by: ["alertname", "node", "severity"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+  receiver: default
+  routes:
+    - match:
+        severity: CRITICAL
+      receiver: default
+      group_wait: 5s
+
+inhibit_rules:
+  - source_matchers:
+      - severity = CRITICAL
+    target_matchers:
+      - severity = DEGRADED
+    equal: ["alertname", "node"]
+
+receivers:
+  - name: default
+    webhook_configs: []
