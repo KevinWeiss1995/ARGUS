@@ -14,6 +14,10 @@ pub const OFF_NAPI_WORK: u32 = 1;
 pub const OFF_NAPI_BUDGET: u32 = 2;
 pub const OFF_SLAB_BYTES_REQ: u32 = 3;
 pub const OFF_SLAB_BYTES_ALLOC: u32 = 4;
+/// Byte offset of `qp_num` within `struct ib_qp` (kprobe on post_send).
+pub const OFF_IB_QP_QP_NUM: u32 = 5;
+/// Byte offset of `qp` pointer within `struct ib_wc` (kretprobe on poll_cq).
+pub const OFF_IB_WC_QP: u32 = 6;
 
 #[derive(Debug, Clone)]
 pub struct TracepointField {
