@@ -451,15 +451,19 @@ pub fn render_to_string(state: &DashboardState, width: u16, height: u16) -> Stri
         .expect("draw");
     let buf = terminal.backend().buffer().clone();
 
-    let mut output = String::new();
+    let mut output = String::with_capacity(usize::from(width) * usize::from(height) + usize::from(height));
+    let mut line = String::with_capacity(usize::from(width));
     for y in 0..height {
+        line.clear();
         for x in 0..width {
             let cell = &buf[(x, y)];
-            output.push_str(cell.symbol());
+            line.push_str(cell.symbol());
         }
-        // Trim trailing whitespace per line for cleaner snapshots
-        let trimmed = output.trim_end();
-        output = trimmed.to_string();
+        // Trim only this row's trailing whitespace — trimming the whole
+        // accumulated buffer is O(N²) and silently eats blank rows whose
+        // preceding '\n' gets stripped along with the trailing spaces.
+        let end = line.trim_end().len();
+        output.push_str(&line[..end]);
         output.push('\n');
     }
     output
