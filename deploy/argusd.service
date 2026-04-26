@@ -1,0 +1,43 @@
+[Unit]
+Description=ARGUS - Adaptive RDMA Guard & Utilization Sentinel
+Documentation=https://github.com/KevinWeiss1995/ARGUS
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/argus/argusd.conf
+ExecStart=/usr/local/bin/argusd \
+    --mode ${ARGUS_MODE} \
+    --ebpf-path ${ARGUS_EBPF_PATH} \
+    --metrics-addr ${ARGUS_METRICS_ADDR} \
+    --log-level ${ARGUS_LOG_LEVEL} \
+    --window-secs ${ARGUS_WINDOW_SECS} \
+    ${ARGUS_EXTRA_ARGS}
+
+Restart=on-failure
+RestartSec=5
+WatchdogSec=60
+
+# Resource limits — ARGUS targets <1% CPU overhead
+CPUQuota=5%
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=256M
+
+# Security hardening — root is required for eBPF + sysfs, but we lock
+# down everything else.
+NoNewPrivileges=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/sys
+PrivateTmp=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+
+# Logging to journald (agent emits JSON when --tui is absent)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argusd
+
+[Install]
+WantedBy=multi-user.target

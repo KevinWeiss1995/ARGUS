@@ -138,6 +138,22 @@ audit:
     cargo audit
     cargo deny check advisories
 
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+
+# Build and install argusd as a systemd service (requires sudo)
+install:
+    sudo scripts/install.sh
+
+# Install pre-built binaries only (skip compilation)
+install-no-build:
+    sudo scripts/install.sh --no-build
+
+# Start the Prometheus + Grafana observability stack
+install-observability:
+    deploy/observability/scripts/start-observability.sh
+
 # Show what the Jetson / Linux target can do
 check-capabilities:
     @echo "=== System ==="
