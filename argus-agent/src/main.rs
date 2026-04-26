@@ -462,6 +462,7 @@ async fn shutdown_signal() {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn verify_ebpf_hash(path: &std::path::Path, expected: &str) -> Result<()> {
     use sha2::{Digest, Sha256};
     let data = std::fs::read(path)
