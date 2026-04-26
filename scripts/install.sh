@@ -94,12 +94,19 @@ resolve_cargo_env() {
 
 resolve_cargo_env
 
-# Run a command as the build user (not root) to avoid cargo/rustup permission mess
+# Run a command as the build user (not root) to avoid cargo/rustup permission mess.
+# We use `env PATH=...` instead of --preserve-env because sudoers secure_path
+# overrides PATH even with --preserve-env.
 as_build_user() {
     if [[ "$BUILD_USER" == "root" ]]; then
         "$@"
     else
-        sudo -u "$BUILD_USER" --preserve-env=PATH,RUSTUP_HOME,CARGO_HOME,HOME -- "$@"
+        sudo -u "$BUILD_USER" -- env \
+            "PATH=$PATH" \
+            "HOME=$BUILD_HOME" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-$BUILD_HOME/.rustup}" \
+            "CARGO_HOME=${CARGO_HOME:-$BUILD_HOME/.cargo}" \
+            "$@"
     fi
 }
 
