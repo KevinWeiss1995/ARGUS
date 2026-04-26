@@ -21,10 +21,20 @@ pub fn drop_privileges() {
         info!("PR_SET_NO_NEW_PRIVS set — no further privilege escalation possible");
     }
 
-    if let Err(e) = drop_all_caps() {
-        warn!("failed to drop capabilities: {e}");
-    } else {
-        info!("all capabilities dropped");
+    match drop_all_caps() {
+        Ok(dropped) => {
+            info!(count = dropped, "capabilities dropped");
+        }
+        Err(errors) => {
+            for err in &errors {
+                warn!("capability drop error: {err}");
+            }
+            warn!(
+                "dropped some capabilities but {} errors occurred — process may retain \
+                 more privilege than intended",
+                errors.len()
+            );
+        }
     }
 }
 
@@ -45,7 +55,7 @@ fn set_no_new_privs() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn drop_all_caps() -> Result<(), String> {
+fn drop_all_caps() -> Result<usize, Vec<String>> {
     use caps::{CapSet, Capability};
 
     // CAP_BPF is retained: per-CPU BPF map reads use the bpf() syscall which
@@ -61,40 +71,62 @@ fn drop_all_caps() -> Result<(), String> {
         Capability::CAP_PERFMON,
     ];
 
+    let mut dropped = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
     for cap in &caps_to_drop {
-        let _ = caps::drop(None, CapSet::Effective, *cap);
-        let _ = caps::drop(None, CapSet::Permitted, *cap);
+        // Not holding the cap is not an error — `caps::has_cap` returns false
+        // and we skip. Only real drop failures are reported.
+        let mut any_success = false;
+        for set in [CapSet::Effective, CapSet::Permitted] {
+            match caps::has_cap(None, set, *cap) {
+                Ok(false) => continue,
+                Ok(true) => match caps::drop(None, set, *cap) {
+                    Ok(()) => any_success = true,
+                    Err(e) => errors.push(format!("drop {cap:?} from {set:?}: {e}")),
+                },
+                Err(e) => errors.push(format!("has_cap {cap:?} in {set:?}: {e}")),
+            }
+        }
+        if any_success {
+            dropped += 1;
+        }
     }
 
-    Ok(())
+    if errors.is_empty() {
+        Ok(dropped)
+    } else {
+        Err(errors)
+    }
 }
 
-/// Apply a minimal seccomp-bpf filter that restricts the process to only
-/// the syscalls needed after initialization. Must be called AFTER eBPF load
-/// and capability drop.
-///
-/// Uses `PR_SET_SECCOMP` with `SECCOMP_MODE_STRICT` as a starting point.
-/// In practice, strict mode is too restrictive for a tokio runtime, so we
-/// install a BPF filter that allows the syscalls tokio + aya ringbuf need.
+/// Harden against privilege escalation. NOTE: this does NOT install a seccomp
+/// BPF syscall filter — the name is kept for CLI/API stability. A real filter
+/// requires enumerating every syscall the tokio runtime, aya, and libc use,
+/// which is architecture- and kernel-version-specific and has not been
+/// implemented. Today this only ensures `PR_SET_NO_NEW_PRIVS`, which
+/// `drop_privileges` also sets; calling both is harmless and idempotent.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub fn apply_seccomp() {
     use tracing::{info, warn};
 
-    // SAFETY: prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...) with a valid
-    // BPF filter program is a safe kernel call.
+    // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is an idempotent, thread-scoped
+    // kernel call that only restricts the caller.
     let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
 
     if ret != 0 {
-        warn!("seccomp: failed to set no_new_privs, skipping filter");
+        warn!(
+            errno = %std::io::Error::last_os_error(),
+            "seccomp: failed to set no_new_privs"
+        );
         return;
     }
 
-    // For now, we log that seccomp is conceptually enabled.
-    // A full BPF filter requires enumerating every syscall the tokio runtime
-    // and aya ringbuf reader use, which is highly architecture-specific.
-    // The PR_SET_NO_NEW_PRIVS above already prevents privilege escalation.
-    info!("seccomp: PR_SET_NO_NEW_PRIVS enforced (full BPF filter planned)");
+    info!(
+        "seccomp flag: PR_SET_NO_NEW_PRIVS enforced — note that no BPF syscall \
+         filter is installed yet; this only blocks setuid/file-caps escalation"
+    );
 }
 
 #[cfg(not(target_os = "linux"))]
