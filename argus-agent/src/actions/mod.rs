@@ -10,8 +10,9 @@
 //! is available for testing. All actions are logged to an audit trail.
 
 use argus_common::Alert;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::sources::process_resolver::BlastRadius;
 
@@ -36,8 +37,13 @@ pub struct ActionEngine {
     rate_limit: Duration,
     last_action: Option<Instant>,
     dry_run: bool,
-    audit_log: Vec<AuditEntry>,
+    audit_log: VecDeque<AuditEntry>,
+    audit_log_capacity: usize,
 }
+
+/// Cap on retained audit entries before FIFO eviction.
+/// At one alert/sec, this holds ~2.7 hours of audit history.
+const DEFAULT_AUDIT_LOG_CAPACITY: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
@@ -72,14 +78,26 @@ impl ActionEngine {
             rate_limit: Duration::from_secs(60),
             last_action: None,
             dry_run: config.dry_run,
-            audit_log: Vec::new(),
+            audit_log: VecDeque::with_capacity(DEFAULT_AUDIT_LOG_CAPACITY),
+            audit_log_capacity: DEFAULT_AUDIT_LOG_CAPACITY,
         }
     }
 
     /// Dispatch an alert to all configured handlers, respecting rate limiting.
     pub fn dispatch(&mut self, alert: &Alert, blast_radius: &BlastRadius) {
         if let Some(last) = self.last_action {
-            if last.elapsed() < self.rate_limit {
+            let elapsed = last.elapsed();
+            if elapsed < self.rate_limit {
+                let remaining = self
+                    .rate_limit
+                    .checked_sub(elapsed)
+                    .unwrap_or(Duration::ZERO);
+                debug!(
+                    alert = alert.kind_name(),
+                    severity = %alert.severity,
+                    remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX),
+                    "action engine rate-limited: dropping alert"
+                );
                 return;
             }
         }
@@ -109,7 +127,10 @@ impl ActionEngine {
                 },
                 dry_run: self.dry_run,
             };
-            self.audit_log.push(entry);
+            if self.audit_log.len() >= self.audit_log_capacity {
+                self.audit_log.pop_front();
+            }
+            self.audit_log.push_back(entry);
 
             if let Err(e) = result {
                 warn!(handler = handler.name(), "action failed: {e}");
@@ -117,9 +138,10 @@ impl ActionEngine {
         }
     }
 
+    /// Returns the most recent audit entries in chronological order.
     #[must_use]
-    pub fn audit_log(&self) -> &[AuditEntry] {
-        &self.audit_log
+    pub fn audit_log(&self) -> Vec<AuditEntry> {
+        self.audit_log.iter().cloned().collect()
     }
 
     #[must_use]
@@ -253,8 +275,47 @@ impl ActionHandler for SlurmDrainAction {
     }
 }
 
-/// Disable an IB port via sysfs admin_state. Requires --enable-port-disable.
+/// Disable an IB port via sysfs admin_state. Requires --action-port-disable.
+///
+/// SAFETY: `AlertKind::RdmaLinkDegradation` currently aggregates counter deltas
+/// across all ports on this node and does NOT identify which port degraded.
+/// To avoid taking down healthy unrelated fabric links on multi-port nodes,
+/// this handler only acts when the node has exactly one IB port. On nodes
+/// with 0 or >1 ports it logs and declines to act.
 struct PortDisableAction;
+
+impl PortDisableAction {
+    /// Return Some(admin_state_path) if exactly one IB port is present.
+    fn sole_port() -> Result<std::path::PathBuf, String> {
+        let ib_path = std::path::Path::new("/sys/class/infiniband");
+        let devices = std::fs::read_dir(ib_path)
+            .map_err(|e| format!("read /sys/class/infiniband: {e}"))?;
+
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        for device in devices.flatten() {
+            let ports_dir = device.path().join("ports");
+            let ports = match std::fs::read_dir(&ports_dir) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            for port in ports.flatten() {
+                let admin_state = port.path().join("admin_state");
+                if admin_state.exists() {
+                    candidates.push(admin_state);
+                }
+            }
+        }
+
+        match candidates.len() {
+            0 => Err("no IB ports with admin_state found".into()),
+            1 => Ok(candidates.pop().unwrap()),
+            n => Err(format!(
+                "{n} IB ports present; refusing to disable — AlertKind does not \
+                 identify the affected port"
+            )),
+        }
+    }
+}
 
 impl ActionHandler for PortDisableAction {
     fn name(&self) -> &str {
@@ -266,7 +327,6 @@ impl ActionHandler for PortDisableAction {
             return Ok(());
         }
 
-        // Only on link downed
         if let argus_common::AlertKind::RdmaLinkDegradation {
             link_downed_delta, ..
         } = &alert.kind
@@ -278,32 +338,10 @@ impl ActionHandler for PortDisableAction {
             return Ok(());
         }
 
-        // Find IB ports to disable
-        let ib_path = std::path::Path::new("/sys/class/infiniband");
-        if let Ok(devices) = std::fs::read_dir(ib_path) {
-            for device in devices.flatten() {
-                let ports_dir = device.path().join("ports");
-                if let Ok(ports) = std::fs::read_dir(&ports_dir) {
-                    for port in ports.flatten() {
-                        let admin_state = port.path().join("admin_state");
-                        if admin_state.exists() {
-                            if let Err(e) = std::fs::write(&admin_state, "0") {
-                                warn!(
-                                    path = %admin_state.display(),
-                                    "failed to disable port: {e}"
-                                );
-                            } else {
-                                info!(
-                                    path = %admin_state.display(),
-                                    "IB port disabled"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+        let admin_state = Self::sole_port()?;
+        std::fs::write(&admin_state, "0")
+            .map_err(|e| format!("write {}: {e}", admin_state.display()))?;
+        info!(path = %admin_state.display(), "IB port disabled");
         Ok(())
     }
 }

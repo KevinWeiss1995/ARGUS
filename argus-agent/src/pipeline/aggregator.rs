@@ -197,6 +197,12 @@ impl Aggregator {
         &self.metrics
     }
 
+    /// Stamp the composite health score on the current window's metrics.
+    /// Called by the pipeline after each detection pass.
+    pub fn set_health_score(&mut self, score: f64) {
+        self.metrics.composite_health_score = score;
+    }
+
     /// Reset per-window metrics but keep absolute counter state for delta computation.
     pub fn reset(&mut self) {
         self.metrics = AggregatedMetrics::default();

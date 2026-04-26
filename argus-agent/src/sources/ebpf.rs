@@ -15,7 +15,7 @@
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod inner {
-    use aya::maps::{HashMap as AyaHashMap, PerCpuArray};
+    use aya::maps::{HashMap as AyaHashMap, PerCpuArray, PerCpuValues};
     use aya::programs::{KProbe, TracePoint};
     use aya::{Ebpf, EbpfLoader, Pod};
     use std::path::Path;
@@ -451,28 +451,46 @@ mod inner {
             }
 
             // --- CQ jitter stats (optional) ---
-            if let Some(ref map) = self.cq_jitter_stats_map {
+            // max_latency_ns accumulates in-kernel as a per-CPU max. We read the
+            // cross-CPU max for this window, then rearm by zeroing index 2 on
+            // each CPU so the next window starts fresh. counts/totals stay
+            // cumulative so delta math below remains correct.
+            if let Some(ref mut map) = self.cq_jitter_stats_map {
                 match map.get(&0, 0) {
                     Ok(percpu_vals) => {
                         let mut totals = [0u64; 4];
+                        let mut rearmed: Vec<CqJitterStatsArray> =
+                            Vec::with_capacity(percpu_vals.len());
                         for val in percpu_vals.iter() {
                             for (i, t) in totals.iter_mut().enumerate() {
                                 if i == 2 {
-                                    // max_latency_ns: take max across CPUs
                                     *t = (*t).max(val.0[i]);
                                 } else {
                                     *t += val.0[i];
                                 }
                             }
+                            let mut zeroed_max = *val;
+                            zeroed_max.0[2] = 0;
+                            rearmed.push(zeroed_max);
                         }
 
                         let prev = &self.prev_cq_totals;
                         snap.cq_completion_count = totals[0].saturating_sub(prev[0]);
                         snap.cq_total_latency_ns = totals[1].saturating_sub(prev[1]);
-                        // For max, take the raw max this window (not a delta)
                         snap.cq_max_latency_ns = totals[2];
                         snap.cq_stall_count = totals[3].saturating_sub(prev[3]);
-                        self.prev_cq_totals = totals;
+                        self.prev_cq_totals = [totals[0], totals[1], 0, totals[3]];
+
+                        match PerCpuValues::try_from(rearmed) {
+                            Ok(values) => {
+                                if let Err(e) = map.set(0, values, 0) {
+                                    warn!("CQ_JITTER_STATS max rearm failed: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                warn!("CQ_JITTER_STATS PerCpuValues build failed: {e}");
+                            }
+                        }
 
                         if diagnostic && snap.cq_completion_count > 0 {
                             info!(
