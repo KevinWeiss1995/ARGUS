@@ -9,6 +9,7 @@ use aggregator::Aggregator;
 pub struct Pipeline {
     aggregator: Aggregator,
     detection: DetectionEngine,
+    num_cpus: u32,
 }
 
 impl Pipeline {
@@ -17,6 +18,7 @@ impl Pipeline {
         Self {
             aggregator: Aggregator::new(num_cpus),
             detection: DetectionEngine::new(),
+            num_cpus,
         }
     }
 
@@ -25,6 +27,7 @@ impl Pipeline {
         Self {
             aggregator: Aggregator::new(num_cpus),
             detection: DetectionEngine::with_config(config),
+            num_cpus,
         }
     }
 
@@ -40,8 +43,14 @@ impl Pipeline {
     }
 
     /// Run detection rules against current aggregated metrics.
-    /// Call once per window tick, not per event.
+    /// Call once per window tick, not per event. Also refreshes the
+    /// composite health score that the Prometheus exporter surfaces.
     pub fn evaluate(&mut self) -> Vec<Alert> {
+        let score = DetectionEngine::compute_health_score(
+            self.aggregator.current_metrics(),
+            self.num_cpus,
+        );
+        self.aggregator.set_health_score(score);
         self.detection.evaluate(self.aggregator.current_metrics())
     }
 
