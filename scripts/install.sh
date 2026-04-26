@@ -5,11 +5,11 @@
 #   sudo ./scripts/install.sh            # full build + install
 #   sudo ./scripts/install.sh --no-build # install pre-built binaries only
 #
-# Prerequisites (the script checks for these):
-#   - Rust toolchain (rustup + cargo)
-#   - nightly toolchain + rust-src (for eBPF build)
-#   - bpf-linker (cargo install bpf-linker)
-#   - Linux with systemd
+# The script will:
+#   1. Detect the invoking user's Rust toolchain (handles sudo PATH correctly)
+#   2. Install missing prerequisites (nightly, rust-src, bpf-linker)
+#   3. Build as the invoking user (not root — cargo hates that)
+#   4. Install binaries, config, and systemd unit as root
 #
 # Installed paths:
 #   /usr/local/bin/argusd                  — agent binary
@@ -62,10 +62,6 @@ require_root() {
     fi
 }
 
-require_cmd() {
-    command -v "$1" &>/dev/null || die "'$1' not found. $2"
-}
-
 # --- Preflight ---
 
 require_root
@@ -78,35 +74,74 @@ if ! systemctl --version &>/dev/null; then
     die "systemd not found — this installer requires a systemd-based Linux system"
 fi
 
+# --- Resolve the invoking user's environment ---
+# sudo strips PATH, so cargo/rustup in ~/.cargo/bin become invisible.
+# We recover them via SUDO_USER.
+
+BUILD_USER="${SUDO_USER:-$USER}"
+BUILD_HOME=$(eval echo "~$BUILD_USER")
+
+resolve_cargo_env() {
+    local cargo_bin="$BUILD_HOME/.cargo/bin"
+    if [[ -d "$cargo_bin" ]]; then
+        export PATH="$cargo_bin:$PATH"
+    fi
+    if [[ -f "$BUILD_HOME/.cargo/env" ]]; then
+        # shellcheck source=/dev/null
+        source "$BUILD_HOME/.cargo/env" 2>/dev/null || true
+    fi
+}
+
+resolve_cargo_env
+
+# Run a command as the build user (not root) to avoid cargo/rustup permission mess
+as_build_user() {
+    if [[ "$BUILD_USER" == "root" ]]; then
+        "$@"
+    else
+        sudo -u "$BUILD_USER" --preserve-env=PATH,RUSTUP_HOME,CARGO_HOME,HOME -- "$@"
+    fi
+}
+
 # --- Build ---
 
 if [[ "$NO_BUILD" == false ]]; then
     info "Checking build prerequisites..."
+    info "Build user: $BUILD_USER ($BUILD_HOME)"
 
-    require_cmd cargo "Install Rust: https://rustup.rs"
-    require_cmd rustup "Install Rust: https://rustup.rs"
-
-    if ! rustup toolchain list | grep -q nightly; then
-        info "Installing nightly toolchain..."
-        rustup install nightly
+    if ! command -v cargo &>/dev/null; then
+        info "Rust toolchain not found — installing via rustup..."
+        as_build_user bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+        resolve_cargo_env
     fi
 
-    if ! rustup component list --toolchain nightly 2>/dev/null | grep -q "rust-src (installed)"; then
+    if ! command -v cargo &>/dev/null; then
+        die "cargo still not found after install attempt. Check $BUILD_HOME/.cargo/bin"
+    fi
+
+    ok "cargo: $(cargo --version)"
+
+    if ! as_build_user rustup toolchain list | grep -q nightly; then
+        info "Installing nightly toolchain..."
+        as_build_user rustup install nightly
+    fi
+
+    if ! as_build_user rustup component list --toolchain nightly 2>/dev/null | grep -q "rust-src (installed)"; then
         info "Adding rust-src component to nightly..."
-        rustup component add rust-src --toolchain nightly
+        as_build_user rustup component add rust-src --toolchain nightly
     fi
 
     if ! command -v bpf-linker &>/dev/null; then
-        info "Installing bpf-linker..."
-        cargo install bpf-linker
+        info "Installing bpf-linker (this may take a few minutes)..."
+        as_build_user cargo install bpf-linker
     fi
 
     info "Building agent (release)..."
     cd "$REPO_ROOT"
-    cargo build --release
+    as_build_user cargo build --release
 
     info "Building eBPF programs (release)..."
-    cargo xtask build-ebpf --release
+    as_build_user cargo xtask build-ebpf --release
 
     ok "Build complete"
 fi
