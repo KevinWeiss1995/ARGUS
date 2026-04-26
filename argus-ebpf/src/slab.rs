@@ -29,17 +29,20 @@ fn try_trace_kmem_cache_alloc(ctx: &TracePointContext) -> Result<u32, i64> {
         return Ok(0);
     }
 
+    // The kmem_cache_alloc tracepoint declares bytes_req/bytes_alloc as size_t
+    // (8 bytes on 64-bit kernels). Reading only the low u32 silently truncates
+    // allocations ≥ 4 GiB and is endian-dependent; read the full u64.
     // SAFETY: offsets discovered from tracefs format file, populated by userspace.
-    let bytes_req: u32 = unsafe { ctx.read_at(bytes_req_offset).unwrap_or(0) };
-    let bytes_alloc: u32 = unsafe { ctx.read_at(bytes_alloc_offset).unwrap_or(0) };
+    let bytes_req: u64 = unsafe { ctx.read_at(bytes_req_offset).unwrap_or(0) };
+    let bytes_alloc: u64 = unsafe { ctx.read_at(bytes_alloc_offset).unwrap_or(0) };
 
     // SAFETY: PerCpuArray lookup at index 0, pointer valid for this CPU's slot.
     // Layout: [alloc_count, free_count, total_bytes_req, total_bytes_alloc]
     if let Some(stats) = SLAB_STATS.get_ptr_mut(0) {
         unsafe {
             (*stats)[0] += 1;
-            (*stats)[2] += bytes_req as u64;
-            (*stats)[3] += bytes_alloc as u64;
+            (*stats)[2] += bytes_req;
+            (*stats)[3] += bytes_alloc;
         }
     }
 
