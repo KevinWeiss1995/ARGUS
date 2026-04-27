@@ -21,6 +21,7 @@ ARGUS attaches eBPF tracepoints to the running kernel and reads InfiniBand hardw
 - Symbol errors, link downed, port receive errors, transmit discards
 - Receive/transmit data throughput deltas
 - Remote physical errors, link integrity errors, buffer overruns
+- Soft-RoCE (rxe) errors: duplicate requests, sequence errors, retries, send errors
 
 **Detection rules** (8 total — 4 reactive, 4 predictive):
 - Interrupt affinity skew (single CPU handling >70% of IRQs)
@@ -37,7 +38,6 @@ State transitions use hysteresis (consecutive-window confirmation) to avoid flap
 ## Quick start
 
 ```bash
-# Clone and build
 git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 cargo build --release
@@ -73,148 +73,80 @@ ARGUS supports two deployment modes. The agent binary is identical in both -- wh
 
 ---
 
-### Option A: Standalone mode (ARGUS manages its own Grafana + Prometheus)
+### Option A: Standalone (ARGUS manages Grafana + Prometheus)
 
-Use this when you want a complete, self-contained setup. ARGUS deploys its own Prometheus + Grafana + Alertmanager stack via Docker Compose and pre-provisions dashboards automatically.
-
-**Step 1: Clone and install the agent**
+**Install and start the agent:**
 
 ```bash
 git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 sudo ./scripts/install.sh
+sudo systemctl enable --now argusd
 ```
 
-The install script builds the agent and eBPF probes, then installs:
-- `/usr/local/bin/argusd` -- the agent binary
-- `/usr/local/bin/argus-tui` -- attach a live TUI to any running agent
-- `/usr/local/bin/argus-status` -- CLI health check (local or remote nodes)
-- `/usr/local/bin/argus-discover` -- subnet scanner for node discovery
-- `/usr/local/bin/argus-manage-targets` -- manage Prometheus scrape targets
-- `/usr/local/lib/argus/argus-ebpf` -- the eBPF object
-- `/etc/argus/argusd.conf` -- environment-based config
-- `/etc/argus/argusd.toml` -- TOML config (example, not active by default)
-- `/etc/systemd/system/argusd.service` -- systemd unit
+The install script builds and installs:
 
-If you already have pre-built binaries, use `sudo ./scripts/install.sh --no-build` to skip compilation.
+| Path | Description |
+|---|---|
+| `/usr/local/bin/argusd` | Agent binary |
+| `/usr/local/bin/argus-tui` | Attach a live TUI to any running agent |
+| `/usr/local/bin/argus-status` | CLI health check (local or remote) |
+| `/usr/local/bin/argus-discover` | Subnet scanner for node discovery |
+| `/usr/local/bin/argus-manage-targets` | Manage Prometheus scrape targets |
+| `/usr/local/lib/argus/argus-ebpf` | eBPF object |
+| `/etc/argus/argusd.conf` | Environment-based config |
+| `/etc/systemd/system/argusd.service` | Systemd unit |
 
-**Important**: On upgrade (re-running `install.sh`), existing config files in `/etc/argus/` are **never overwritten**. If you need the latest defaults, manually copy them:
-```bash
-sudo cp deploy/argusd.conf /etc/argus/argusd.conf
-sudo cp deploy/examples/standalone.toml /etc/argus/argusd.toml
-```
+If you already have pre-built binaries, use `sudo ./scripts/install.sh --no-build` to skip compilation. On upgrade, existing config files in `/etc/argus/` are **never overwritten**.
 
-**Step 2: Start the agent**
+**Verify:**
 
 ```bash
-sudo systemctl enable argusd    # start on boot
-sudo systemctl start argusd     # start now
+argus-status                  # quick health check
+argus-status --watch          # live refresh every 3s
+curl localhost:9100/health    # raw JSON
 ```
 
-**Step 3: Verify the agent is running**
+**Start the observability stack:**
 
 ```bash
-argus-status                  # quick health check from the command line
-argus-status --watch          # live refresh every 3 seconds
-argus-status 10.0.0.5         # check a remote node
-argus-status --all            # check all nodes in the targets file
+# Discover nodes on a subnet and launch Grafana + Prometheus + Alertmanager:
+sudo argus-discover --subnet 10.0.0.0/24 --start
+
+# Or start with just the local node:
+cd ARGUS && deploy/observability/scripts/start-observability.sh
 ```
 
-Or manually:
-```bash
-sudo systemctl status argusd
-curl localhost:9100/health
-```
+Open `http://<host-ip>:3000` (login: `admin` / `admin`). Three dashboards are pre-loaded:
+- **Fleet Overview** — health summary across all monitored nodes
+- **Node Detail** — kernel probe metrics, CQ jitter, IB counters
+- **Link Drill-Down** — per-device, per-port error and throughput analysis
 
-**Attaching the TUI to a running agent**
+If the node has no InfiniBand hardware, IB/CQ panels will show "No IB hardware detected" — the kernel probe panels (IRQ, slab, NAPI) work on any Linux node.
 
-The full terminal dashboard can be attached to any running `argusd` process without interrupting it. It connects read-only to the agent's `/status` endpoint:
+**Managing monitored nodes:**
 
-```bash
-argus-tui                            # local node (localhost:9100)
-argus-tui --attach 192.168.105.17    # remote node (port 9100 implied)
-argusd --attach                      # equivalent
-argusd --attach 10.0.0.5:9200        # non-default port
-```
-
-Press `q` or `Esc` to detach. The agent keeps running.
-
-**Step 4: Start the observability stack**
-
-Requires Docker and Docker Compose on the same host (or a host that can reach the agent's port 9100).
+ARGUS uses Prometheus [file-based service discovery](https://prometheus.io/docs/guides/file-sd/). Targets are stored in `deploy/observability/argus-targets.json` and Prometheus picks up changes within 30 seconds — no restart required.
 
 ```bash
-cd ARGUS
-deploy/observability/scripts/start-observability.sh
+argus-manage-targets add 10.0.0.5          # add a node
+argus-manage-targets add 10.0.0.7:9200     # non-default port
+argus-manage-targets remove 10.0.0.5       # remove a node
+argus-manage-targets list                   # show configured nodes
+argus-manage-targets verify                 # probe each node, report status
+argus-discover --subnet 10.0.0.0/24 \
+  --output deploy/observability/argus-targets.json   # scan and write targets
 ```
 
-This starts:
-- **Prometheus** on port `9091` -- scrapes the agent at `host.docker.internal:9100`
-- **Grafana** on port `3000` -- pre-provisioned with ARGUS dashboards
-- **Alertmanager** on port `9093` -- alert routing (webhook receiver not configured by default)
-
-**Step 5: Open Grafana**
-
-Open `http://<host-ip>:3000` in your browser. Login: `admin` / `admin`.
-
-Three dashboards are pre-loaded under the ARGUS folder:
-- **Fleet Overview** -- health state summary across all monitored nodes
-- **Node Detail** -- kernel probe metrics, CQ jitter, IB counters for a single node
-- **Link Drill-Down** -- per-device, per-port InfiniBand error and throughput analysis
-
-If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB hardware detected" / "No CQ data" -- this is expected. The kernel probe panels (IRQ, slab, NAPI) will be active on any Linux node.
-
-#### Adding more nodes
-
-ARGUS uses Prometheus [file-based service discovery](https://prometheus.io/docs/guides/file-sd/). Targets are stored in `deploy/observability/argus-targets.json` and Prometheus picks up changes within 30 seconds -- no restart required.
-
-**Add nodes individually:**
-
-```bash
-scripts/argus-manage-targets add 10.0.0.5
-scripts/argus-manage-targets add 10.0.0.6
-scripts/argus-manage-targets add 10.0.0.7:9200   # non-default port
-```
-
-**Scan a subnet and start the stack in one shot:**
-
-```bash
-argus-discover --subnet 10.0.0.0/24 --start
-```
-
-This discovers all ARGUS nodes, writes the targets file, and launches Grafana + Prometheus + Alertmanager.
-
-**Scan only (for integration with an existing Prometheus):**
-
-```bash
-argus-discover --subnet 10.0.0.0/24 --output /etc/prometheus/argus-targets.json
-```
-
-The scanner probes each IP on port 9100 (the ARGUS `/health` endpoint) and writes discovered nodes in Prometheus `file_sd_configs` format. Run it as a cron job for continuous discovery.
-
-**Or start the stack with manual discovery/additions:**
-
-```bash
-deploy/observability/scripts/start-observability.sh --discover 10.0.0.0/24
-```
-
-**Manage targets:**
-
-```bash
-scripts/argus-manage-targets list       # show configured nodes
-scripts/argus-manage-targets verify     # probe each node, report status
-scripts/argus-manage-targets remove 10.0.0.5
-```
-
-Each target node needs `argusd` installed (`sudo scripts/install.sh && sudo systemctl enable --now argusd`) and port 9100 reachable from the Prometheus host.
+Each target node needs `argusd` installed and port 9100 reachable from the Prometheus host.
 
 ---
 
 ### Option B: Integrate with existing Prometheus + Grafana
 
-Use this when you already have an observability stack. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
+The agent exposes a standard `/metrics` endpoint. No Docker or ARGUS-managed stack required.
 
-**Step 1: Install and configure**
+**Install and configure:**
 
 ```bash
 git clone https://github.com/KevinWeiss1995/ARGUS.git
@@ -226,9 +158,7 @@ sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
 sudo sed -i 's|# ARGUS_CONFIG=.*|ARGUS_CONFIG=/etc/argus/argusd.toml|' /etc/argus/argusd.conf
 ```
 
-**Step 2: Set up TLS and auth**
-
-The integration template enables TLS + bearer token auth by default. Generate the credentials:
+**Set up TLS and auth** (skip if on a trusted network — just remove `[tls]` and `[auth]` from the TOML):
 
 ```bash
 sudo mkdir -p /etc/argus/tls
@@ -239,11 +169,7 @@ sudo sh -c 'openssl rand -hex 32 > /etc/argus/token'
 sudo chmod 600 /etc/argus/token
 ```
 
-The TOML already references `/etc/argus/tls/server.{crt,key}` and `/etc/argus/token`. No edits needed.
-
-If you're on a trusted network and don't need TLS, remove the `[tls]` and `[auth]` sections from `/etc/argus/argusd.toml`.
-
-**Step 3: Start and verify**
+**Start and verify:**
 
 ```bash
 sudo systemctl enable --now argusd
@@ -251,11 +177,7 @@ TOKEN=$(sudo cat /etc/argus/token)
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
 ```
 
-You should get a JSON response with `"state":"HEALTHY"`. Check logs with `journalctl -u argusd -n 20`.
-
-**Step 4: Point your Prometheus at ARGUS**
-
-Add to your `prometheus.yml` (full examples in `deploy/examples/prometheus-scrape-argus.yml`):
+**Point your Prometheus at ARGUS** (full examples in `deploy/examples/prometheus-scrape-argus.yml`):
 
 ```yaml
 scrape_configs:
@@ -269,62 +191,57 @@ scrape_configs:
       - targets: ["node01:9100", "node02:9100"]
 ```
 
-Copy the token to your Prometheus host:
+**Import dashboards** into your Grafana: **Dashboards > New > Import > Upload JSON**. Upload the three files from `deploy/observability/grafana/dashboards/`. Grafana will prompt you to select your Prometheus datasource.
+
+**Push-based delivery** (firewalled nodes): see `deploy/examples/prometheus-agent-sidecar.yml` for a Prometheus agent-mode sidecar that `remote_write`s to your central store.
+
+---
+
+### Attaching the TUI
+
+The full terminal dashboard can be attached to any running `argusd` without interrupting it:
+
 ```bash
-# On Prometheus host -- paste the token from: sudo cat /etc/argus/token
-echo "YOUR_TOKEN" > /etc/prometheus/argus-token && chmod 600 /etc/prometheus/argus-token
+argus-tui                            # local node (localhost:9100)
+argus-tui --attach 192.168.105.17    # remote node (port 9100 implied)
+argusd --attach 10.0.0.5:9200        # non-default port
 ```
 
-Without TLS, just use `scheme: http` and drop the `tls_config` and `bearer_token_file` lines.
-
-**Step 5: Import dashboards into your Grafana**
-
-In Grafana: **Dashboards > New > Import > Upload JSON**. Upload the three files from `deploy/observability/grafana/dashboards/`. Grafana will prompt you to select your Prometheus datasource.
-
-For automated import: `./scripts/export-dashboards.sh --import http://grafana:3000 --api-key YOUR_KEY`
-
-**Push-based delivery** (firewalled nodes that can't be scraped): see `deploy/examples/prometheus-agent-sidecar.yml` for a Prometheus agent-mode sidecar that `remote_write`s to your central store.
+Press `q` or `Esc` to detach. The agent keeps running.
 
 ---
 
 ### Configuration reference
 
-ARGUS supports two configuration layers. They can be used independently or together.
+ARGUS supports two configuration layers, usable independently or together.
 
-**Environment file** (`/etc/argus/argusd.conf`):
-
-Sourced by the systemd unit. Simple key=value pairs for basic settings:
+**Environment file** (`/etc/argus/argusd.conf`) — sourced by the systemd unit:
 ```bash
 ARGUS_MODE=live
 ARGUS_EBPF_PATH=/usr/local/lib/argus/argus-ebpf
 ARGUS_METRICS_ADDR=0.0.0.0:9100
 ARGUS_LOG_LEVEL=info
 ARGUS_WINDOW_SECS=3
-ARGUS_EXTRA_ARGS=
-
-# To enable the TOML config file, uncomment:
-# ARGUS_CONFIG=/etc/argus/argusd.toml
+# ARGUS_CONFIG=/etc/argus/argusd.toml   # uncomment to enable TOML config
 ```
 
-**TOML config file** (`/etc/argus/argusd.toml`):
-
-Must be enabled by setting `ARGUS_CONFIG=/etc/argus/argusd.toml` in the env file. Supports all settings including TLS, auth, and detection tuning:
+**TOML config file** (`/etc/argus/argusd.toml`) — must be enabled via `ARGUS_CONFIG`:
 
 ```toml
 [agent]
-mode = "live"                                    # live, mock, or replay
+mode = "live"
 ebpf_path = "/usr/local/lib/argus/argus-ebpf"
-log_level = "info"                               # trace, debug, info, warn, error
-window_secs = 3                                  # aggregation window
+log_level = "info"
+window_secs = 3
 
 [metrics]
-addr = "0.0.0.0:9100"                           # bind address for /metrics and /health
+addr = "0.0.0.0:9100"
 
-[tls]                                            # omit this section to disable TLS
+[tls]                                    # omit to disable TLS
 cert = "/etc/argus/tls/server.crt"
 key  = "/etc/argus/tls/server.key"
 
-[auth]                                           # omit this section to disable auth
+[auth]                                   # omit to disable auth
 bearer_token_file = "/etc/argus/token"
 
 [detection]
@@ -341,91 +258,67 @@ dry_run = false
 # port_disable = false
 ```
 
-**Precedence**: CLI flags > env file values > TOML config values > built-in defaults.
+**Precedence**: CLI flags > env file > TOML config > built-in defaults.
 
-Example config files are in `deploy/examples/`:
-- `standalone.toml` -- no TLS, no auth, local use
-- `integration.toml` -- TLS + auth + detection tuning
+Example configs: `deploy/examples/standalone.toml`, `deploy/examples/integration.toml`.
 
 ### Kubernetes deployment
 
-A DaemonSet manifest with headless Service and ServiceMonitor (for Prometheus Operator) is provided at `deploy/examples/k8s-daemonset.yaml`. It runs `argusd` as a privileged DaemonSet on every node with host PID/network, mounts `/sys` and `/proc`, and exposes port 9100 for Prometheus scraping.
+A DaemonSet manifest with headless Service and ServiceMonitor (for Prometheus Operator) is provided at `deploy/examples/k8s-daemonset.yaml`.
+
+## HTTP endpoints
+
+When `--metrics-addr` is set (always set in systemd mode), the agent exposes:
+
+| Endpoint | Content | Use |
+|---|---|---|
+| `/metrics` | Prometheus text format | Scrape target for Prometheus |
+| `/health` | JSON (state, uptime, event count) | Kubernetes liveness/readiness, SLURM health checks |
+| `/status` | JSON (full metrics + alerts) | TUI attach mode, external tooling |
+
+```bash
+curl http://localhost:9100/health
+# {"state":"HEALTHY","uptime_secs":42.3,"events_processed":14200,"last_window_ts":1710000000}
+
+# With TLS + auth:
+TOKEN=$(sudo cat /etc/argus/token)
+curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics
+```
 
 ## Running with live eBPF (manual)
 
 If you prefer to run ARGUS directly without systemd:
 
 ```bash
-# One-time setup: install nightly toolchain and bpf-linker
-just setup-ebpf
+just setup-ebpf     # one-time: install nightly toolchain and bpf-linker
+just build-ebpf     # build the eBPF probes
 
-# Build the eBPF probes
-just build-ebpf
-
-# Run (needs root)
 sudo ./target/release/argus-agent \
   --mode live \
   --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf \
   --tui
 ```
 
-After eBPF programs are loaded, ARGUS drops all capabilities and sets `PR_SET_NO_NEW_PRIVS`. It doesn't stay root.
+After eBPF programs are loaded, ARGUS drops all capabilities and sets `PR_SET_NO_NEW_PRIVS`.
 
 ### Artifact integrity
 
-For hardened deployments, you can pin the expected eBPF binary hash:
+Pin the expected eBPF binary hash for hardened deployments:
 
 ```bash
 sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf
-# pass the hash at runtime:
-sudo ./target/release/argus-agent \
-  --mode live \
+sudo ./target/release/argus-agent --mode live \
   --ebpf-path argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf \
-  --ebpf-hash <sha256hex> \
-  --tui
+  --ebpf-hash <sha256hex>
 ```
 
-The agent will refuse to load a binary that doesn't match.
-
 ## Replay mode
-
-ARGUS can replay recorded event files and test scenarios:
 
 ```bash
 cargo run --release -- --mode replay --file argus-test-scenarios/scenarios/link_flap_critical.json --tui
 ```
 
 Scenarios include expected state transitions so they double as regression tests. See `argus-test-scenarios/scenarios/` for examples.
-
-## Prometheus and health endpoints
-
-The agent exposes two HTTP(S) endpoints when `--metrics-addr` is set (always set in systemd mode):
-
-| Endpoint | Content | Use |
-|---|---|---|
-| `/metrics` | Prometheus text format | Scrape target for Prometheus |
-| `/health` | JSON | Kubernetes liveness/readiness, SLURM health checks |
-
-```bash
-# Plain HTTP (standalone / trusted network)
-curl http://localhost:9100/metrics
-curl http://localhost:9100/health
-
-# With TLS + bearer auth
-TOKEN=$(sudo cat /etc/argus/token)
-curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics
-curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
-```
-
-Health response format:
-```json
-{"state":"HEALTHY","uptime_secs":42.3,"events_processed":14200,"last_window_ts":1710000000}
-```
-
-For manual runs (without systemd), enable the endpoint with:
-```bash
-./target/release/argus-agent --mode mock --metrics-addr 127.0.0.1:9100
-```
 
 ## Don't have an HPC cluster but want to test ARGUS?
 No problem. Detailed instructions for setting up Lima VMs with soft-roce and running ARGUS can be found here: (WIP)
@@ -471,61 +364,52 @@ No problem. Detailed instructions for setting up Lima VMs with soft-roce and run
 
 High-frequency tracepoints (IRQ, slab, NAPI) increment per-CPU BPF map counters in-kernel — a nanosecond-scale operation with no ring buffer overhead. Userspace reads these maps once per aggregation window (default 3 seconds), keeping CPU usage under 1%.
 
-ARGUS is scheduler-agnostic. It doesn't talk to Kubernetes, SLURM, or any orchestrator directly. External systems consume its health signals through Prometheus, the health endpoint, or structured logs.
+ARGUS is scheduler-agnostic. External systems consume its health signals through Prometheus, the health endpoint, or structured logs.
 
 ## Project layout
 
 ```
-argus-agent/          Userspace daemon (Rust, tokio)
-argus-ebpf/           eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
-argus-common/         Shared types between agent and tests
-argus-test-scenarios/ JSON scenario files for replay and regression testing
-xtask/                Build tooling (eBPF compilation)
+argus-agent/              Userspace daemon (Rust, tokio)
+argus-ebpf/               eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
+argus-common/             Shared types between agent and tests
+argus-test-scenarios/     JSON scenario files for replay and regression testing
+xtask/                    Build tooling (eBPF compilation)
 scripts/
-  install.sh          Build and install argusd + CLI tools as a systemd service
-  argus-status        CLI health check for local or remote ARGUS nodes
-  argus-tui           Symlink → argusd; opens the TUI against a running daemon
-  argus-discover      Scan a subnet for ARGUS nodes, generate targets JSON
-  argus-manage-targets  Add/remove/list/verify Prometheus scrape targets
-  export-dashboards.sh  Export dashboards for import into external Grafana
-  e2e-test.sh         End-to-end tests, fault injection, Soft-RoCE
+  install.sh              Build + install argusd as a systemd service
+  argus-status            CLI health check
+  argus-tui               Symlink → argusd; TUI attach mode
+  argus-discover          Subnet scanner, generates Prometheus targets
+  argus-manage-targets    Add/remove/list/verify scrape targets
+  export-dashboards.sh    Export dashboards for import into external Grafana
+  e2e-test.sh             End-to-end + fault injection tests
 deploy/
-  argusd.service      Systemd unit
-  argusd.conf         Environment file (simple config)
-  examples/           TOML configs, Prometheus scrape snippets, K8s manifests
+  argusd.service          Systemd unit
+  argusd.conf             Environment file
+  examples/               TOML configs, Prometheus snippets, K8s manifests
   observability/
-    argus-targets.json  Prometheus file_sd targets (auto-reloaded, no restart)
-    grafana/dashboards/  Portable Grafana dashboards (importable into any Grafana)
+    argus-targets.json    Prometheus file_sd targets (hot-reloaded)
+    grafana/dashboards/   Portable Grafana dashboards
 ```
 
 ## Testing
 
 ```bash
-# Unit + integration + proptest + scenario + snapshot tests
-cargo test --workspace
-
-# Extended property-based testing (1000 cases)
-PROPTEST_CASES=1000 cargo test --workspace --test proptest_detection
-
-# E2E tests (tiered by available capabilities)
-sudo scripts/e2e-test.sh
+cargo test --workspace                                        # all tests
+PROPTEST_CASES=1000 cargo test --workspace --test proptest_detection  # extended proptests
+sudo scripts/e2e-test.sh                                      # E2E (tiered by capability)
 ```
 
-Current test counts: 50 unit tests, 6 property-based tests, 5 scenario tests, 3 TUI snapshot tests, plus 8 tests in `argus-common`.
+### Testing without InfiniBand
 
-## Testing without InfiniBand
-
-You can test RDMA-related detection using Soft-RoCE:
+You can test RDMA detection using Soft-RoCE:
 
 ```bash
 sudo scripts/setup-soft-roce.sh
 ```
 
-This creates an RDMA device over a regular Ethernet interface. Combined with `tc netem` for fault injection, you can exercise the full detection pipeline without real InfiniBand hardware.
+This creates an RDMA device over a regular Ethernet interface. Combined with `tc netem` for fault injection, you can exercise the full detection pipeline without real IB hardware.
 
 ## Platform support
-
-ARGUS builds and runs the detection pipeline on any platform Rust supports. The eBPF probes and live hardware counter collection are Linux-only.
 
 | Feature | Linux | macOS | Windows |
 |---|---|---|---|
@@ -535,52 +419,28 @@ ARGUS builds and runs the detection pipeline on any platform Rust supports. The 
 | eBPF kernel probes | yes | — | — |
 | IB hardware counters | yes | — | — |
 
-CI runs on both `ubuntu-latest` and `macos-latest`. ARM64 cross-compilation is checked on every PR.
-
 ## Security
 
-ARGUS loads eBPF programs into the kernel. We take that seriously:
-
-- **Privilege dropping**: All capabilities are dropped after eBPF load. `PR_SET_NO_NEW_PRIVS` is enforced.
-- **Artifact verification**: `--ebpf-hash` validates SHA-256 of the eBPF binary before loading.
+- **Privilege dropping**: All capabilities dropped after eBPF load. `PR_SET_NO_NEW_PRIVS` enforced.
+- **Artifact verification**: `--ebpf-hash` validates SHA-256 before loading.
 - **Seccomp**: `--seccomp` restricts syscalls after initialization.
-- **Input validation**: Replay files are capped at 100MB / 10M events.
-- **Dependency auditing**: `cargo deny` and `cargo audit` run in CI.
-- **Unsafe minimized**: `argus-common` uses `#![forbid(unsafe_code)]`. The agent uses `#![deny(unsafe_code)]`. The only `unsafe` is in the eBPF kernel probes (required by BPF) and the privilege-dropping prctl call, both documented with `SAFETY` comments.
-
-If you find a security issue, please open an issue or reach out directly before disclosing publicly.
+- **Input validation**: Replay files capped at 100MB / 10M events.
+- **Dependency auditing**: `cargo deny` and `cargo audit` in CI.
+- **Unsafe minimized**: `argus-common` uses `#![forbid(unsafe_code)]`. The agent uses `#![deny(unsafe_code)]`. Only `unsafe` is in eBPF probes (required by BPF) and the prctl call, both documented.
 
 ## Resource overhead
 
-ARGUS is designed to be invisible to workloads. In live mode, the agent:
+In live mode, the agent sleeps between aggregation windows (default 3s), wakes to read 3 BPF maps + sysfs counters, runs detection rules, and goes back to sleep.
 
-- Sleeps between aggregation windows (default 3s)
-- Wakes to read 3 BPF maps + sysfs counters (milliseconds of work)
-- Runs detection rules and redraws the TUI
-- Goes back to sleep
+**Expected CPU usage**: <1% in steady state. eBPF probes add nanoseconds per tracepoint hit.
 
-**Expected CPU usage**: <1% in steady state. eBPF probes add nanoseconds per tracepoint hit since they only increment per-CPU map counters (no ring buffer, no userspace wakeup).
-
-### CPU scheduling controls
-
-The systemd unit (`deploy/argusd.service`) ships with resource limits pre-configured:
-
+The systemd unit ships with resource limits:
 ```ini
 CPUQuota=5%
 Nice=19
 IOSchedulingClass=idle
 MemoryMax=256M
 ```
-
-For manual runs, use `nice`:
-
-```bash
-nice +19 sudo ./target/release/argus-agent --mode live ...
-```
-
-### Tuning `--window-secs`
-
-Longer windows = less frequent work = lower CPU. Shorter windows = faster detection.
 
 | Window | CPU overhead | Detection latency |
 |--------|-------------|-------------------|
@@ -589,40 +449,37 @@ Longer windows = less frequent work = lower CPU. Shorter windows = faster detect
 | 10s    | <0.1%       | ~20s              |
 | 30s    | negligible  | ~60s              |
 
-For most HPC clusters, 3-10 seconds is a good balance. Link degradation develops over seconds to minutes, not milliseconds.
+For most HPC clusters, 3-10 seconds is a good balance.
 
 ## Detection thresholds
 
-All detection thresholds are configurable via CLI, TOML config (`[detection]` section), or the `DetectionConfig` struct. Defaults are tuned for typical HPC InfiniBand clusters:
+All thresholds are configurable via CLI, TOML (`[detection]` section), or the `DetectionConfig` struct:
 
 | Parameter | Default | Description |
 |---|---|---|
 | `--window-secs` | 3 | Aggregation window duration |
 | `irq_skew_threshold_pct` | 70.0 | % of IRQs on one CPU to trigger skew alert |
-| `rdma_spike_factor` | 5.0 | Latency multiplier over baseline to trigger spike |
-| `slab_pressure_min_allocs` | 100 | Minimum slab allocations per window to evaluate |
+| `rdma_spike_factor` | 5.0 | Latency multiplier over baseline |
+| `slab_pressure_min_allocs` | 100 | Minimum slab allocs per window to evaluate |
 | `slab_pressure_alloc_rate_threshold` | 5000 | Alloc rate above which pressure is suspected |
 
 ## Contributing
 
-Contributions are welcome. This project is still young and there's a lot of ground to cover, particularly around:
+Contributions are welcome. Areas we'd especially appreciate help:
 
 - Additional eBPF probes (scheduler latency, page faults, cgroup pressure)
-- Smarter detection rules (ML-based anomaly detection, correlation between signals)
+- Smarter detection rules (ML-based anomaly detection, signal correlation)
 - Better scenario coverage and fuzz testing
-- Packaging and distribution (RPM/DEB, container images)
-- Documentation and operational guides
+- Packaging (RPM/DEB, container images)
 
 If you're running InfiniBand clusters and have opinions about what "link degradation" looks like in practice, we especially want to hear from you.
-
-To get started:
 
 ```bash
 just setup          # install dev tools
 cargo test          # make sure everything passes
 ```
 
-Open a PR against `main`. Tests must pass. We use `cargo fmt`, `cargo clippy` with pedantic lints, and `cargo deny` for dependency auditing.
+Open a PR against `main`. Tests must pass. We use `cargo fmt`, `cargo clippy` with pedantic lints, and `cargo deny`.
 
 ## License
 
