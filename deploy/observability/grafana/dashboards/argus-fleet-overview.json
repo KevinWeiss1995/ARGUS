@@ -1,801 +1,426 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
-  },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    { "title": "Node Detail", "url": "/d/argus-node-detail?var-node=${__data.fields.instance}", "type": "link" },
+    { "title": "Link Drill-Down", "url": "/d/argus-link-drilldown", "type": "link" }
+  ],
   "liveNow": false,
   "panels": [
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 1, "type": "stat", "title": "Nodes Healthy",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "count(argus_health_state{instance=~\"$node\"} == 0) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "fixedColor": "green",
-            "mode": "fixed"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "count(argus_health_state{instance=~\"$node\"} == 0)",
-          "refId": "A",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true
-        }
-      ],
-      "title": "Nodes Healthy",
-      "type": "stat"
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 2, "type": "stat", "title": "Nodes Degraded",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "count(argus_health_state{instance=~\"$node\"} == 1) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "fixedColor": "yellow",
-            "mode": "fixed"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "yellow",
-                "value": null
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "color": { "fixedColor": "yellow", "mode": "fixed" },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] },
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 0
-      },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "count(argus_health_state{instance=~\"$node\"} == 1)",
-          "refId": "A",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true
-        }
-      ],
-      "title": "Nodes Degraded",
-      "type": "stat"
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 3, "type": "stat", "title": "Nodes Critical",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "count(argus_health_state{instance=~\"$node\"} == 2) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "fixedColor": "red",
-            "mode": "fixed"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] },
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 0
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "count(argus_health_state{instance=~\"$node\"} == 2)",
-          "refId": "A",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true
-        }
-      ],
-      "title": "Nodes Critical",
-      "type": "stat"
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 4, "type": "gauge", "title": "Worst Health Score",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "max(argus_health_score_millis{instance=~\"$node\"}) / 1000 or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "max": 1000,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 300
-              },
-              {
-                "color": "red",
-                "value": 700
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "color": { "mode": "thresholds" },
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.3 },
+            { "color": "red", "value": 0.7 }
+          ]},
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 12,
-        "y": 0
-      },
-      "id": 4,
-      "options": {
-        "minVizHeight": 75,
-        "minVizWidth": 75,
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "sizing": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(argus_health_score_millis{instance=~\"$node\"}) / 1000",
-          "refId": "A",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true
-        }
-      ],
-      "title": "Worst Health Score",
-      "type": "gauge"
+      "options": { "orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true, "sizing": "auto",
+        "minVizHeight": 75, "minVizWidth": 75,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 5, "type": "stat", "title": "Total Alerts (15m)",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "sum(increase(argus_alerts_total{instance=~\"$node\"}[15m])) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 10
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 10 }
+          ]},
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(increase(argus_alerts_total{instance=~\"$node\"}[15m]))",
-          "refId": "A",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true
-        }
-      ],
-      "title": "Total Alerts",
-      "type": "stat"
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 15, "type": "stat", "title": "Events Processed",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "sum(argus_events_total{instance=~\"$node\"}) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "axisPlacement": "auto",
-            "fillOpacity": 70,
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "unit": "short", "noValue": "0"
+        }, "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 6, "type": "state-timeline", "title": "Node Health State",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_health_state{instance=~\"$node\"}",
+        "refId": "A", "legendFormat": "{{instance}}", "range": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "axisPlacement": "auto", "fillOpacity": 70, "lineWidth": 0, "spanNulls": false,
             "insertNulls": false,
-            "lineWidth": 0,
-            "spanNulls": false
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "Healthy"
-                },
-                "1": {
-                  "color": "yellow",
-                  "index": 1,
-                  "text": "Degraded"
-                },
-                "2": {
-                  "color": "red",
-                  "index": 2,
-                  "text": "Critical"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 2
-              }
-            ]
-          },
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+          "mappings": [{ "type": "value", "options": {
+            "0": { "color": "green", "index": 0, "text": "Healthy" },
+            "1": { "color": "yellow", "index": 1, "text": "Degraded" },
+            "2": { "color": "red", "index": 2, "text": "Critical" }
+          }}],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 2 }
+          ]},
           "unit": "none"
-        },
-        "overrides": []
+        }, "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 4
-      },
-      "id": 6,
-      "options": {
-        "alignValue": "left",
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mergeValues": true,
-        "rowHeight": 0.9,
-        "showValue": "auto",
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_health_state{instance=~\"$node\"}",
-          "refId": "A",
-          "legendFormat": "{{instance}}",
-          "range": true
-        }
-      ],
-      "title": "Node Health State",
-      "type": "state-timeline"
+      "options": { "alignValue": "left", "mergeValues": true, "rowHeight": 0.9, "showValue": "auto",
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" } }
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 10, "type": "timeseries", "title": "IRQ Distribution (per CPU)",
+      "description": "Interrupt count per CPU per window. Uneven distribution indicates affinity skew.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "sum by (cpu) (increase(argus_irq_total{instance=~\"$node\"}[$__rate_interval]))",
+        "refId": "A", "legendFormat": "cpu {{cpu}}", "range": true
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": true,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "fillOpacity": 80,
+            "stacking": { "mode": "normal", "group": "A" }, "showPoints": "never" },
+          "unit": "short"
+        }, "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Slab Alloc Rate",
+      "description": "Kernel slab allocations per window. Spikes correlate with memory pressure.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "increase(argus_slab_alloc_total{instance=~\"$node\"}[$__rate_interval])",
+        "refId": "A", "legendFormat": "{{instance}}", "range": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": false },
+          "unit": "ops"
+        }, "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "NAPI Utilization %",
+      "description": "NIC polling budget utilization. >90% means the kernel is saturated processing packets.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_napi_utilization_pct{instance=~\"$node\"}",
+        "refId": "A", "legendFormat": "{{instance}}", "range": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": false,
+            "thresholdsStyle": { "mode": "area" } },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 70 },
+            { "color": "red", "value": 90 }
+          ]},
+          "unit": "percent", "min": 0, "max": 100
+        }, "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "Health Score Over Time",
+      "description": "Composite health score (0=healthy, 1=worst). Combines all detection signals.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_health_score_millis{instance=~\"$node\"} / 1000",
+        "refId": "A", "legendFormat": "{{instance}}", "range": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 25, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": false,
+            "thresholdsStyle": { "mode": "area" } },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.3 },
+            { "color": "red", "value": 0.7 }
+          ]},
+          "unit": "none", "min": 0, "max": 1
+        }, "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 14, "type": "timeseries", "title": "Slab Avg Latency",
+      "description": "Average kernel slab allocation latency. Spikes indicate memory subsystem pressure.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_slab_avg_latency_ns{instance=~\"$node\"}",
+        "refId": "A", "legendFormat": "{{instance}} avg", "range": true
+      },
+      {
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_slab_max_latency_ns{instance=~\"$node\"}",
+        "refId": "B", "legendFormat": "{{instance}} max", "range": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": false },
+          "unit": "ns"
+        }, "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7, "type": "table", "title": "All Nodes",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_health_state{instance=~\"$node\"}", "refId": "A",
+          "exemplar": false, "format": "table", "instant": true, "legendFormat": "State", "range": false },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_health_score_millis{instance=~\"$node\"}", "refId": "B",
+          "exemplar": false, "format": "table", "instant": true, "legendFormat": "Score", "range": false },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_error_delta_total{instance=~\"$node\"}", "refId": "C",
+          "exemplar": false, "format": "table", "instant": true, "legendFormat": "IB Errors", "range": false },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_napi_utilization_pct{instance=~\"$node\"}", "refId": "D",
+          "exemplar": false, "format": "table", "instant": true, "legendFormat": "NAPI %", "range": false }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "filterable": true, "inspect": false },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "State"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "Healthy"
-                      },
-                      "1": {
-                        "color": "yellow",
-                        "index": 1,
-                        "text": "Degraded"
-                      },
-                      "2": {
-                        "color": "red",
-                        "index": 2,
-                        "text": "Critical"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background"
-                }
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "State" }, "properties": [
+            { "id": "mappings", "value": [{ "type": "value", "options": {
+              "0": { "color": "green", "index": 0, "text": "Healthy" },
+              "1": { "color": "yellow", "index": 1, "text": "Degraded" },
+              "2": { "color": "red", "index": 2, "text": "Critical" }
+            }}]},
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+          ]},
+          { "matcher": { "id": "byName", "options": "NAPI %" }, "properties": [
+            { "id": "unit", "value": "percent" },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]}},
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+          ]}
         ]
       },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 12
-      },
-      "id": 7,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": [
-          {
-            "desc": false,
-            "displayName": "instance"
-          }
-        ]
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true, "sortBy": [{ "desc": false, "displayName": "instance" }]
       },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_health_state{instance=~\"$node\"}",
-          "refId": "A",
-          "exemplar": false,
-          "format": "table",
-          "instant": true,
-          "legendFormat": "State",
-          "range": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_health_score_millis{instance=~\"$node\"}",
-          "refId": "B",
-          "exemplar": false,
-          "format": "table",
-          "instant": true,
-          "legendFormat": "Score",
-          "range": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_error_delta_total{instance=~\"$node\"}",
-          "refId": "C",
-          "exemplar": false,
-          "format": "table",
-          "instant": true,
-          "legendFormat": "IB Errors",
-          "range": false
-        }
-      ],
-      "title": "All Nodes",
       "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "indexByName": {},
-            "renameByName": {
-              "Value #A": "State",
-              "Value #B": "Score",
-              "Value #C": "IB Errors"
-            }
-          }
-        }
-      ],
-      "type": "table"
+        { "id": "merge", "options": {} },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true },
+          "indexByName": {},
+          "renameByName": { "Value #A": "State", "Value #B": "Score", "Value #C": "IB Errors", "Value #D": "NAPI %" }
+        }}
+      ]
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 8, "type": "table", "title": "Recent Alerts",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "sum by (kind, severity) (increase(argus_alerts_total{instance=~\"$node\"}[5m])) > 0",
+        "refId": "A", "exemplar": false, "format": "table", "instant": true, "range": false
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": true,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          },
-          "unit": "none"
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "filterable": true, "inspect": false },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }
+          ]},
+          "unit": "none", "noValue": "No alerts in the last 5 minutes"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "severity"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "critical": {
-                        "color": "red",
-                        "index": 0,
-                        "text": "critical"
-                      },
-                      "warning": {
-                        "color": "yellow",
-                        "index": 1,
-                        "text": "warning"
-                      },
-                      "info": {
-                        "color": "green",
-                        "index": 2,
-                        "text": "info"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "severity" }, "properties": [
+            { "id": "mappings", "value": [{ "type": "value", "options": {
+              "critical": { "color": "red", "index": 0, "text": "critical" },
+              "warning": { "color": "yellow", "index": 1, "text": "warning" },
+              "info": { "color": "green", "index": 2, "text": "info" }
+            }}]}
+          ]}
         ]
       },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 20
-      },
-      "id": 8,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum by (kind, severity) (increase(argus_alerts_total{instance=~\"$node\"}[5m]))",
-          "refId": "A",
-          "exemplar": false,
-          "format": "table",
-          "instant": true,
-          "legendFormat": "__auto",
-          "range": false
-        }
-      ],
-      "title": "Recent Alerts",
-      "type": "table"
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true, "sortBy": []
+      }
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": [
-    "argus",
-    "fleet",
-    "overview"
-  ],
+  "tags": ["argus", "fleet", "overview"],
   "templating": {
-    "list": [
-      {
-        "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
-        "definition": "label_values(argus_health_state, instance)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Node",
-        "multi": true,
-        "name": "node",
-        "options": [],
-        "query": {
-          "qryType": 1,
-          "query": "label_values(argus_health_state, instance)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      }
-    ]
+    "list": [{
+      "allValue": ".*",
+      "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "definition": "label_values(argus_health_state, instance)",
+      "hide": 0, "includeAll": true, "label": "Node", "multi": true, "name": "node",
+      "options": [],
+      "query": { "qryType": 1, "query": "label_values(argus_health_state, instance)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+      "refresh": 1, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"
+    }]
   },
-  "time": {
-    "from": "now-15m",
-    "to": "now"
-  },
+  "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "ARGUS Fleet Overview",
   "uid": "argus-fleet-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
