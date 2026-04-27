@@ -106,10 +106,11 @@ cmd_validate() {
         errors=$((errors + 1))
     fi
 
-    # 5. Permission check — can we update node state?
+    # 5. Permission check — use Comment as an idempotent no-op write
     if [[ $EUID -eq 0 ]]; then
-        if scontrol update "NodeName=${hostname}" State=RESUME 2>/dev/null; then
+        if scontrol update "NodeName=${hostname}" Comment="argus-validate" 2>/dev/null; then
             ok "Root can update node state via scontrol"
+            scontrol update "NodeName=${hostname}" Comment="" 2>/dev/null || true
         else
             echo -e "\033[1;31mFAIL\033[0m scontrol update failed — check SlurmUser and permissions"
             errors=$((errors + 1))
