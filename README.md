@@ -158,7 +158,7 @@ The health endpoint returns JSON:
 ```
 
 ## Don't have an HPC cluster but want to test ARGUS?
-No problem. Detailed instructions for setting up Lima VMs with soft-roce and running ARGUS can be found here: 
+No problem. Detailed instructions for setting up Lima VMs with soft-roce and running ARGUS can be found here: (WIP)
 
 ## Architecture
 
