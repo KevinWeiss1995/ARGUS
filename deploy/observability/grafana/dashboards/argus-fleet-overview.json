@@ -426,7 +426,7 @@
       "definition": "label_values(argus_health_state, instance)",
       "hide": 0, "includeAll": true, "label": "Node", "multi": true, "name": "node",
       "options": [],
-      "query": { "qryType": 1, "query": "label_values(argus_health_state, instance)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+      "query": "label_values(argus_health_state, instance)",
       "refresh": 1, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"
     }]
   },

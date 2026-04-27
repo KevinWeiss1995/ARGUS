@@ -63,35 +63,35 @@ impl PrometheusExporter {
 
         let event_count = Counter::default();
         registry.register(
-            "argus_events_total",
+            "argus_events",
             "Total events processed",
             event_count.clone(),
         );
 
         let alert_count = Family::<Vec<(String, String)>, Counter>::default();
         registry.register(
-            "argus_alerts_total",
+            "argus_alerts",
             "Total alerts by kind and severity",
             alert_count.clone(),
         );
 
         let state_transitions = Family::<Vec<(String, String)>, Counter>::default();
         registry.register(
-            "argus_state_transitions_total",
+            "argus_state_transitions",
             "Health state transitions",
             state_transitions.clone(),
         );
 
         let irq_total = Family::<Vec<(String, String)>, Counter>::default();
         registry.register(
-            "argus_irq_total",
+            "argus_irq",
             "Total interrupts by CPU",
             irq_total.clone(),
         );
 
         let slab_alloc_count = Counter::default();
         registry.register(
-            "argus_slab_alloc_total",
+            "argus_slab_alloc",
             "Total slab allocations",
             slab_alloc_count.clone(),
         );
@@ -112,7 +112,7 @@ impl PrometheusExporter {
 
         let cq_completion_count = Counter::default();
         registry.register(
-            "argus_cq_completions_total",
+            "argus_cq_completions",
             "Total CQ completions",
             cq_completion_count.clone(),
         );
@@ -133,7 +133,7 @@ impl PrometheusExporter {
 
         let cq_stall_count = Counter::default();
         registry.register(
-            "argus_cq_stalls_total",
+            "argus_cq_stalls",
             "CQ completions exceeding stall threshold (>50us)",
             cq_stall_count.clone(),
         );
