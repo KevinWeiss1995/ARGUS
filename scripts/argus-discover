@@ -153,8 +153,21 @@ ENDJSON
 JSON=$(build_json)
 
 if $START_STACK; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    STACK_DIR="$(cd "$SCRIPT_DIR/../deploy/observability" && pwd)"
+    # Locate the observability stack: check CWD (repo root), then common paths
+    for candidate in \
+        "$PWD/deploy/observability" \
+        "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy/observability" \
+    ; do
+        if [[ -f "$candidate/docker-compose.yml" ]]; then
+            STACK_DIR="$candidate"
+            break
+        fi
+    done
+    if [[ -z "${STACK_DIR:-}" ]]; then
+        echo "Error: cannot find deploy/observability/docker-compose.yml." >&2
+        echo "Run this from the ARGUS repo root, or use --output and start the stack manually." >&2
+        exit 1
+    fi
     TARGETS_FILE="${OUTPUT:-$STACK_DIR/argus-targets.json}"
     mkdir -p "$(dirname "$TARGETS_FILE")"
     echo "$JSON" > "$TARGETS_FILE"
