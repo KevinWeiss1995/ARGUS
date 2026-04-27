@@ -52,46 +52,366 @@ cargo run --release -- --mode mock --profile spike --tui
 
 You don't need root, eBPF, or InfiniBand hardware to try it out. Mock mode generates synthetic events that exercise the full pipeline.
 
-## Production deployment (systemd)
+## Deployment
 
-The recommended way to run ARGUS in production is as a systemd service. The install script handles everything — building, installing, and configuring the service:
+ARGUS supports two deployment modes. The agent binary is identical in both -- what changes is who runs Prometheus and Grafana.
+
+| | Standalone | Production Integration |
+|---|---|---|
+| Who runs Prometheus/Grafana | ARGUS (bundled Docker stack) | Your existing infrastructure |
+| TLS on metrics endpoint | Optional | Recommended |
+| Bearer token auth | Optional | Recommended |
+| Best for | Single-node, demos, dev | Multi-node clusters, HPC |
+| Config format | Env file or TOML | TOML (recommended) |
+
+### Prerequisites
+
+- Linux with eBPF support (kernel 5.4+)
+- Root or `CAP_BPF` permissions
+- Rust toolchain (the install script will install it if missing)
+- Docker + Docker Compose (only for the standalone observability stack)
+
+---
+
+### Option A: Standalone mode (ARGUS manages its own Grafana + Prometheus)
+
+Use this when you want a complete, self-contained setup. ARGUS deploys its own Prometheus + Grafana + Alertmanager stack via Docker Compose and pre-provisions dashboards automatically.
+
+**Step 1: Clone and install the agent**
 
 ```bash
 git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 sudo ./scripts/install.sh
+```
+
+The install script builds the agent and eBPF probes, then installs:
+- `/usr/local/bin/argusd` -- the agent binary
+- `/usr/local/lib/argus/argus-ebpf` -- the eBPF object
+- `/etc/argus/argusd.conf` -- environment-based config
+- `/etc/argus/argusd.toml` -- TOML config (example, not active by default)
+- `/etc/systemd/system/argusd.service` -- systemd unit
+
+If you already have pre-built binaries, use `sudo ./scripts/install.sh --no-build` to skip compilation.
+
+**Important**: On upgrade (re-running `install.sh`), existing config files in `/etc/argus/` are **never overwritten**. If you need the latest defaults, manually copy them:
+```bash
+sudo cp deploy/argusd.conf /etc/argus/argusd.conf
+sudo cp deploy/examples/standalone.toml /etc/argus/argusd.toml
+```
+
+**Step 2: Start the agent**
+
+```bash
+sudo systemctl enable argusd    # start on boot
+sudo systemctl start argusd     # start now
+```
+
+**Step 3: Verify the agent is running**
+
+```bash
+sudo systemctl status argusd
+journalctl -u argusd --no-pager -n 20
+
+# Prometheus metrics endpoint (should return metric text)
+curl localhost:9100/metrics | head -5
+
+# Health check (should return JSON)
+curl localhost:9100/health
+```
+
+**Step 4: Start the observability stack**
+
+Requires Docker and Docker Compose on the same host (or a host that can reach the agent's port 9100).
+
+```bash
+cd ARGUS
+deploy/observability/scripts/start-observability.sh
+```
+
+This starts:
+- **Prometheus** on port `9091` -- scrapes the agent at `host.docker.internal:9100`
+- **Grafana** on port `3000` -- pre-provisioned with ARGUS dashboards
+- **Alertmanager** on port `9093` -- alert routing (webhook receiver not configured by default)
+
+**Step 5: Open Grafana**
+
+Open `http://<host-ip>:3000` in your browser. Login: `admin` / `admin`.
+
+Three dashboards are pre-loaded under the ARGUS folder:
+- **Fleet Overview** -- health state summary across all monitored nodes
+- **Node Detail** -- kernel probe metrics, CQ jitter, IB counters for a single node
+- **Link Drill-Down** -- per-device, per-port InfiniBand error and throughput analysis
+
+If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB hardware detected" / "No CQ data" -- this is expected. The kernel probe panels (IRQ, slab, NAPI) will be active on any Linux node.
+
+---
+
+### Option B: Production integration (plug into your existing Prometheus + Grafana)
+
+Use this when you already have a Prometheus/Grafana stack and want ARGUS to feed metrics into it. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
+
+**Step 1: Install the agent**
+
+```bash
+git clone https://github.com/KevinWeiss1995/ARGUS.git
+cd ARGUS
+sudo ./scripts/install.sh
+```
+
+**Step 2: Configure with the production TOML template**
+
+```bash
+# Copy the production config template
+sudo cp deploy/examples/production.toml /etc/argus/argusd.toml
+
+# Enable the TOML config file in the systemd env file
+sudo sed -i 's|# ARGUS_CONFIG=.*|ARGUS_CONFIG=/etc/argus/argusd.toml|' /etc/argus/argusd.conf
+
+# Verify it took effect
+grep ARGUS_CONFIG /etc/argus/argusd.conf
+# Should print:  ARGUS_CONFIG=/etc/argus/argusd.toml
+```
+
+**Step 3: Set up TLS and bearer token auth**
+
+This secures the metrics endpoint so only your Prometheus can scrape it. Skip this step if you're on a trusted network.
+
+```bash
+# Create the TLS directory
+sudo mkdir -p /etc/argus/tls
+
+# Generate a self-signed certificate (for testing; use real certs in production)
+sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout /etc/argus/tls/server.key -out /etc/argus/tls/server.crt \
+  -days 365 -nodes -subj "/CN=argusd"
+
+# Generate a shared bearer token
+sudo sh -c 'openssl rand -hex 32 > /etc/argus/token'
+sudo chmod 600 /etc/argus/token
+
+# Note the token -- you'll need it for Prometheus config
+sudo cat /etc/argus/token
+```
+
+The production TOML template already points to these paths:
+```toml
+[tls]
+cert = "/etc/argus/tls/server.crt"
+key  = "/etc/argus/tls/server.key"
+
+[auth]
+bearer_token_file = "/etc/argus/token"
+```
+
+If you skip TLS, comment out or remove the `[tls]` and `[auth]` sections from `/etc/argus/argusd.toml`.
+
+**Step 4: Edit the TOML config**
+
+Review `/etc/argus/argusd.toml` and remove or adjust anything that doesn't apply. In particular, remove the `webhook_url` line if you don't have a webhook endpoint:
+
+```bash
+sudo nano /etc/argus/argusd.toml
+# or:
+sudo sed -i '/webhook_url/d' /etc/argus/argusd.toml
+```
+
+**Step 5: Start the agent**
+
+```bash
 sudo systemctl enable argusd
 sudo systemctl start argusd
 ```
 
-The install script will:
-1. Detect your Rust toolchain (handles `sudo` PATH correctly via `SUDO_USER`)
-2. Install missing prerequisites (nightly, rust-src, bpf-linker) if needed
-3. Build the agent and eBPF probes in release mode
-4. Install binaries to `/usr/local/bin/argusd` and `/usr/local/lib/argus/argus-ebpf`
-5. Install the default config to `/etc/argus/argusd.conf` (preserves existing config on upgrade)
-6. Install the systemd unit and run `daemon-reload`
-
-Verify it's working:
+**Step 6: Verify**
 
 ```bash
-journalctl -u argusd -f       # logs
-curl localhost:9100/metrics    # Prometheus metrics
-curl localhost:9100/health     # health check
+sudo systemctl status argusd
+journalctl -u argusd --no-pager -n 20
 ```
 
-Configuration lives in `/etc/argus/argusd.conf`. Edit and `systemctl restart argusd` to apply changes. If you already have pre-built binaries, use `sudo ./scripts/install.sh --no-build` to skip compilation.
+In the logs you should see:
+- `TLS enabled for metrics endpoint` (if TLS is configured)
+- `bearer token auth enabled for metrics endpoint` (if auth is configured)
+- `metrics/health server listening` with the bind address
 
-### Observability stack (Prometheus + Grafana)
-
-A ready-made docker-compose stack is included for monitoring:
+Test the endpoint:
 
 ```bash
-# Start Prometheus (port 9091), Grafana (port 3000), and Alertmanager (port 9093)
-deploy/observability/scripts/start-observability.sh
+# Read the token into a variable
+TOKEN=$(sudo cat /etc/argus/token)
+
+# With TLS + auth (production):
+curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics | head -5
+curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
+
+# Without TLS (if you skipped Step 3):
+curl localhost:9100/metrics | head -5
+curl localhost:9100/health
 ```
 
-Grafana is pre-provisioned with an ARGUS dashboard. Prometheus scrapes `argusd` on port 9100 by default.
+**Step 7: Configure your Prometheus to scrape ARGUS**
+
+Add an ARGUS scrape job to your existing `prometheus.yml`. A full example is at `deploy/examples/prometheus-scrape-argus.yml`.
+
+With TLS + bearer auth:
+```yaml
+scrape_configs:
+  - job_name: argus
+    scrape_interval: 5s
+    scheme: https
+    tls_config:
+      # Copy the cert from the ARGUS node, or use your own CA
+      ca_file: /etc/prometheus/argus-ca.crt
+      # If using self-signed certs without proper SANs:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/argus-token
+    static_configs:
+      - targets:
+          - "node01:9100"
+          - "node02:9100"
+        labels:
+          cluster: production
+```
+
+Without TLS (plain HTTP):
+```yaml
+scrape_configs:
+  - job_name: argus
+    scrape_interval: 5s
+    static_configs:
+      - targets:
+          - "node01:9100"
+          - "node02:9100"
+        labels:
+          cluster: production
+```
+
+Copy the bearer token to your Prometheus host:
+```bash
+# On the ARGUS node:
+sudo cat /etc/argus/token
+# Copy the output
+
+# On the Prometheus host:
+echo "THE_TOKEN" > /etc/prometheus/argus-token
+chmod 600 /etc/prometheus/argus-token
+```
+
+Reload Prometheus to pick up the new scrape config:
+```bash
+curl -X POST http://localhost:9090/-/reload
+# or: sudo systemctl reload prometheus
+```
+
+**Step 8: Import ARGUS dashboards into your Grafana**
+
+The ARGUS dashboards are designed to be portable -- they use `${DS_PROMETHEUS}` datasource variables so they work with any Prometheus datasource name.
+
+**Method 1 -- Grafana UI (recommended for first-time setup)**:
+
+1. Open your Grafana instance
+2. Go to **Dashboards** > **New** > **Import**
+3. Click **Upload dashboard JSON file**
+4. Upload each file from `deploy/observability/grafana/dashboards/`:
+   - `argus-fleet-overview.json`
+   - `argus-node-detail.json`
+   - `argus-link-drilldown.json`
+5. Grafana will prompt you to select a Prometheus datasource -- choose the one that scrapes your ARGUS nodes
+6. Click **Import**
+
+**Method 2 -- API import (for automation)**:
+
+```bash
+# From the ARGUS repo on any machine with network access to Grafana
+./scripts/export-dashboards.sh --import http://your-grafana:3000 --api-key YOUR_GRAFANA_API_KEY
+```
+
+If you don't have an API key, the script falls back to `admin:admin` basic auth.
+
+**Method 3 -- Copy JSON files for manual distribution**:
+
+```bash
+./scripts/export-dashboards.sh
+# Outputs to dist/grafana-dashboards/
+ls dist/grafana-dashboards/
+```
+
+**Step 9 (optional): Push-based delivery for firewalled nodes**
+
+If your ARGUS nodes can't be scraped directly (firewalls, NAT), deploy a Prometheus agent sidecar that scrapes the local agent and `remote_write`s to your central store:
+
+```bash
+# See deploy/examples/prometheus-agent-sidecar.yml for a Docker Compose template
+```
+
+This uses Prometheus in `--agent` mode -- it scrapes `localhost:9100` and pushes to your central Prometheus, Thanos, or Mimir instance.
+
+---
+
+### Configuration reference
+
+ARGUS supports two configuration layers. They can be used independently or together.
+
+**Environment file** (`/etc/argus/argusd.conf`):
+
+Sourced by the systemd unit. Simple key=value pairs for basic settings:
+```bash
+ARGUS_MODE=live
+ARGUS_EBPF_PATH=/usr/local/lib/argus/argus-ebpf
+ARGUS_METRICS_ADDR=0.0.0.0:9100
+ARGUS_LOG_LEVEL=info
+ARGUS_WINDOW_SECS=3
+ARGUS_EXTRA_ARGS=
+
+# To enable the TOML config file, uncomment:
+# ARGUS_CONFIG=/etc/argus/argusd.toml
+```
+
+**TOML config file** (`/etc/argus/argusd.toml`):
+
+Must be enabled by setting `ARGUS_CONFIG=/etc/argus/argusd.toml` in the env file. Supports all settings including TLS, auth, and detection tuning:
+
+```toml
+[agent]
+mode = "live"                                    # live, mock, or replay
+ebpf_path = "/usr/local/lib/argus/argus-ebpf"
+log_level = "info"                               # trace, debug, info, warn, error
+window_secs = 3                                  # aggregation window
+
+[metrics]
+addr = "0.0.0.0:9100"                           # bind address for /metrics and /health
+
+[tls]                                            # omit this section to disable TLS
+cert = "/etc/argus/tls/server.crt"
+key  = "/etc/argus/tls/server.key"
+
+[auth]                                           # omit this section to disable auth
+bearer_token_file = "/etc/argus/token"
+
+[detection]
+irq_skew_threshold_pct = 70.0
+rdma_spike_factor = 5.0
+rdma_baseline_latency_ns = 2000
+slab_pressure_min_allocs = 100
+slab_pressure_alloc_rate_threshold = 5000
+
+[actions]
+dry_run = false
+# webhook_url = "https://alerting.internal/hooks/argus"
+# slurm_drain = false
+# port_disable = false
+```
+
+**Precedence**: CLI flags > env file values > TOML config values > built-in defaults.
+
+Example config files are in `deploy/examples/`:
+- `standalone.toml` -- no TLS, no auth, local use
+- `production.toml` -- TLS + auth + detection tuning
+
+### Kubernetes deployment
+
+A DaemonSet manifest with headless Service and ServiceMonitor (for Prometheus Operator) is provided at `deploy/examples/k8s-daemonset.yaml`. It runs `argusd` as a privileged DaemonSet on every node with host PID/network, mounts `/sys` and `/proc`, and exposes port 9100 for Prometheus scraping.
 
 ## Running with live eBPF (manual)
 
@@ -141,20 +461,32 @@ Scenarios include expected state transitions so they double as regression tests.
 
 ## Prometheus and health endpoints
 
+The agent exposes two HTTP(S) endpoints when `--metrics-addr` is set (always set in systemd mode):
+
+| Endpoint | Content | Use |
+|---|---|---|
+| `/metrics` | Prometheus text format | Scrape target for Prometheus |
+| `/health` | JSON | Kubernetes liveness/readiness, SLURM health checks |
+
 ```bash
-# Enable the metrics server (default port in systemd: 9100)
-./target/release/argus-agent --mode mock --metrics-addr 127.0.0.1:9100
+# Plain HTTP (standalone / trusted network)
+curl http://localhost:9100/metrics
+curl http://localhost:9100/health
 
-# Scrape metrics
-curl http://127.0.0.1:9100/metrics
-
-# Health check (for Kubernetes probes, SLURM health checks, etc.)
-curl http://127.0.0.1:9100/health
+# With TLS + bearer auth (production)
+TOKEN=$(sudo cat /etc/argus/token)
+curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics
+curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
 ```
 
-The health endpoint returns JSON:
+Health response format:
 ```json
 {"state":"HEALTHY","uptime_secs":42.3,"events_processed":14200,"last_window_ts":1710000000}
+```
+
+For manual runs (without systemd), enable the endpoint with:
+```bash
+./target/release/argus-agent --mode mock --metrics-addr 127.0.0.1:9100
 ```
 
 ## Don't have an HPC cluster but want to test ARGUS?
@@ -211,8 +543,13 @@ argus-ebpf/           eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
 argus-common/         Shared types between agent and tests
 argus-test-scenarios/ JSON scenario files for replay and regression testing
 xtask/                Build tooling (eBPF compilation)
-scripts/              Install script, E2E tests, fault injection, Soft-RoCE setup
-deploy/               Systemd unit, config, observability stack (Prometheus/Grafana)
+scripts/              Install, export-dashboards, E2E tests, fault injection, Soft-RoCE
+deploy/
+  argusd.service      Systemd unit
+  argusd.conf         Environment file (simple config)
+  examples/           TOML configs, Prometheus scrape snippets, K8s manifests
+  observability/      Bundled Prometheus + Grafana + Alertmanager stack
+    grafana/dashboards/  Portable Grafana dashboards (importable into any Grafana)
 ```
 
 ## Testing
@@ -308,9 +645,9 @@ Longer windows = less frequent work = lower CPU. Shorter windows = faster detect
 
 For most HPC clusters, 3-10 seconds is a good balance. Link degradation develops over seconds to minutes, not milliseconds.
 
-## Configuration
+## Detection thresholds
 
-All detection thresholds are configurable via CLI or the `DetectionConfig` struct. Defaults are tuned for typical HPC InfiniBand clusters:
+All detection thresholds are configurable via CLI, TOML config (`[detection]` section), or the `DetectionConfig` struct. Defaults are tuned for typical HPC InfiniBand clusters:
 
 | Parameter | Default | Description |
 |---|---|---|

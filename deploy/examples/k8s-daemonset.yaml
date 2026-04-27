@@ -1,0 +1,130 @@
+# Kubernetes DaemonSet for ARGUS.
+#
+# Deploys argusd to every node in the cluster. Requires:
+#   - Privileged container (for eBPF, /sys, /proc access)
+#   - Host PID and network namespace
+#   - The ARGUS container image (build with: docker build -t argus:latest .)
+#
+# For Prometheus Operator users, a ServiceMonitor is included at the bottom.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: argusd
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: argusd
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argusd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: argusd
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: argusd
+          image: argus:latest
+          args:
+            - "--mode=live"
+            - "--ebpf-path=/usr/local/lib/argus/argus-ebpf"
+            - "--metrics-addr=0.0.0.0:9100"
+            - "--log-level=info"
+          securityContext:
+            privileged: true
+          ports:
+            - name: metrics
+              containerPort: 9100
+              hostPort: 9100
+              protocol: TCP
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: config
+              mountPath: /etc/argus
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: config
+          configMap:
+            name: argusd-config
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argusd
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: argusd
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: argusd
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+---
+# ServiceMonitor for Prometheus Operator (kube-prometheus-stack).
+# Uncomment if using Prometheus Operator.
+#
+# apiVersion: monitoring.coreos.com/v1
+# kind: ServiceMonitor
+# metadata:
+#   name: argusd
+#   namespace: monitoring
+#   labels:
+#     app.kubernetes.io/name: argusd
+# spec:
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: argusd
+#   endpoints:
+#     - port: metrics
+#       interval: 5s
+#       path: /metrics
+#       # For TLS + auth:
+#       # scheme: https
+#       # tlsConfig:
+#       #   caFile: /etc/prometheus/argus-ca.crt
+#       # bearerTokenFile: /etc/prometheus/argus-token

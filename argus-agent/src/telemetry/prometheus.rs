@@ -464,85 +464,181 @@ impl Default for HealthSnapshot {
     }
 }
 
-/// Start an HTTP server on `addr` that serves `/metrics` and `/health`.
-/// Binds to the provided address (should be 127.0.0.1 for security unless
-/// explicitly configured otherwise by the operator).
+/// TLS configuration for the metrics endpoint.
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub cert_path: std::path::PathBuf,
+    pub key_path: std::path::PathBuf,
+}
+
+/// Start an HTTP(S) server on `addr` that serves `/metrics` and `/health`.
+///
+/// When `tls` is `Some`, the server uses TLS (HTTPS). When `auth_token` is
+/// `Some`, every request must include a matching `Authorization: Bearer <token>`
+/// header or receive a 401.
 pub async fn serve_metrics(
     exporter: SharedExporter,
     health: SharedHealthState,
     addr: std::net::SocketAddr,
+    tls: Option<TlsConfig>,
+    auth_token: Option<String>,
 ) -> anyhow::Result<()> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+
+    let tls_acceptor = if let Some(ref tls_cfg) = tls {
+        Some(build_tls_acceptor(tls_cfg)?)
+    } else {
+        None
+    };
+
+    let listener = TcpListener::bind(addr).await?;
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    tracing::info!(%addr, %scheme, "metrics/health server listening");
+
+    let auth_token: Option<Arc<str>> = auth_token.map(|t| Arc::from(t.as_str()));
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let exporter = exporter.clone();
+        let health = health.clone();
+        let auth = auth_token.clone();
+
+        if let Some(ref acceptor) = tls_acceptor {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(stream).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::debug!("TLS handshake failed: {e}");
+                        return;
+                    }
+                };
+                let io = TokioIo::new(tls_stream);
+                serve_connection(io, exporter, health, auth).await;
+            });
+        } else {
+            let io = TokioIo::new(stream);
+            tokio::spawn(async move {
+                serve_connection(io, exporter, health, auth).await;
+            });
+        }
+    }
+}
+
+async fn serve_connection<I>(
+    io: I,
+    exporter: SharedExporter,
+    health: SharedHealthState,
+    auth_token: Option<Arc<str>>,
+) where
+    I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+{
     use http_body_util::Full;
     use hyper::body::Bytes;
     use hyper::service::service_fn;
     use hyper::{Request, Response, StatusCode};
-    use hyper_util::rt::TokioIo;
-    use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "metrics/health server listening");
-
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
+    let service = service_fn(move |req: Request<hyper::body::Incoming>| {
         let exporter = exporter.clone();
         let health = health.clone();
-
-        tokio::spawn(async move {
-            let service = service_fn(move |req: Request<hyper::body::Incoming>| {
-                let exporter = exporter.clone();
-                let health = health.clone();
-                async move {
-                    match req.uri().path() {
-                        "/metrics" => {
-                            let body = match exporter.lock() {
-                                Ok(exp) => exp.encode().unwrap_or_default(),
-                                Err(_) => String::from("# error: lock poisoned\n"),
-                            };
-                            Ok::<_, hyper::Error>(
-                                Response::builder()
-                                    .status(StatusCode::OK)
-                                    .header("content-type", "text/plain; version=0.0.4")
-                                    .body(Full::new(Bytes::from(body)))
-                                    .unwrap_or_else(|_| {
-                                        Response::new(Full::new(Bytes::from("internal error")))
-                                    }),
-                            )
-                        }
-                        "/health" => {
-                            let snap = health.lock().map(|h| h.clone()).unwrap_or_default();
-                            let body = format!(
-                                r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
-                                snap.state,
-                                snap.uptime_secs,
-                                snap.events_processed,
-                                snap.last_window_ts,
-                            );
-                            Ok(Response::builder()
-                                .status(StatusCode::OK)
-                                .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(body)))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
-                        }
-                        _ => Ok(Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Full::new(Bytes::from("not found")))
+        let auth = auth_token.clone();
+        async move {
+            if let Some(ref expected) = auth {
+                let authorized = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Bearer "))
+                    .map_or(false, |t| t == expected.as_ref());
+                if !authorized {
+                    return Ok::<_, hyper::Error>(
+                        Response::builder()
+                            .status(StatusCode::UNAUTHORIZED)
+                            .body(Full::new(Bytes::from("unauthorized\n")))
                             .unwrap_or_else(|_| {
-                                Response::new(Full::new(Bytes::from("not found")))
-                            })),
-                    }
+                                Response::new(Full::new(Bytes::from("unauthorized\n")))
+                            }),
+                    );
                 }
-            });
-
-            if let Err(e) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection(io, service)
-                    .await
-            {
-                tracing::warn!("metrics server connection error: {e}");
             }
-        });
+
+            match req.uri().path() {
+                "/metrics" => {
+                    let body = match exporter.lock() {
+                        Ok(exp) => exp.encode().unwrap_or_default(),
+                        Err(_) => String::from("# error: lock poisoned\n"),
+                    };
+                    Ok::<_, hyper::Error>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "text/plain; version=0.0.4")
+                            .body(Full::new(Bytes::from(body)))
+                            .unwrap_or_else(|_| {
+                                Response::new(Full::new(Bytes::from("internal error")))
+                            }),
+                    )
+                }
+                "/health" => {
+                    let snap = health.lock().map(|h| h.clone()).unwrap_or_default();
+                    let body = format!(
+                        r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
+                        snap.state,
+                        snap.uptime_secs,
+                        snap.events_processed,
+                        snap.last_window_ts,
+                    );
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Full::new(Bytes::from(body)))
+                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                }
+                _ => Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::from("not found")))
+                    .unwrap_or_else(|_| {
+                        Response::new(Full::new(Bytes::from("not found")))
+                    })),
+            }
+        }
+    });
+
+    if let Err(e) =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .serve_connection(io, service)
+            .await
+    {
+        tracing::warn!("metrics server connection error: {e}");
     }
+}
+
+fn build_tls_acceptor(cfg: &TlsConfig) -> anyhow::Result<tokio_rustls::TlsAcceptor> {
+    use rustls_pemfile::{certs, private_key};
+    use std::io::BufReader;
+    use tokio_rustls::rustls::ServerConfig;
+
+    let cert_file = std::fs::File::open(&cfg.cert_path)
+        .map_err(|e| anyhow::anyhow!("failed to open TLS cert {}: {e}", cfg.cert_path.display()))?;
+    let key_file = std::fs::File::open(&cfg.key_path)
+        .map_err(|e| anyhow::anyhow!("failed to open TLS key {}: {e}", cfg.key_path.display()))?;
+
+    let cert_chain: Vec<_> = certs(&mut BufReader::new(cert_file))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS cert chain: {e}"))?;
+
+    let key = private_key(&mut BufReader::new(key_file))
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS private key: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", cfg.key_path.display()))?;
+
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)
+        .map_err(|e| anyhow::anyhow!("TLS server config error: {e}"))?;
+
+    Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(
+        server_config,
+    )))
 }
 
 #[cfg(test)]

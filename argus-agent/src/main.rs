@@ -3,7 +3,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use anyhow::{bail, Context, Result};
-use argus_agent::config::{Cli, MockProfile, RunMode};
+use argus_agent::config::{Cli, EffectiveConfig, MockProfile, RunMode};
 use argus_agent::pipeline::Pipeline;
 use argus_agent::sources::mock::{MockConfig, MockEventSource};
 use argus_agent::sources::replay::ReplayEventSource;
@@ -15,10 +15,10 @@ use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let config = Cli::parse().resolve()?;
 
-    if !cli.tui {
-        let log_level: tracing::Level = cli.log_level.parse().unwrap_or(tracing::Level::INFO);
+    if !config.tui {
+        let log_level: tracing::Level = config.log_level.parse().unwrap_or(tracing::Level::INFO);
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()),
@@ -27,20 +27,23 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    if let Some(ref path) = config.tls_cert {
+        tracing::info!(?path, "TLS enabled for metrics endpoint");
+    }
+    if config.auth_token.is_some() {
+        tracing::info!("bearer token auth enabled for metrics endpoint");
+    }
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
         shutdown_signal().await;
         let _ = shutdown_tx.send(true);
     });
 
-    let num_cpus = cli.resolve_num_cpus();
+    let num_cpus = config.num_cpus;
     tracing::info!(num_cpus, "CPU count resolved");
 
-    let detection_config = argus_agent::config::DetectionConfig {
-        num_cpus,
-        ..argus_agent::config::DetectionConfig::default()
-    };
-    let pipeline = Pipeline::with_config(num_cpus, &detection_config);
+    let pipeline = Pipeline::with_config(num_cpus, &config.detection);
     let telemetry = TelemetryCollector::default();
     let dash_state = DashboardState::default();
     let start = std::time::Instant::now();
@@ -51,31 +54,42 @@ async fn main() -> Result<()> {
     let health_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
         argus_agent::telemetry::prometheus::HealthSnapshot::default(),
     ));
-    if let Some(ref addr_str) = cli.metrics_addr {
+    if let Some(ref addr_str) = config.metrics_addr {
         let addr: std::net::SocketAddr = addr_str
             .parse()
-            .with_context(|| format!("invalid --metrics-addr: {addr_str}"))?;
+            .with_context(|| format!("invalid metrics addr: {addr_str}"))?;
         let exp = prom_exporter.clone();
         let hs = health_snapshot.clone();
+        let tls_cfg = match (&config.tls_cert, &config.tls_key) {
+            (Some(cert), Some(key)) => Some(argus_agent::telemetry::prometheus::TlsConfig {
+                cert_path: cert.clone(),
+                key_path: key.clone(),
+            }),
+            _ => None,
+        };
+        let auth_token = config.auth_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = argus_agent::telemetry::prometheus::serve_metrics(exp, hs, addr).await {
+            if let Err(e) =
+                argus_agent::telemetry::prometheus::serve_metrics(exp, hs, addr, tls_cfg, auth_token)
+                    .await
+            {
                 tracing::error!("metrics server failed: {e}");
             }
         });
     }
 
-    let dashboard = if cli.tui {
+    let dashboard = if config.tui {
         Some(Dashboard::new()?)
     } else {
         None
     };
 
-    match cli.mode {
+    match config.mode {
         RunMode::Live => {
             #[cfg(target_os = "linux")]
             {
                 run_live_mode(
-                    &cli,
+                    &config,
                     pipeline,
                     telemetry,
                     dash_state,
@@ -92,11 +106,11 @@ async fn main() -> Result<()> {
             }
         }
         _ => {
-            let (source, source_name) = build_event_source(&cli)?;
+            let (source, source_name) = build_event_source(&config)?;
             run_event_mode(
                 source,
                 source_name,
-                &cli,
+                &config,
                 pipeline,
                 telemetry,
                 dash_state,
@@ -119,7 +133,7 @@ async fn main() -> Result<()> {
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 fn run_live_mode(
-    cli: &Cli,
+    config: &EffectiveConfig,
     mut pipeline: Pipeline,
     mut telemetry: TelemetryCollector,
     mut dash_state: DashboardState,
@@ -133,7 +147,7 @@ fn run_live_mode(
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    let ebpf_path = cli
+    let ebpf_path = config
         .ebpf_path
         .as_ref()
         .context("--ebpf-path <path> is required in live mode")?;
@@ -145,7 +159,7 @@ fn run_live_mode(
         );
     }
 
-    if let Some(ref expected_hash) = cli.ebpf_hash {
+    if let Some(ref expected_hash) = config.ebpf_hash {
         verify_ebpf_hash(ebpf_path, expected_hash)?;
     }
 
@@ -155,7 +169,7 @@ fn run_live_mode(
     dash_state.source_name = "ebpf/live".into();
 
     argus_agent::security::drop_privileges();
-    if cli.seccomp {
+    if config.seccomp {
         argus_agent::security::apply_seccomp();
     }
 
@@ -171,9 +185,9 @@ fn run_live_mode(
     };
 
     let mut process_resolver = argus_agent::sources::process_resolver::ProcessResolver::new();
-    let mut action_engine = argus_agent::actions::ActionEngine::from_config(&cli.action_config());
+    let mut action_engine = argus_agent::actions::ActionEngine::from_config(&config.actions);
 
-    let window_duration = std::time::Duration::from_secs(cli.window_secs);
+    let window_duration = std::time::Duration::from_secs(config.window_secs);
     let tick_interval = std::time::Duration::from_millis(200);
     let mut window_start = std::time::Instant::now();
     let mut event_count = 0u64;
@@ -181,9 +195,6 @@ fn run_live_mode(
     // Take an initial BPF snapshot to establish baselines (deltas will be zero).
     let _ = ebpf_source.read_bpf_snapshot();
 
-    // Use a single-threaded runtime tick — the agent is intentionally idle
-    // between window boundaries. We use std::thread::sleep to avoid
-    // keeping the async runtime hot.
     loop {
         if *shutdown_rx.borrow() {
             tracing::info!("received shutdown signal, exiting gracefully");
@@ -197,7 +208,6 @@ fn run_live_mode(
         }
 
         if window_start.elapsed() >= window_duration {
-            // Read BPF maps (aggregated in-kernel, single syscall per map)
             let snap = ebpf_source.read_bpf_snapshot();
             event_count += snap.total_irq_count
                 + snap.slab_alloc_count
@@ -205,12 +215,10 @@ fn run_live_mode(
                 + snap.napi_poll_count;
             pipeline.ingest_bpf_snapshot(&snap);
 
-            // Read hardware counters from sysfs
             for hw_event in hw_reader.read_all() {
                 pipeline.ingest(&hw_event);
             }
 
-            // Detection + autonomous response
             let alerts = pipeline.evaluate();
             if !alerts.is_empty() {
                 let qp_owners = ebpf_source.read_qp_owners();
@@ -221,7 +229,6 @@ fn run_live_mode(
                 for mut alert in alerts {
                     action_engine.dispatch(&alert, &blast);
 
-                    // Record to Prometheus
                     if let Ok(exp) = prom_exporter.lock() {
                         exp.record_alert(alert.kind_name(), &alert.severity.to_string());
                     }
@@ -245,10 +252,8 @@ fn run_live_mode(
             dash_state.event_count = event_count;
             dash_state.uptime_secs = start.elapsed().as_secs_f64();
 
-            // Prometheus — update metrics and per-device IB counters
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
-                // Per-device IB counters
                 for (device, port, _dev_type) in hw_reader.discovered_ports() {
                     exp.update_ib_counters(
                         &device,
@@ -268,7 +273,6 @@ fn run_live_mode(
             window_start = std::time::Instant::now();
         }
 
-        // Redraw TUI (for key handling and display freshness)
         if let Some(ref mut dash) = dashboard {
             dash_state.uptime_secs = start.elapsed().as_secs_f64();
             dash.draw(&dash_state)?;
@@ -294,7 +298,7 @@ fn run_live_mode(
 async fn run_event_mode(
     mut source: AnyEventSource,
     source_name: String,
-    cli: &Cli,
+    config: &EffectiveConfig,
     mut pipeline: Pipeline,
     mut telemetry: TelemetryCollector,
     mut dash_state: DashboardState,
@@ -311,7 +315,7 @@ async fn run_event_mode(
     dash_state.source_name = source_name;
 
     #[cfg(target_os = "linux")]
-    let hw_reader = if matches!(cli.mode, RunMode::Live) {
+    let hw_reader = if matches!(config.mode, RunMode::Live) {
         let reader = argus_agent::sources::hwcounters::HwCounterReader::discover();
         if reader.port_count() > 0 {
             tracing::info!(
@@ -325,7 +329,7 @@ async fn run_event_mode(
     };
 
     let mut event_count = 0u64;
-    let window_duration = std::time::Duration::from_secs(cli.window_secs);
+    let window_duration = std::time::Duration::from_secs(config.window_secs);
     let display_interval = std::time::Duration::from_millis(200);
     let mut window_start = std::time::Instant::now();
     let mut last_display = std::time::Instant::now();
@@ -480,32 +484,32 @@ fn verify_ebpf_hash(path: &std::path::Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
-    match cli.mode {
+fn build_event_source(config: &EffectiveConfig) -> Result<(AnyEventSource, String)> {
+    match config.mode {
         RunMode::Mock => {
-            let base = match cli.profile {
+            let base = match config.profile {
                 MockProfile::Healthy => MockConfig::healthy(),
                 MockProfile::Skew => MockConfig::interrupt_skew(),
                 MockProfile::Spike => MockConfig::rdma_latency_spike(),
                 MockProfile::Pressure => MockConfig::slab_pressure(),
             };
-            let config = MockConfig {
-                num_cpus: cli.resolve_num_cpus(),
-                max_events: if cli.max_events > 0 {
-                    Some(cli.max_events)
+            let mc = MockConfig {
+                num_cpus: config.num_cpus,
+                max_events: if config.max_events > 0 {
+                    Some(config.max_events)
                 } else {
                     None
                 },
                 ..base
             };
-            let name = format!("mock/{:?} (simulated)", cli.profile).to_lowercase();
-            Ok((AnyEventSource::Mock(MockEventSource::new(config)), name))
+            let name = format!("mock/{:?} (simulated)", config.profile).to_lowercase();
+            Ok((AnyEventSource::Mock(MockEventSource::new(mc)), name))
         }
         RunMode::Replay => {
             const MAX_REPLAY_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
             const MAX_REPLAY_EVENTS: usize = 10_000_000;
 
-            let path = cli
+            let path = config
                 .file
                 .as_ref()
                 .context("--file <path> is required in replay mode")?;
@@ -558,7 +562,7 @@ fn build_event_source(cli: &Cli) -> Result<(AnyEventSource, String)> {
                 ReplayEventSource::from_events(events)
             };
 
-            let source = source.with_time_scale(cli.time_scale);
+            let source = source.with_time_scale(config.time_scale);
             let name = format!(
                 "replay/{}",
                 path.file_name().unwrap_or_default().to_string_lossy()

@@ -1,0 +1,42 @@
+# Prometheus agent-mode sidecar for push-based metric delivery.
+#
+# Use this when your ARGUS nodes cannot be scraped directly (firewalls, NAT,
+# or policy). Prometheus runs in --agent mode alongside argusd, scraping
+# localhost and remote_write-ing to a central store.
+#
+# Usage:
+#   docker compose -f prometheus-agent-sidecar.yml up -d
+#
+# Prerequisites:
+#   - argusd running on the host at localhost:9100
+#   - A remote Prometheus, Thanos, or Mimir endpoint accepting remote_write
+
+services:
+  prometheus-agent:
+    image: prom/prometheus:v2.53.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--enable-feature=agent"
+      - "--storage.agent.path=/prometheus"
+    volumes:
+      - ./prometheus-agent.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    network_mode: host
+---
+# Save this as prometheus-agent.yml alongside the compose file:
+#
+# global:
+#   scrape_interval: 5s
+#
+# scrape_configs:
+#   - job_name: argus
+#     static_configs:
+#       - targets: ["localhost:9100"]
+#
+# remote_write:
+#   - url: "https://prometheus-central.internal/api/v1/write"
+#     # bearer_token_file: /etc/prometheus/remote-write-token
+#     # tls_config:
+#     #   ca_file: /etc/prometheus/ca.crt
