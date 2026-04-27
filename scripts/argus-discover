@@ -88,28 +88,25 @@ probe_host() {
 
 echo "Scanning ${SUBNET} on port ${PORT}..." >&2
 
-DISCOVERED=()
+RESULT_FILE=$(mktemp)
+trap 'rm -f "$RESULT_FILE"' EXIT
+
 IPS=( $(cidr_to_ips "$SUBNET") )
 TOTAL=${#IPS[@]}
-CHECKED=0
+ACTIVE=0
+MAX_PARALLEL=128
 
 for ip in "${IPS[@]}"; do
-    probe_host "$ip" &
-    CHECKED=$((CHECKED + 1))
-    # Limit parallelism to 64 concurrent probes
-    if (( CHECKED % 64 == 0 )); then
-        wait
+    ( probe_host "$ip" >> "$RESULT_FILE" ) &
+    ACTIVE=$((ACTIVE + 1))
+    if (( ACTIVE >= MAX_PARALLEL )); then
+        wait -n 2>/dev/null || wait
+        ACTIVE=$((ACTIVE - 1))
     fi
 done
 wait
 
-# Re-probe sequentially to collect results (parallel subshells can't append to array)
-for ip in "${IPS[@]}"; do
-    if curl -sf --connect-timeout "$TIMEOUT" --max-time "$((TIMEOUT + 1))" \
-        "http://${ip}:${PORT}/health" >/dev/null 2>&1; then
-        DISCOVERED+=("$ip")
-    fi
-done
+mapfile -t DISCOVERED < "$RESULT_FILE"
 
 echo "Found ${#DISCOVERED[@]} ARGUS node(s) out of ${TOTAL} scanned." >&2
 
