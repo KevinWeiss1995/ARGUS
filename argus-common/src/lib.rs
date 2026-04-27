@@ -200,6 +200,22 @@ pub enum HealthState {
     Healthy,
     Degraded,
     Critical,
+    /// De-escalation holding state between Critical and Degraded.
+    /// The node was Critical and conditions have improved, but we require
+    /// a mandatory hold period before returning to Degraded/Healthy.
+    /// Maps to Draining for scheduler purposes (same as Degraded).
+    Recovering,
+}
+
+impl HealthState {
+    /// For scheduler integration: Recovering behaves like Degraded.
+    #[must_use]
+    pub fn for_scheduler(self) -> Self {
+        match self {
+            Self::Recovering => Self::Degraded,
+            other => other,
+        }
+    }
 }
 
 impl fmt::Display for HealthState {
@@ -208,6 +224,7 @@ impl fmt::Display for HealthState {
             Self::Healthy => write!(f, "HEALTHY"),
             Self::Degraded => write!(f, "DEGRADED"),
             Self::Critical => write!(f, "CRITICAL"),
+            Self::Recovering => write!(f, "RECOVERING"),
         }
     }
 }
