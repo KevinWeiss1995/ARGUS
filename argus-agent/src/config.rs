@@ -44,6 +44,11 @@ pub struct Cli {
     #[arg(long)]
     pub tui: bool,
 
+    /// Attach TUI to a running ARGUS daemon (read-only, no service interruption).
+    /// Connects to the /status endpoint. [default: localhost:9100]
+    #[arg(long, num_args = 0..=1, default_missing_value = "localhost:9100")]
+    pub attach: Option<String>,
+
     /// Time scale for replay (0 = instant, 1.0 = realtime, 2.0 = 2x speed)
     #[arg(long)]
     pub time_scale: Option<f64>,
@@ -181,6 +186,8 @@ pub struct EffectiveConfig {
     pub ebpf_hash: Option<String>,
     pub num_cpus: u32,
     pub tui: bool,
+    /// When Some, run in attach mode: connect to a running daemon's /status endpoint.
+    pub attach: Option<String>,
     pub time_scale: f64,
     pub max_events: u64,
     pub window_secs: u64,
@@ -412,6 +419,16 @@ impl Cli {
             ebpf_hash,
             num_cpus,
             tui: self.tui,
+            attach: self.attach.or_else(|| {
+                if std::env::args().next().as_deref().map(std::path::Path::new)
+                    .and_then(|p| p.file_name())
+                    .map_or(false, |n| n == "argus-tui")
+                {
+                    Some("localhost:9100".into())
+                } else {
+                    None
+                }
+            }),
             time_scale: self.time_scale.unwrap_or(0.0),
             max_events: self.max_events.unwrap_or(0),
             window_secs,

@@ -235,7 +235,8 @@ info "Installing CLI tools to /usr/local/bin"
 for tool in argus-status argus-discover argus-manage-targets; do
     install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/local/bin/$tool"
 done
-ok "argus-status, argus-discover, argus-manage-targets"
+ln -sf /usr/local/bin/argusd /usr/local/bin/argus-tui
+ok "argus-status, argus-discover, argus-manage-targets, argus-tui"
 
 # --- Install config (preserve existing) ---
 

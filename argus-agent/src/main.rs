@@ -17,6 +17,10 @@ use tokio::sync::watch;
 async fn main() -> Result<()> {
     let config = Cli::parse().resolve()?;
 
+    if let Some(ref addr) = config.attach {
+        return run_attach_tui(addr).await;
+    }
+
     if !config.tui {
         let log_level: tracing::Level = config.log_level.parse().unwrap_or(tracing::Level::INFO);
         tracing_subscriber::fmt()
@@ -54,12 +58,16 @@ async fn main() -> Result<()> {
     let health_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
         argus_agent::telemetry::prometheus::HealthSnapshot::default(),
     ));
+    let status_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
+        argus_agent::telemetry::prometheus::StatusSnapshot::default(),
+    ));
     if let Some(ref addr_str) = config.metrics_addr {
         let addr: std::net::SocketAddr = addr_str
             .parse()
             .with_context(|| format!("invalid metrics addr: {addr_str}"))?;
         let exp = prom_exporter.clone();
         let hs = health_snapshot.clone();
+        let ss = status_snapshot.clone();
         let tls_cfg = match (&config.tls_cert, &config.tls_key) {
             (Some(cert), Some(key)) => Some(argus_agent::telemetry::prometheus::TlsConfig {
                 cert_path: cert.clone(),
@@ -70,8 +78,10 @@ async fn main() -> Result<()> {
         let auth_token = config.auth_token.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                argus_agent::telemetry::prometheus::serve_metrics(exp, hs, addr, tls_cfg, auth_token)
-                    .await
+                argus_agent::telemetry::prometheus::serve_metrics(
+                    exp, hs, ss, addr, tls_cfg, auth_token,
+                )
+                .await
             {
                 tracing::error!("metrics server failed: {e}");
             }
@@ -97,6 +107,7 @@ async fn main() -> Result<()> {
                     start,
                     prom_exporter,
                     health_snapshot,
+                    status_snapshot,
                     shutdown_rx,
                 )?;
             }
@@ -118,6 +129,7 @@ async fn main() -> Result<()> {
                 start,
                 prom_exporter,
                 health_snapshot,
+                status_snapshot,
                 shutdown_rx,
             )
             .await?;
@@ -144,6 +156,9 @@ fn run_live_mode(
     >,
     health_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>,
+    >,
+    status_snapshot: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -268,6 +283,15 @@ fn run_live_mode(
                 hs.events_processed = event_count;
                 hs.last_window_ts = pipeline.current_metrics().window_end_ns;
             }
+            if let Ok(mut ss) = status_snapshot.lock() {
+                ss.state = dash_state.health;
+                ss.health_score = dash_state.metrics.composite_health_score;
+                ss.uptime_secs = start.elapsed().as_secs_f64();
+                ss.events_processed = event_count;
+                ss.metrics = dash_state.metrics.clone();
+                ss.recent_alerts = dash_state.recent_alerts.clone();
+                ss.source_name = dash_state.source_name.clone();
+            }
 
             pipeline.reset_window();
             window_start = std::time::Instant::now();
@@ -309,6 +333,9 @@ async fn run_event_mode(
     >,
     health_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::HealthSnapshot>,
+    >,
+    status_snapshot: std::sync::Arc<
+        std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -378,6 +405,15 @@ async fn run_event_mode(
                 hs.events_processed = event_count;
                 hs.last_window_ts = pipeline.current_metrics().window_end_ns;
             }
+            if let Ok(mut ss) = status_snapshot.lock() {
+                ss.state = dash_state.health;
+                ss.health_score = dash_state.metrics.composite_health_score;
+                ss.uptime_secs = start.elapsed().as_secs_f64();
+                ss.events_processed = event_count;
+                ss.metrics = dash_state.metrics.clone();
+                ss.recent_alerts = dash_state.recent_alerts.clone();
+                ss.source_name = dash_state.source_name.clone();
+            }
 
             pipeline.reset_window();
             window_start = std::time::Instant::now();
@@ -444,6 +480,76 @@ async fn run_event_mode(
         pipeline.detection_engine().current_state()
     );
 
+    Ok(())
+}
+
+/// Attach-mode TUI: read-only viewer that connects to a running daemon's /status endpoint.
+/// Does not load eBPF, does not start a pipeline — purely a display client.
+async fn run_attach_tui(addr: &str) -> Result<()> {
+    use argus_agent::telemetry::prometheus::StatusSnapshot;
+
+    let addr = if addr.contains("://") {
+        addr.to_string()
+    } else {
+        format!("http://{addr}")
+    };
+    let status_url = format!("{addr}/status");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .danger_accept_invalid_certs(true)
+        .build()?;
+
+    // Verify connectivity before entering raw mode
+    let resp = client
+        .get(&status_url)
+        .send()
+        .await
+        .with_context(|| format!("cannot reach {status_url}"))?;
+    if !resp.status().is_success() {
+        bail!(
+            "{} returned {} — is argusd running?",
+            status_url,
+            resp.status()
+        );
+    }
+
+    let mut dashboard = Dashboard::new()?;
+    let mut dash_state = DashboardState::default();
+    dash_state.source_name = format!("attach/{addr}");
+
+    let poll_interval = std::time::Duration::from_millis(1000);
+    let draw_interval = std::time::Duration::from_millis(200);
+    let mut last_poll = std::time::Instant::now() - poll_interval;
+
+    loop {
+        if dashboard.poll_quit()? {
+            break;
+        }
+
+        if last_poll.elapsed() >= poll_interval {
+            if let Ok(resp) = client.get(&status_url).send().await {
+                if let Ok(snap) = resp.json::<StatusSnapshot>().await {
+                    dash_state.health = snap.state;
+                    dash_state.metrics = snap.metrics;
+                    dash_state.recent_alerts = snap.recent_alerts;
+                    dash_state.event_count = snap.events_processed;
+                    dash_state.uptime_secs = snap.uptime_secs;
+                    if !snap.source_name.is_empty() {
+                        dash_state.source_name =
+                            format!("attach/{} ({})", addr, snap.source_name);
+                    }
+                    dash_state.push_metrics_snapshot();
+                }
+            }
+            last_poll = std::time::Instant::now();
+        }
+
+        dash_state.uptime_secs += 0.2;
+        dashboard.draw(&dash_state)?;
+        tokio::time::sleep(draw_interval).await;
+    }
+
+    dashboard.shutdown()?;
     Ok(())
 }
 

@@ -489,6 +489,9 @@ pub type SharedExporter = Arc<Mutex<PrometheusExporter>>;
 /// Shared health state for the /health endpoint.
 pub type SharedHealthState = Arc<Mutex<HealthSnapshot>>;
 
+/// Shared full status for the /status endpoint (TUI attach mode).
+pub type SharedStatusState = Arc<Mutex<StatusSnapshot>>;
+
 #[derive(Clone)]
 pub struct HealthSnapshot {
     pub state: HealthState,
@@ -508,6 +511,32 @@ impl Default for HealthSnapshot {
     }
 }
 
+/// Full agent status snapshot — serves the /status endpoint for TUI attach mode.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct StatusSnapshot {
+    pub state: HealthState,
+    pub health_score: f64,
+    pub uptime_secs: f64,
+    pub events_processed: u64,
+    pub metrics: argus_common::AggregatedMetrics,
+    pub recent_alerts: Vec<argus_common::Alert>,
+    pub source_name: String,
+}
+
+impl Default for StatusSnapshot {
+    fn default() -> Self {
+        Self {
+            state: HealthState::Healthy,
+            health_score: 0.0,
+            uptime_secs: 0.0,
+            events_processed: 0,
+            metrics: argus_common::AggregatedMetrics::default(),
+            recent_alerts: Vec::new(),
+            source_name: String::new(),
+        }
+    }
+}
+
 /// TLS configuration for the metrics endpoint.
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
@@ -515,7 +544,7 @@ pub struct TlsConfig {
     pub key_path: std::path::PathBuf,
 }
 
-/// Start an HTTP(S) server on `addr` that serves `/metrics` and `/health`.
+/// Start an HTTP(S) server on `addr` that serves `/metrics`, `/health`, and `/status`.
 ///
 /// When `tls` is `Some`, the server uses TLS (HTTPS). When `auth_token` is
 /// `Some`, every request must include a matching `Authorization: Bearer <token>`
@@ -523,6 +552,7 @@ pub struct TlsConfig {
 pub async fn serve_metrics(
     exporter: SharedExporter,
     health: SharedHealthState,
+    status: SharedStatusState,
     addr: std::net::SocketAddr,
     tls: Option<TlsConfig>,
     auth_token: Option<String>,
@@ -546,6 +576,7 @@ pub async fn serve_metrics(
         let (stream, _) = listener.accept().await?;
         let exporter = exporter.clone();
         let health = health.clone();
+        let status = status.clone();
         let auth = auth_token.clone();
 
         if let Some(ref acceptor) = tls_acceptor {
@@ -559,12 +590,12 @@ pub async fn serve_metrics(
                     }
                 };
                 let io = TokioIo::new(tls_stream);
-                serve_connection(io, exporter, health, auth).await;
+                serve_connection(io, exporter, health, status, auth).await;
             });
         } else {
             let io = TokioIo::new(stream);
             tokio::spawn(async move {
-                serve_connection(io, exporter, health, auth).await;
+                serve_connection(io, exporter, health, status, auth).await;
             });
         }
     }
@@ -574,6 +605,7 @@ async fn serve_connection<I>(
     io: I,
     exporter: SharedExporter,
     health: SharedHealthState,
+    status: SharedStatusState,
     auth_token: Option<Arc<str>>,
 ) where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
@@ -586,6 +618,7 @@ async fn serve_connection<I>(
     let service = service_fn(move |req: Request<hyper::body::Incoming>| {
         let exporter = exporter.clone();
         let health = health.clone();
+        let status = status.clone();
         let auth = auth_token.clone();
         async move {
             if let Some(ref expected) = auth {
@@ -632,6 +665,15 @@ async fn serve_connection<I>(
                         snap.events_processed,
                         snap.last_window_ts,
                     );
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Full::new(Bytes::from(body)))
+                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                }
+                "/status" => {
+                    let snap = status.lock().map(|s| s.clone()).unwrap_or_default();
+                    let body = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into());
                     Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "application/json")

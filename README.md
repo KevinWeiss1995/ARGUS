@@ -87,6 +87,7 @@ sudo ./scripts/install.sh
 
 The install script builds the agent and eBPF probes, then installs:
 - `/usr/local/bin/argusd` -- the agent binary
+- `/usr/local/bin/argus-tui` -- attach a live TUI to any running agent
 - `/usr/local/bin/argus-status` -- CLI health check (local or remote nodes)
 - `/usr/local/bin/argus-discover` -- subnet scanner for node discovery
 - `/usr/local/bin/argus-manage-targets` -- manage Prometheus scrape targets
@@ -124,6 +125,19 @@ Or manually:
 sudo systemctl status argusd
 curl localhost:9100/health
 ```
+
+**Attaching the TUI to a running agent**
+
+The full terminal dashboard can be attached to any running `argusd` process without interrupting it. It connects read-only to the agent's `/status` endpoint:
+
+```bash
+argus-tui                       # local node (localhost:9100)
+argus-tui 192.168.105.17:9100   # remote node
+argusd --attach                 # equivalent to argus-tui
+argusd --attach 10.0.0.5:9100   # equivalent to argus-tui 10.0.0.5:9100
+```
+
+Press `q` or `Esc` to detach. The agent keeps running.
 
 **Step 4: Start the observability stack**
 
@@ -463,6 +477,7 @@ xtask/                Build tooling (eBPF compilation)
 scripts/
   install.sh          Build and install argusd + CLI tools as a systemd service
   argus-status        CLI health check for local or remote ARGUS nodes
+  argus-tui           Symlink → argusd; opens the TUI against a running daemon
   argus-discover      Scan a subnet for ARGUS nodes, generate targets JSON
   argus-manage-targets  Add/remove/list/verify Prometheus scrape targets
   export-dashboards.sh  Export dashboards for import into external Grafana
