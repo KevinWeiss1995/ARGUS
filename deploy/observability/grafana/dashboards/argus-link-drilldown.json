@@ -32,9 +32,9 @@
     {
       "id": 1, "type": "stat", "title": "Link Status",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 2 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
         "expr": "argus_ib_link_downed_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
         "legendFormat": "{{device}}/{{port}}", "range": false, "refId": "A", "instant": true
@@ -55,9 +55,9 @@
     {
       "id": 2, "type": "stat", "title": "Error Recovery Events",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 2 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
         "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
         "legendFormat": "", "range": false, "refId": "A", "instant": true
@@ -77,9 +77,9 @@
     {
       "id": 3, "type": "stat", "title": "Total Errors",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 2 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
         "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
         "legendFormat": "", "range": false, "refId": "A", "instant": true
@@ -99,9 +99,9 @@
     {
       "id": 4, "type": "stat", "title": "Congestion Wait",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 2 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
         "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
         "legendFormat": "", "range": false, "refId": "A", "instant": true
@@ -121,11 +121,11 @@
     {
       "id": 5, "type": "timeseries", "title": "RX/TX Bytes",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "RX bytes", "range": true, "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_xmit_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "TX bytes", "range": true, "refId": "B" }
       ],
       "fieldConfig": {
@@ -149,11 +149,11 @@
     {
       "id": 6, "type": "timeseries", "title": "RX/TX Packets",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_rcv_pkts{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "RX pkts", "range": true, "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_xmit_pkts{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "TX pkts", "range": true, "refId": "B" }
       ],
       "fieldConfig": {
@@ -176,15 +176,15 @@
     {
       "id": 7, "type": "timeseries", "title": "Error Counters",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "symbol_errors", "range": true, "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "link_error_recovery", "range": true, "refId": "B" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_rcv_errors", "range": true, "refId": "C" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_xmit_discards", "range": true, "refId": "D" }
       ],
       "fieldConfig": {
@@ -209,9 +209,9 @@
     {
       "id": 8, "type": "timeseries", "title": "Congestion (xmit_wait)",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
         "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "xmit_wait", "range": true, "refId": "A"
       }],
       "fieldConfig": {
@@ -233,12 +233,12 @@
       "id": 9, "type": "timeseries", "title": "Errors vs Throughput",
       "description": "Dual-axis: errors (left, red) vs throughput (right, green). Divergence = link degradation.",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
           "legendFormat": "total_errors", "range": true, "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_throughput_xmit_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
           "legendFormat": "throughput_bytes", "range": true, "refId": "B" }
       ],
@@ -275,17 +275,17 @@
   "templating": {
     "list": [
       { "name": "node", "type": "query", "label": "Node",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "definition": "label_values(argus_health_state, instance)",
         "query": "label_values(argus_health_state, instance)",
         "refresh": 1, "regex": "", "hide": 0, "includeAll": false, "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] },
       { "name": "device", "type": "query", "label": "Device",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "definition": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\"}, device)",
         "query": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\"}, device)",
         "refresh": 1, "regex": "", "hide": 0, "includeAll": true, "allValue": ".*", "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] },
       { "name": "port", "type": "query", "label": "Port",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "definition": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\"}, port)",
         "query": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\"}, port)",
         "refresh": 1, "regex": "", "hide": 0, "includeAll": true, "allValue": ".*", "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] }

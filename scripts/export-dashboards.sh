@@ -39,8 +39,11 @@ done
 
 if [[ -z "$import_url" ]]; then
     mkdir -p "$DIST_DIR"
-    cp "$SRC_DIR"/*.json "$DIST_DIR/"
+    for f in "$SRC_DIR"/*.json; do
+        sed 's/"uid": "DS_PROMETHEUS"/"uid": "${DS_PROMETHEUS}"/g' "$f" > "$DIST_DIR/$(basename "$f")"
+    done
     echo "Exported dashboards to $DIST_DIR/"
+    echo "(datasource UIDs converted to \${DS_PROMETHEUS} for import compatibility)"
     echo ""
     echo "To import into Grafana:"
     echo "  1. Open Grafana > Dashboards > Import"
