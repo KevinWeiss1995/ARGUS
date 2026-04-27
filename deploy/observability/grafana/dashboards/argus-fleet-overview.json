@@ -174,22 +174,31 @@
         "tooltip": { "mode": "single", "sort": "none" } }
     },
     {
-      "id": 10, "type": "timeseries", "title": "IRQ Distribution (per CPU)",
-      "description": "Interrupt count per CPU per window. Uneven distribution indicates affinity skew.",
+      "id": 10, "type": "timeseries", "title": "IRQ Affinity Skew %",
+      "description": "Percentage of all IRQs handled by the busiest CPU. >70% indicates poor balancing.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "sum by (cpu) (increase(argus_irq_total{instance=~\"$node\"}[$__rate_interval]))",
-        "refId": "A", "legendFormat": "cpu {{cpu}}", "range": true
+        "expr": "argus_irq_skew_pct{instance=~\"$node\"}",
+        "refId": "A", "legendFormat": "{{instance}}", "range": true
       }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "fillOpacity": 80,
-            "stacking": { "mode": "normal", "group": "A" }, "showPoints": "never" },
-          "unit": "short"
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20,
+            "stacking": { "mode": "none" }, "showPoints": "never",
+            "thresholdsStyle": { "mode": "line" } },
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 70 }
+            ]
+          }
         }, "overrides": []
       },
       "options": {
