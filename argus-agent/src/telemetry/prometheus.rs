@@ -47,6 +47,14 @@ struct ArgusPrometheusMetrics {
     ib_rxe_retry_exceeded: Family<Vec<(String, String)>, Gauge>,
     ib_rxe_send_error: Family<Vec<(String, String)>, Gauge>,
     napi_utilization_pct: Gauge,
+    // Scheduler metrics
+    scheduler_desired_state: Gauge,
+    scheduler_observed_state: Gauge,
+    scheduler_drain_total: Family<Vec<(String, String)>, Counter>,
+    scheduler_resume_total: Family<Vec<(String, String)>, Counter>,
+    scheduler_errors_total: Family<Vec<(String, String)>, Counter>,
+    scheduler_last_action_ts: Gauge,
+    scheduler_drain_duration_secs: Gauge,
 }
 
 impl PrometheusExporter {
@@ -285,6 +293,55 @@ impl PrometheusExporter {
             napi_utilization_pct.clone(),
         );
 
+        let scheduler_desired_state = Gauge::default();
+        registry.register(
+            "argus_scheduler_desired_state",
+            "Scheduler desired state (0=available, 1=draining, 2=held_by_operator)",
+            scheduler_desired_state.clone(),
+        );
+
+        let scheduler_observed_state = Gauge::default();
+        registry.register(
+            "argus_scheduler_observed_state",
+            "Scheduler observed state (0=available, 1=draining, 2=drained, 3=down, 4=unknown)",
+            scheduler_observed_state.clone(),
+        );
+
+        let scheduler_drain_total = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "argus_scheduler_drain",
+            "Total drain operations attempted",
+            scheduler_drain_total.clone(),
+        );
+
+        let scheduler_resume_total = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "argus_scheduler_resume",
+            "Total resume operations attempted",
+            scheduler_resume_total.clone(),
+        );
+
+        let scheduler_errors_total = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "argus_scheduler_errors",
+            "Failed scheduler operations by op",
+            scheduler_errors_total.clone(),
+        );
+
+        let scheduler_last_action_ts = Gauge::default();
+        registry.register(
+            "argus_scheduler_last_action_timestamp",
+            "Unix timestamp of last successful scheduler action",
+            scheduler_last_action_ts.clone(),
+        );
+
+        let scheduler_drain_duration_secs = Gauge::default();
+        registry.register(
+            "argus_scheduler_drain_duration_seconds",
+            "Seconds since the node was drained (0 when available)",
+            scheduler_drain_duration_secs.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -319,6 +376,13 @@ impl PrometheusExporter {
             ib_rxe_retry_exceeded,
             ib_rxe_send_error,
             napi_utilization_pct,
+            scheduler_desired_state,
+            scheduler_observed_state,
+            scheduler_drain_total,
+            scheduler_resume_total,
+            scheduler_errors_total,
+            scheduler_last_action_ts,
+            scheduler_drain_duration_secs,
         };
 
         Self {
@@ -515,6 +579,66 @@ impl PrometheusExporter {
         }
     }
 
+    /// Update scheduler metrics from reconciler events.
+    pub fn update_scheduler(
+        &self,
+        desired: &crate::scheduler::DesiredNodeState,
+        observed: &crate::scheduler::ObservedNodeState,
+        events: &[crate::scheduler::SchedulerActionEvent],
+        drain_duration_secs: f64,
+        dry_run: bool,
+    ) {
+        use crate::scheduler::{DesiredNodeState, ObservedNodeState, SchedulerEventKind};
+
+        let desired_val: i64 = match desired {
+            DesiredNodeState::Available => 0,
+            DesiredNodeState::Draining => 1,
+            DesiredNodeState::HeldByOperator => 2,
+        };
+        self.metrics.scheduler_desired_state.set(desired_val);
+
+        let observed_val: i64 = match observed {
+            ObservedNodeState::Available => 0,
+            ObservedNodeState::Draining => 1,
+            ObservedNodeState::Drained => 2,
+            ObservedNodeState::Down => 3,
+            ObservedNodeState::Unknown => 4,
+        };
+        self.metrics.scheduler_observed_state.set(observed_val);
+
+        self.metrics
+            .scheduler_drain_duration_secs
+            .set(drain_duration_secs as i64);
+
+        let mode = if dry_run { "dry_run" } else { "live" };
+
+        for event in events {
+            match event.kind {
+                SchedulerEventKind::Drained => {
+                    self.metrics
+                        .scheduler_drain_total
+                        .get_or_create(&vec![("mode".to_string(), mode.to_string())])
+                        .inc();
+                    self.metrics.scheduler_last_action_ts.set(epoch_secs());
+                }
+                SchedulerEventKind::Resumed => {
+                    self.metrics
+                        .scheduler_resume_total
+                        .get_or_create(&vec![("mode".to_string(), mode.to_string())])
+                        .inc();
+                    self.metrics.scheduler_last_action_ts.set(epoch_secs());
+                }
+                SchedulerEventKind::Error => {
+                    self.metrics
+                        .scheduler_errors_total
+                        .get_or_create(&vec![("op".to_string(), "scheduler".to_string())])
+                        .inc();
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Record an alert in Prometheus counters.
     pub fn record_alert(&self, kind: &str, severity: &str) {
         self.metrics
@@ -540,6 +664,13 @@ impl Default for PrometheusExporter {
     }
 }
 
+fn epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Shared state for the metrics HTTP server.
 pub type SharedExporter = Arc<Mutex<PrometheusExporter>>;
 
@@ -548,6 +679,9 @@ pub type SharedHealthState = Arc<Mutex<HealthSnapshot>>;
 
 /// Shared full status for the /status endpoint (TUI attach mode).
 pub type SharedStatusState = Arc<Mutex<StatusSnapshot>>;
+
+/// Shared reconciler handle for /scheduler/hold and /scheduler/release.
+pub type SharedReconciler = Arc<Mutex<crate::scheduler::Reconciler>>;
 
 #[derive(Clone)]
 pub struct HealthSnapshot {
@@ -610,6 +744,7 @@ pub async fn serve_metrics(
     exporter: SharedExporter,
     health: SharedHealthState,
     status: SharedStatusState,
+    reconciler: Option<SharedReconciler>,
     addr: std::net::SocketAddr,
     tls: Option<TlsConfig>,
     auth_token: Option<String>,
@@ -634,6 +769,7 @@ pub async fn serve_metrics(
         let exporter = exporter.clone();
         let health = health.clone();
         let status = status.clone();
+        let reconciler = reconciler.clone();
         let auth = auth_token.clone();
 
         if let Some(ref acceptor) = tls_acceptor {
@@ -647,12 +783,12 @@ pub async fn serve_metrics(
                     }
                 };
                 let io = TokioIo::new(tls_stream);
-                serve_connection(io, exporter, health, status, auth).await;
+                serve_connection(io, exporter, health, status, reconciler, auth).await;
             });
         } else {
             let io = TokioIo::new(stream);
             tokio::spawn(async move {
-                serve_connection(io, exporter, health, status, auth).await;
+                serve_connection(io, exporter, health, status, reconciler, auth).await;
             });
         }
     }
@@ -663,6 +799,7 @@ async fn serve_connection<I>(
     exporter: SharedExporter,
     health: SharedHealthState,
     status: SharedStatusState,
+    reconciler: Option<SharedReconciler>,
     auth_token: Option<Arc<str>>,
 ) where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
@@ -676,6 +813,7 @@ async fn serve_connection<I>(
         let exporter = exporter.clone();
         let health = health.clone();
         let status = status.clone();
+        let reconciler = reconciler.clone();
         let auth = auth_token.clone();
         async move {
             if let Some(ref expected) = auth {
@@ -736,6 +874,56 @@ async fn serve_connection<I>(
                         .header("content-type", "application/json")
                         .body(Full::new(Bytes::from(body)))
                         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                }
+                "/scheduler/hold" => {
+                    if let Some(ref rc) = reconciler {
+                        if let Ok(mut r) = rc.lock() {
+                            let event = r.set_operator_hold();
+                            let body = format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        } else {
+                            Ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Full::new(Bytes::from(r#"{"error":"lock poisoned"}"#)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                    } else {
+                        Ok(Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Full::new(Bytes::from(
+                                r#"{"error":"scheduler not configured"}"#,
+                            )))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    }
+                }
+                "/scheduler/release" => {
+                    if let Some(ref rc) = reconciler {
+                        if let Ok(mut r) = rc.lock() {
+                            let event = r.release_operator_hold();
+                            let body = format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        } else {
+                            Ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Full::new(Bytes::from(r#"{"error":"lock poisoned"}"#)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                    } else {
+                        Ok(Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Full::new(Bytes::from(
+                                r#"{"error":"scheduler not configured"}"#,
+                            )))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    }
                 }
                 _ => Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)

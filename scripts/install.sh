@@ -259,6 +259,11 @@ else
     ok "$INSTALL_TOML"
 fi
 
+# --- Create runtime directories ---
+
+mkdir -p /var/lib/argus /var/run/argus
+ok "Runtime directories (/var/lib/argus, /var/run/argus)"
+
 # --- Install systemd unit ---
 
 info "Installing systemd unit to $INSTALL_UNIT"

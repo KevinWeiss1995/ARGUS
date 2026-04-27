@@ -23,10 +23,11 @@ pub trait ActionHandler: Send + Sync {
 }
 
 /// Configuration for the action engine, parsed from CLI.
+/// Note: SLURM drain is now handled by the scheduler module (state-driven
+/// reconciliation), not by the fire-and-forget action system.
 #[derive(Debug, Clone, Default)]
 pub struct ActionConfig {
     pub webhook_url: Option<String>,
-    pub slurm_drain: bool,
     pub port_disable: bool,
     pub dry_run: bool,
 }
@@ -63,10 +64,6 @@ impl ActionEngine {
 
         if let Some(ref url) = config.webhook_url {
             handlers.push(Box::new(WebhookAction { url: url.clone() }));
-        }
-
-        if config.slurm_drain {
-            handlers.push(Box::new(SlurmDrainAction));
         }
 
         if config.port_disable {
@@ -225,56 +222,6 @@ impl ActionHandler for WebhookAction {
     }
 }
 
-/// Drain this node via SLURM. Only fires on Critical alerts with link_downed.
-struct SlurmDrainAction;
-
-impl ActionHandler for SlurmDrainAction {
-    fn name(&self) -> &str {
-        "slurm_drain"
-    }
-
-    fn on_alert(&self, alert: &Alert, _blast_radius: &BlastRadius) -> Result<(), String> {
-        if alert.severity != argus_common::HealthState::Critical {
-            return Ok(());
-        }
-
-        // Only drain on actual link down events
-        if let argus_common::AlertKind::RdmaLinkDegradation {
-            link_downed_delta, ..
-        } = &alert.kind
-        {
-            if *link_downed_delta == 0 {
-                return Ok(());
-            }
-        } else {
-            return Ok(());
-        }
-
-        let hostname = hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".into());
-
-        let reason = format!("ARGUS: {}", alert.message);
-        let output = std::process::Command::new("scontrol")
-            .args([
-                "update",
-                &format!("NodeName={hostname}"),
-                "State=DRAIN",
-                &format!("Reason={reason}"),
-            ])
-            .output()
-            .map_err(|e| format!("scontrol failed: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("scontrol drain failed: {stderr}"));
-        }
-
-        info!(hostname, "SLURM node drained");
-        Ok(())
-    }
-}
-
 /// Disable an IB port via sysfs admin_state. Requires --action-port-disable.
 ///
 /// SAFETY: `AlertKind::RdmaLinkDegradation` currently aggregates counter deltas
@@ -377,12 +324,11 @@ mod tests {
     fn action_engine_with_all_handlers() {
         let config = ActionConfig {
             webhook_url: Some("http://example.com/hook".into()),
-            slurm_drain: true,
             port_disable: true,
             dry_run: true,
         };
         let engine = ActionEngine::from_config(&config);
-        assert_eq!(engine.handler_count(), 4);
+        assert_eq!(engine.handler_count(), 3);
     }
 
     #[test]

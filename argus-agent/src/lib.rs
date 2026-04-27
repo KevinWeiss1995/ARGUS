@@ -6,6 +6,7 @@ pub mod actions;
 pub mod config;
 pub mod detection;
 pub mod pipeline;
+pub mod scheduler;
 pub mod security;
 pub mod sources;
 pub mod telemetry;

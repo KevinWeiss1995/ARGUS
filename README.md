@@ -315,13 +315,36 @@ slab_pressure_alloc_rate_threshold = 5000
 [actions]
 dry_run = false
 # webhook_url = "https://alerting.internal/hooks/argus"
-# slurm_drain = false
 # port_disable = false
+
+# Scheduler integration (optional). Omit this section to disable.
+# [scheduler]
+# backend = "slurm"            # "slurm" or "noop"
+# dry_run = false               # log drain/resume without executing
+# drain_on_degraded = false     # drain on Degraded, not just Critical
+# resume_cooldown_secs = 60     # minimum healthy seconds before auto-resume
+# reconcile_interval_secs = 10  # how often to check scheduler state
+# contested_cooldown_secs = 300 # cooldown when an external actor resumes a drained node
+# state_file = "/var/lib/argus/scheduler-state.json"
 ```
 
 **Precedence**: CLI flags > env file > TOML config > built-in defaults.
 
 Example configs: `deploy/examples/standalone.toml`, `deploy/examples/integration.toml`.
+
+### Scheduler integration
+
+ARGUS can automatically drain/resume nodes via a scheduler when it detects health changes. Enable with `--scheduler slurm` or the `[scheduler]` TOML section.
+
+**How it works**: A state-driven reconciliation loop compares ARGUS's *desired* node state (derived from health) against the *observed* scheduler state, and converges them. This replaces the old fire-and-forget `--action-slurm-drain` flag.
+
+**Operator holds**: If someone drains a node outside ARGUS (e.g., `scontrol update State=DRAIN Reason="maintenance"`), ARGUS detects the external drain and enters `HeldByOperator` mode — it will not resume the node. Release holds via `POST /scheduler/release` or `curl -X POST http://localhost:9100/scheduler/release`.
+
+**CLI flags**:
+- `--scheduler slurm` — enable SLURM backend
+- `--scheduler-dry-run` — log actions without executing
+- `--drain-on-degraded` — drain on Degraded (default: only Critical)
+- `--resume-cooldown 60` — seconds healthy before auto-resume
 
 ### Kubernetes deployment
 
@@ -336,6 +359,8 @@ When `--metrics-addr` is set (always set in systemd mode), the agent exposes:
 | `/metrics` | Prometheus text format | Scrape target for Prometheus |
 | `/health` | JSON (state, uptime, event count) | Kubernetes liveness/readiness, SLURM health checks |
 | `/status` | JSON (full metrics + alerts) | TUI attach mode, external tooling |
+| `/scheduler/hold` | JSON | Set operator hold (stops ARGUS from resuming) |
+| `/scheduler/release` | JSON | Release operator hold |
 
 ```bash
 curl http://localhost:9100/health
