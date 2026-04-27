@@ -87,6 +87,10 @@ sudo ./scripts/install.sh
 
 The install script builds the agent and eBPF probes, then installs:
 - `/usr/local/bin/argusd` -- the agent binary
+- `/usr/local/bin/argus-tui` -- attach a live TUI to any running agent
+- `/usr/local/bin/argus-status` -- CLI health check (local or remote nodes)
+- `/usr/local/bin/argus-discover` -- subnet scanner for node discovery
+- `/usr/local/bin/argus-manage-targets` -- manage Prometheus scrape targets
 - `/usr/local/lib/argus/argus-ebpf` -- the eBPF object
 - `/etc/argus/argusd.conf` -- environment-based config
 - `/etc/argus/argusd.toml` -- TOML config (example, not active by default)
@@ -110,15 +114,30 @@ sudo systemctl start argusd     # start now
 **Step 3: Verify the agent is running**
 
 ```bash
+argus-status                  # quick health check from the command line
+argus-status --watch          # live refresh every 3 seconds
+argus-status 10.0.0.5         # check a remote node
+argus-status --all            # check all nodes in the targets file
+```
+
+Or manually:
+```bash
 sudo systemctl status argusd
-journalctl -u argusd --no-pager -n 20
-
-# Prometheus metrics endpoint (should return metric text)
-curl localhost:9100/metrics | head -5
-
-# Health check (should return JSON)
 curl localhost:9100/health
 ```
+
+**Attaching the TUI to a running agent**
+
+The full terminal dashboard can be attached to any running `argusd` process without interrupting it. It connects read-only to the agent's `/status` endpoint:
+
+```bash
+argus-tui                       # local node (localhost:9100)
+argus-tui 192.168.105.17:9100   # remote node
+argusd --attach                 # equivalent to argus-tui
+argusd --attach 10.0.0.5:9100   # equivalent to argus-tui 10.0.0.5:9100
+```
+
+Press `q` or `Esc` to detach. The agent keeps running.
 
 **Step 4: Start the observability stack**
 
@@ -144,6 +163,43 @@ Three dashboards are pre-loaded under the ARGUS folder:
 - **Link Drill-Down** -- per-device, per-port InfiniBand error and throughput analysis
 
 If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB hardware detected" / "No CQ data" -- this is expected. The kernel probe panels (IRQ, slab, NAPI) will be active on any Linux node.
+
+#### Adding more nodes
+
+ARGUS uses Prometheus [file-based service discovery](https://prometheus.io/docs/guides/file-sd/). Targets are stored in `deploy/observability/argus-targets.json` and Prometheus picks up changes within 30 seconds -- no restart required.
+
+**Add nodes individually:**
+
+```bash
+scripts/argus-manage-targets add 10.0.0.5
+scripts/argus-manage-targets add 10.0.0.6
+scripts/argus-manage-targets add 10.0.0.7:9200   # non-default port
+```
+
+**Scan a subnet for nodes running ARGUS:**
+
+```bash
+scripts/argus-discover --subnet 10.0.0.0/24 \
+  --output deploy/observability/argus-targets.json
+```
+
+The scanner probes each IP on port 9100 (the ARGUS `/health` endpoint) and writes discovered nodes to the targets file. Run it as a cron job for continuous discovery.
+
+**Or do it all at startup:**
+
+```bash
+deploy/observability/scripts/start-observability.sh --discover 10.0.0.0/24
+```
+
+**Manage targets:**
+
+```bash
+scripts/argus-manage-targets list       # show configured nodes
+scripts/argus-manage-targets verify     # probe each node, report status
+scripts/argus-manage-targets remove 10.0.0.5
+```
+
+Each target node needs `argusd` installed (`sudo scripts/install.sh && sudo systemctl enable --now argusd`) and port 9100 reachable from the Prometheus host.
 
 ---
 
@@ -418,12 +474,20 @@ argus-ebpf/           eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
 argus-common/         Shared types between agent and tests
 argus-test-scenarios/ JSON scenario files for replay and regression testing
 xtask/                Build tooling (eBPF compilation)
-scripts/              Install, export-dashboards, E2E tests, fault injection, Soft-RoCE
+scripts/
+  install.sh          Build and install argusd + CLI tools as a systemd service
+  argus-status        CLI health check for local or remote ARGUS nodes
+  argus-tui           Symlink → argusd; opens the TUI against a running daemon
+  argus-discover      Scan a subnet for ARGUS nodes, generate targets JSON
+  argus-manage-targets  Add/remove/list/verify Prometheus scrape targets
+  export-dashboards.sh  Export dashboards for import into external Grafana
+  e2e-test.sh         End-to-end tests, fault injection, Soft-RoCE
 deploy/
   argusd.service      Systemd unit
   argusd.conf         Environment file (simple config)
   examples/           TOML configs, Prometheus scrape snippets, K8s manifests
-  observability/      Bundled Prometheus + Grafana + Alertmanager stack
+  observability/
+    argus-targets.json  Prometheus file_sd targets (auto-reloaded, no restart)
     grafana/dashboards/  Portable Grafana dashboards (importable into any Grafana)
 ```
 
