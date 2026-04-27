@@ -335,11 +335,12 @@ impl PrometheusExporter {
             .iter()
             .enumerate()
         {
+            let counter = self
+                .metrics
+                .irq_total
+                .get_or_create(&vec![("cpu".to_string(), i.to_string())]);
             if count > 0 {
-                self.metrics
-                    .irq_total
-                    .get_or_create(&vec![("cpu".to_string(), i.to_string())])
-                    .inc_by(count);
+                counter.inc_by(count);
             }
         }
 
