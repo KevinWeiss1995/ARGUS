@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# argus-discover — Scan a subnet for ARGUS nodes and generate Prometheus targets.
+#
+# Usage:
+#   argus-discover --subnet 10.0.0.0/24
+#   argus-discover --subnet 10.0.0.0/24 --port 9100 --output /etc/prometheus/argus-targets.json
+#   argus-discover --subnet 10.0.0.0/24 --label cluster=gpu-rack-1
+#   argus-discover --subnet 192.168.5.0/24 --timeout 2 --dry-run
+#
+# The script probes each IP on the ARGUS metrics port (default 9100) looking for
+# a valid /health endpoint. Discovered nodes are written as a Prometheus
+# file_sd_configs JSON file that Prometheus hot-reloads automatically.
+#
+# Requirements: bash 4+, curl (or nc as fallback)
+
+set -euo pipefail
+
+PORT=9100
+OUTPUT=""
+TIMEOUT=2
+DRY_RUN=false
+LABELS=()
+SUBNET=""
+
+usage() {
+    cat <<EOF
+Usage: argus-discover --subnet CIDR [OPTIONS]
+
+Options:
+  --subnet CIDR       Subnet to scan (e.g. 10.0.0.0/24, 192.168.1.0/24)
+  --port PORT         ARGUS metrics port (default: 9100)
+  --output FILE       Write targets JSON here (default: stdout)
+  --label KEY=VALUE   Add label to all discovered targets (repeatable)
+  --timeout SECS      Connection timeout per host (default: 2)
+  --dry-run           Print discovered hosts but don't write file
+  -h, --help          Show this help
+EOF
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --subnet)   SUBNET="$2"; shift 2 ;;
+        --port)     PORT="$2"; shift 2 ;;
+        --output)   OUTPUT="$2"; shift 2 ;;
+        --label)    LABELS+=("$2"); shift 2 ;;
+        --timeout)  TIMEOUT="$2"; shift 2 ;;
+        --dry-run)  DRY_RUN=true; shift ;;
+        -h|--help)  usage ;;
+        *)          echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ -z "$SUBNET" ]]; then
+    echo "Error: --subnet is required" >&2
+    usage
+fi
+
+cidr_to_ips() {
+    local cidr="$1"
+    local base="${cidr%/*}"
+    local mask="${cidr#*/}"
+
+    IFS='.' read -r a b c d <<< "$base"
+    local ip_num=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+    local host_bits=$(( 32 - mask ))
+    local num_hosts=$(( 1 << host_bits ))
+
+    local network=$(( ip_num & ( (0xFFFFFFFF << host_bits) & 0xFFFFFFFF ) ))
+
+    for (( i = 1; i < num_hosts - 1; i++ )); do
+        local addr=$(( network + i ))
+        printf "%d.%d.%d.%d\n" \
+            $(( (addr >> 24) & 255 )) \
+            $(( (addr >> 16) & 255 )) \
+            $(( (addr >> 8) & 255 )) \
+            $(( addr & 255 ))
+    done
+}
+
+probe_host() {
+    local ip="$1"
+    if curl -sf --connect-timeout "$TIMEOUT" --max-time "$((TIMEOUT + 1))" \
+        "http://${ip}:${PORT}/health" >/dev/null 2>&1; then
+        echo "$ip"
+    fi
+}
+
+echo "Scanning ${SUBNET} on port ${PORT}..." >&2
+
+DISCOVERED=()
+IPS=( $(cidr_to_ips "$SUBNET") )
+TOTAL=${#IPS[@]}
+CHECKED=0
+
+for ip in "${IPS[@]}"; do
+    probe_host "$ip" &
+    CHECKED=$((CHECKED + 1))
+    # Limit parallelism to 64 concurrent probes
+    if (( CHECKED % 64 == 0 )); then
+        wait
+    fi
+done
+wait
+
+# Re-probe sequentially to collect results (parallel subshells can't append to array)
+for ip in "${IPS[@]}"; do
+    if curl -sf --connect-timeout "$TIMEOUT" --max-time "$((TIMEOUT + 1))" \
+        "http://${ip}:${PORT}/health" >/dev/null 2>&1; then
+        DISCOVERED+=("$ip")
+    fi
+done
+
+echo "Found ${#DISCOVERED[@]} ARGUS node(s) out of ${TOTAL} scanned." >&2
+
+if [[ ${#DISCOVERED[@]} -eq 0 ]]; then
+    echo "No nodes found." >&2
+    exit 0
+fi
+
+if $DRY_RUN; then
+    for ip in "${DISCOVERED[@]}"; do
+        echo "  $ip:$PORT"
+    done
+    exit 0
+fi
+
+# Build targets JSON (Prometheus file_sd_configs format)
+build_json() {
+    local targets=""
+    for ip in "${DISCOVERED[@]}"; do
+        [[ -n "$targets" ]] && targets+=","
+        targets+="\"${ip}:${PORT}\""
+    done
+
+    local labels_json="\"job\":\"argus\""
+    for lbl in "${LABELS[@]+"${LABELS[@]}"}"; do
+        local key="${lbl%%=*}"
+        local val="${lbl#*=}"
+        labels_json+=",\"${key}\":\"${val}\""
+    done
+
+    cat <<ENDJSON
+[
+  {
+    "targets": [${targets}],
+    "labels": {${labels_json}}
+  }
+]
+ENDJSON
+}
+
+JSON=$(build_json)
+
+if [[ -n "$OUTPUT" ]]; then
+    mkdir -p "$(dirname "$OUTPUT")"
+    echo "$JSON" > "$OUTPUT"
+    echo "Wrote ${OUTPUT}" >&2
+else
+    echo "$JSON"
+fi

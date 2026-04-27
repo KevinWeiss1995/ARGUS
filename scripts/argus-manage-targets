@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# argus-manage-targets — Add, remove, and list ARGUS Prometheus scrape targets.
+#
+# Usage:
+#   argus-manage-targets add 10.0.0.5                    # add a node (default port 9100)
+#   argus-manage-targets add 10.0.0.5:9200               # add with custom port
+#   argus-manage-targets add 10.0.0.5 --label env=prod   # add with extra label
+#   argus-manage-targets remove 10.0.0.5                 # remove a node
+#   argus-manage-targets list                             # show current targets
+#   argus-manage-targets verify                           # probe all targets, show status
+#
+# Targets are stored as a Prometheus file_sd_configs JSON file.
+# Prometheus watches this file and picks up changes automatically (no restart).
+#
+# Default targets file: deploy/observability/argus-targets.json (relative to repo)
+# Override with: ARGUS_TARGETS_FILE=/path/to/targets.json
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_TARGETS="$REPO_ROOT/deploy/observability/argus-targets.json"
+TARGETS_FILE="${ARGUS_TARGETS_FILE:-$DEFAULT_TARGETS}"
+DEFAULT_PORT=9100
+
+usage() {
+    cat <<EOF
+Usage: argus-manage-targets <command> [args]
+
+Commands:
+  add <host>[:<port>]     Add a node to the targets file
+    --label KEY=VALUE     Attach label to this target (repeatable)
+    --verify              Probe the node before adding
+
+  remove <host>[:<port>]  Remove a node from the targets file
+
+  list                    Show all current targets
+
+  verify                  Probe all targets and report status
+
+Options:
+  --file PATH             Targets file (default: $DEFAULT_TARGETS)
+  -h, --help              Show this help
+
+Environment:
+  ARGUS_TARGETS_FILE      Override default targets file path
+EOF
+    exit 0
+}
+
+ensure_file() {
+    if [[ ! -f "$TARGETS_FILE" ]]; then
+        mkdir -p "$(dirname "$TARGETS_FILE")"
+        echo '[{"targets": [], "labels": {"job": "argus"}}]' > "$TARGETS_FILE"
+    fi
+}
+
+normalize_target() {
+    local target="$1"
+    if [[ "$target" != *:* ]]; then
+        target="${target}:${DEFAULT_PORT}"
+    fi
+    echo "$target"
+}
+
+get_targets() {
+    if command -v python3 &>/dev/null; then
+        python3 -c "
+import json, sys
+with open('$TARGETS_FILE') as f:
+    data = json.load(f)
+for group in data:
+    for t in group.get('targets', []):
+        print(t)
+"
+    elif command -v jq &>/dev/null; then
+        jq -r '.[].targets[]' "$TARGETS_FILE"
+    else
+        echo "Error: need python3 or jq to parse targets" >&2
+        exit 1
+    fi
+}
+
+add_target() {
+    local target="$1"
+    shift
+    local labels=()
+    local do_verify=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --label)  labels+=("$2"); shift 2 ;;
+            --verify) do_verify=true; shift ;;
+            *)        echo "Unknown add option: $1" >&2; exit 1 ;;
+        esac
+    done
+
+    target=$(normalize_target "$target")
+
+    if do_verify; then
+        local host="${target%:*}"
+        local port="${target#*:}"
+        echo "Probing ${target}..."
+        if ! curl -sf --connect-timeout 3 --max-time 4 "http://${host}:${port}/health" >/dev/null 2>&1; then
+            echo "Warning: ${target} is not responding on /health. Add anyway? [y/N]"
+            read -r ans
+            [[ "$ans" =~ ^[Yy] ]] || exit 1
+        else
+            echo "  OK — ${target} is running ARGUS"
+        fi
+    fi
+
+    if command -v python3 &>/dev/null; then
+        python3 -c "
+import json, sys
+
+target = '$target'
+label_args = '''${labels[*]+"${labels[*]}"}'''.split()
+
+with open('$TARGETS_FILE') as f:
+    data = json.load(f)
+
+# Check for duplicates
+for group in data:
+    if target in group.get('targets', []):
+        print(f'{target} already in targets file')
+        sys.exit(0)
+
+# Add to first group (or create one)
+if not data:
+    data = [{'targets': [], 'labels': {'job': 'argus'}}]
+
+data[0]['targets'].append(target)
+
+# Add any extra labels
+for lbl in label_args:
+    if '=' in lbl:
+        k, v = lbl.split('=', 1)
+        data[0]['labels'][k] = v
+
+with open('$TARGETS_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print(f'Added {target}')
+"
+    else
+        echo "Error: python3 required for target management" >&2
+        exit 1
+    fi
+}
+
+remove_target() {
+    local target
+    target=$(normalize_target "$1")
+
+    python3 -c "
+import json, sys
+
+target = '$target'
+with open('$TARGETS_FILE') as f:
+    data = json.load(f)
+
+found = False
+for group in data:
+    targets = group.get('targets', [])
+    if target in targets:
+        targets.remove(target)
+        found = True
+
+if not found:
+    # Try matching without port
+    host = target.split(':')[0]
+    for group in data:
+        targets = group.get('targets', [])
+        for t in list(targets):
+            if t.startswith(host + ':'):
+                targets.remove(t)
+                found = True
+
+with open('$TARGETS_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+
+if found:
+    print(f'Removed {target}')
+else:
+    print(f'{target} not found in targets', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+list_targets() {
+    ensure_file
+    local targets
+    targets=$(get_targets)
+    if [[ -z "$targets" ]]; then
+        echo "No targets configured."
+        echo "Add nodes with: argus-manage-targets add <host>"
+        return
+    fi
+    echo "ARGUS scrape targets (${TARGETS_FILE}):"
+    echo "$targets" | while read -r t; do
+        echo "  - $t"
+    done
+    echo ""
+    echo "$(echo "$targets" | wc -l | tr -d ' ') node(s) configured."
+}
+
+verify_targets() {
+    ensure_file
+    local targets
+    targets=$(get_targets)
+    if [[ -z "$targets" ]]; then
+        echo "No targets to verify."
+        return
+    fi
+    echo "Verifying ARGUS targets..."
+    local ok=0 fail=0
+    echo "$targets" | while read -r t; do
+        local host="${t%:*}"
+        local port="${t#*:}"
+        if curl -sf --connect-timeout 3 --max-time 4 "http://${host}:${port}/health" >/dev/null 2>&1; then
+            echo "  ✓ ${t}"
+            ok=$((ok + 1))
+        else
+            echo "  ✗ ${t} — not responding"
+            fail=$((fail + 1))
+        fi
+    done
+}
+
+# Parse global options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --file)    TARGETS_FILE="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        add|remove|list|verify) break ;;
+        *)         echo "Unknown command: $1" >&2; usage ;;
+    esac
+done
+
+COMMAND="${1:-help}"
+shift || true
+
+ensure_file
+
+case "$COMMAND" in
+    add)
+        [[ $# -lt 1 ]] && { echo "Error: add requires a host argument" >&2; exit 1; }
+        add_target "$@"
+        ;;
+    remove)
+        [[ $# -lt 1 ]] && { echo "Error: remove requires a host argument" >&2; exit 1; }
+        remove_target "$1"
+        ;;
+    list)
+        list_targets
+        ;;
+    verify)
+        verify_targets
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo "Unknown command: $COMMAND" >&2
+        usage
+        ;;
+esac
