@@ -231,6 +231,12 @@ mkdir -p "$INSTALL_EBPF_DIR"
 install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
 ok "$INSTALL_EBPF"
 
+info "Installing CLI tools to /usr/local/bin"
+for tool in argus-status argus-discover argus-manage-targets; do
+    install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/local/bin/$tool"
+done
+ok "argus-status, argus-discover, argus-manage-targets"
+
 # --- Install config (preserve existing) ---
 
 mkdir -p "$INSTALL_CONF_DIR"

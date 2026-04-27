@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# argus-status — Quick health check for the local ARGUS agent.
+#
+# Usage:
+#   argus-status               # check local node
+#   argus-status 10.0.0.5      # check remote node
+#   argus-status --all         # check all nodes in targets file
+#   argus-status --json        # raw JSON output
+#   argus-status --watch       # refresh every 3 seconds
+
+set -euo pipefail
+
+HOST="localhost"
+PORT=9100
+SCHEME="http"
+JSON_MODE=false
+WATCH_MODE=false
+ALL_MODE=false
+TOKEN=""
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TARGETS_FILE="${ARGUS_TARGETS_FILE:-$REPO_ROOT/deploy/observability/argus-targets.json}"
+
+usage() {
+    cat <<EOF
+Usage: argus-status [HOST] [OPTIONS]
+
+Check the health of an ARGUS node from the command line.
+
+Arguments:
+  HOST                 Target host (default: localhost)
+
+Options:
+  --port PORT          ARGUS metrics port (default: 9100)
+  --tls                Use HTTPS
+  --token TOKEN        Bearer token for auth
+  --token-file FILE    Read bearer token from file
+  --json               Print raw JSON
+  --watch              Refresh every 3 seconds (Ctrl+C to stop)
+  --all                Check all nodes in the targets file
+  -h, --help           Show this help
+EOF
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)       PORT="$2"; shift 2 ;;
+        --tls)        SCHEME="https"; shift ;;
+        --token)      TOKEN="$2"; shift 2 ;;
+        --token-file) TOKEN=$(cat "$2"); shift 2 ;;
+        --json)       JSON_MODE=true; shift ;;
+        --watch)      WATCH_MODE=true; shift ;;
+        --all)        ALL_MODE=true; shift ;;
+        -h|--help)    usage ;;
+        -*)           echo "Unknown option: $1" >&2; exit 1 ;;
+        *)            HOST="$1"; shift ;;
+    esac
+done
+
+build_curl_args() {
+    local args=("-sf" "--connect-timeout" "3" "--max-time" "5")
+    if [[ "$SCHEME" == "https" ]]; then
+        args+=("-k")
+    fi
+    if [[ -n "$TOKEN" ]]; then
+        args+=("-H" "Authorization: Bearer $TOKEN")
+    fi
+    echo "${args[@]}"
+}
+
+format_state() {
+    case "$1" in
+        *HEALTHY*|*healthy*|*Healthy*)  echo -e "\033[32m● HEALTHY\033[0m" ;;
+        *DEGRADED*|*degraded*|*Degraded*) echo -e "\033[33m● DEGRADED\033[0m" ;;
+        *CRITICAL*|*critical*|*Critical*) echo -e "\033[31m● CRITICAL\033[0m" ;;
+        *)                               echo "○ $1" ;;
+    esac
+}
+
+format_uptime() {
+    local secs="${1%.*}"
+    if [[ -z "$secs" || "$secs" == "0" ]]; then
+        echo "<1s"
+        return
+    fi
+    local days=$((secs / 86400))
+    local hours=$(( (secs % 86400) / 3600 ))
+    local mins=$(( (secs % 3600) / 60 ))
+    local s=$((secs % 60))
+    local out=""
+    [[ $days -gt 0 ]] && out+="${days}d "
+    [[ $hours -gt 0 ]] && out+="${hours}h "
+    [[ $mins -gt 0 ]] && out+="${mins}m "
+    out+="${s}s"
+    echo "$out"
+}
+
+check_node() {
+    local host="$1"
+    local port="$2"
+    local curl_args
+    curl_args=$(build_curl_args)
+
+    local health_json
+    if ! health_json=$(curl $curl_args "${SCHEME}://${host}:${port}/health" 2>/dev/null); then
+        if $JSON_MODE; then
+            echo "{\"host\":\"${host}:${port}\",\"error\":\"unreachable\"}"
+        else
+            echo -e "  \033[31m✗ ${host}:${port} — unreachable\033[0m"
+        fi
+        return 1
+    fi
+
+    if $JSON_MODE; then
+        echo "$health_json"
+        return 0
+    fi
+
+    local state uptime events
+    if command -v python3 &>/dev/null; then
+        state=$(echo "$health_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('state','?'))" 2>/dev/null || echo "?")
+        uptime=$(echo "$health_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uptime_secs',0))" 2>/dev/null || echo "0")
+        events=$(echo "$health_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('events_processed',0))" 2>/dev/null || echo "0")
+    else
+        state=$(echo "$health_json" | grep -o '"state":"[^"]*"' | head -1 | cut -d'"' -f4)
+        uptime=$(echo "$health_json" | grep -o '"uptime_secs":[0-9.]*' | head -1 | cut -d: -f2)
+        events=$(echo "$health_json" | grep -o '"events_processed":[0-9]*' | head -1 | cut -d: -f2)
+    fi
+
+    local state_display
+    state_display=$(format_state "$state")
+    local uptime_display
+    uptime_display=$(format_uptime "$uptime")
+
+    # Fetch key metrics from /metrics
+    local irq_imbalance="" slab_latency="" napi_pct=""
+    local metrics_text
+    if metrics_text=$(curl $curl_args "${SCHEME}://${host}:${port}/metrics" 2>/dev/null); then
+        irq_imbalance=$(echo "$metrics_text" | grep '^argus_irq_imbalance_pct ' | awk '{print $2}' | head -1)
+        slab_latency=$(echo "$metrics_text" | grep '^argus_slab_avg_latency_ns ' | awk '{print $2}' | head -1)
+        napi_pct=$(echo "$metrics_text" | grep '^argus_napi_utilization_pct ' | awk '{print $2}' | head -1)
+    fi
+
+    echo "  ${host}:${port}"
+    echo "    State:       ${state_display}"
+    echo "    Uptime:      ${uptime_display}"
+    echo "    Events:      ${events}"
+    [[ -n "$irq_imbalance" ]] && echo "    IRQ Imbal:   ${irq_imbalance}%"
+    [[ -n "$slab_latency" ]] && echo "    Slab Lat:    ${slab_latency} ns"
+    [[ -n "$napi_pct" ]] && echo "    NAPI Util:   ${napi_pct}%"
+    echo ""
+}
+
+run_check() {
+    if $ALL_MODE; then
+        if [[ ! -f "$TARGETS_FILE" ]]; then
+            echo "No targets file found at ${TARGETS_FILE}" >&2
+            echo "Run: argus-manage-targets add <host>" >&2
+            exit 1
+        fi
+
+        local targets
+        if command -v python3 &>/dev/null; then
+            targets=$(python3 -c "
+import json
+with open('$TARGETS_FILE') as f:
+    data = json.load(f)
+for group in data:
+    for t in group.get('targets', []):
+        print(t)
+")
+        else
+            targets=$(grep -o '"[0-9][^"]*:[0-9]*"' "$TARGETS_FILE" | tr -d '"')
+        fi
+
+        if [[ -z "$targets" ]]; then
+            echo "No targets configured." >&2
+            exit 1
+        fi
+
+        echo "ARGUS Fleet Status"
+        echo "══════════════════"
+        echo ""
+
+        local total=0 healthy=0 degraded=0 critical=0 down=0
+        while IFS= read -r target; do
+            local h="${target%:*}"
+            local p="${target#*:}"
+            total=$((total + 1))
+            local result
+            if result=$(check_node "$h" "$p" 2>&1); then
+                echo "$result"
+                case "$result" in
+                    *HEALTHY*)  healthy=$((healthy + 1)) ;;
+                    *DEGRADED*) degraded=$((degraded + 1)) ;;
+                    *CRITICAL*) critical=$((critical + 1)) ;;
+                esac
+            else
+                echo "$result"
+                down=$((down + 1))
+            fi
+        done <<< "$targets"
+
+        echo "────────────────────"
+        printf "Total: %d  " "$total"
+        [[ $healthy -gt 0 ]] && printf "\033[32m%d healthy\033[0m  " "$healthy"
+        [[ $degraded -gt 0 ]] && printf "\033[33m%d degraded\033[0m  " "$degraded"
+        [[ $critical -gt 0 ]] && printf "\033[31m%d critical\033[0m  " "$critical"
+        [[ $down -gt 0 ]] && printf "\033[31m%d unreachable\033[0m  " "$down"
+        echo ""
+    else
+        echo ""
+        check_node "$HOST" "$PORT"
+    fi
+}
+
+if $WATCH_MODE; then
+    while true; do
+        clear
+        echo "ARGUS Status — $(date '+%H:%M:%S')  (Ctrl+C to stop)"
+        echo ""
+        run_check
+        sleep 3
+    done
+else
+    run_check
+fi

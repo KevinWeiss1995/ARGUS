@@ -87,6 +87,9 @@ sudo ./scripts/install.sh
 
 The install script builds the agent and eBPF probes, then installs:
 - `/usr/local/bin/argusd` -- the agent binary
+- `/usr/local/bin/argus-status` -- CLI health check (local or remote nodes)
+- `/usr/local/bin/argus-discover` -- subnet scanner for node discovery
+- `/usr/local/bin/argus-manage-targets` -- manage Prometheus scrape targets
 - `/usr/local/lib/argus/argus-ebpf` -- the eBPF object
 - `/etc/argus/argusd.conf` -- environment-based config
 - `/etc/argus/argusd.toml` -- TOML config (example, not active by default)
@@ -110,13 +113,15 @@ sudo systemctl start argusd     # start now
 **Step 3: Verify the agent is running**
 
 ```bash
+argus-status                  # quick health check from the command line
+argus-status --watch          # live refresh every 3 seconds
+argus-status 10.0.0.5         # check a remote node
+argus-status --all            # check all nodes in the targets file
+```
+
+Or manually:
+```bash
 sudo systemctl status argusd
-journalctl -u argusd --no-pager -n 20
-
-# Prometheus metrics endpoint (should return metric text)
-curl localhost:9100/metrics | head -5
-
-# Health check (should return JSON)
 curl localhost:9100/health
 ```
 
@@ -456,7 +461,8 @@ argus-common/         Shared types between agent and tests
 argus-test-scenarios/ JSON scenario files for replay and regression testing
 xtask/                Build tooling (eBPF compilation)
 scripts/
-  install.sh          Build and install argusd as a systemd service
+  install.sh          Build and install argusd + CLI tools as a systemd service
+  argus-status        CLI health check for local or remote ARGUS nodes
   argus-discover      Scan a subnet for ARGUS nodes, generate targets JSON
   argus-manage-targets  Add/remove/list/verify Prometheus scrape targets
   export-dashboards.sh  Export dashboards for import into external Grafana
