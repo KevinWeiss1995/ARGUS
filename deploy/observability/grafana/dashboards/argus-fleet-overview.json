@@ -174,14 +174,14 @@
         "tooltip": { "mode": "single", "sort": "none" } }
     },
     {
-      "id": 10, "type": "timeseries", "title": "IRQ Affinity Skew %",
-      "description": "Percentage of all IRQs handled by the busiest CPU. >70% indicates poor balancing.",
+      "id": 10, "type": "timeseries", "title": "IRQ Imbalance",
+      "description": "Normalized IRQ imbalance across CPUs. 0=balanced, 100=all on one CPU. Scales to any CPU count.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "argus_irq_skew_pct{instance=~\"$node\"}",
+        "expr": "argus_irq_imbalance_pct{instance=~\"$node\"}",
         "refId": "A", "legendFormat": "{{instance}}", "range": true
       }],
       "fieldConfig": {
@@ -195,8 +195,8 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 70 }
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 60 }
             ]
           }
         }, "overrides": []

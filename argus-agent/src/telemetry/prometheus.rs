@@ -94,8 +94,8 @@ impl PrometheusExporter {
 
         let irq_skew_pct = Gauge::default();
         registry.register(
-            "argus_irq_skew_pct",
-            "Percentage of IRQs handled by the busiest CPU (0-100)",
+            "argus_irq_imbalance_pct",
+            "Normalized IRQ imbalance (0=balanced, 100=all on one CPU)",
             irq_skew_pct.clone(),
         );
 
@@ -366,13 +366,17 @@ impl PrometheusExporter {
                 counter.inc_by(count);
             }
         }
-        let skew = dist.dominant_cpu_pct();
-        self.metrics.irq_skew_pct.set(skew as i64);
+        let n = dist.per_cpu_counts.len() as f64;
+        let imbalance = if n > 1.0 {
+            let ideal_pct = 100.0 / n;
+            let max_pct = dist.dominant_cpu_pct();
+            ((max_pct - ideal_pct) / (100.0 - ideal_pct) * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        self.metrics.irq_skew_pct.set(imbalance as i64);
         // #region agent log
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/argus-debug-58f965.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "{{\"sessionId\":\"58f965\",\"location\":\"prometheus.rs:update\",\"message\":\"irq_metrics\",\"data\":{{\"skew_pct\":{:.1},\"total\":{},\"per_cpu_len\":{}}},\"timestamp\":{}}}", skew, dist.total_count, dist.per_cpu_counts.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_millis()).unwrap_or(0));
-        }
+        eprintln!("[debug-58f965] irq imbalance_pct={:.1} n_cpus={} total={} per_cpu_len={}", imbalance, n, dist.total_count, dist.per_cpu_counts.len());
         // #endregion
         let dominant_cpu = dist
             .per_cpu_counts

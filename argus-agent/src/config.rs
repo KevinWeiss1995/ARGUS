@@ -248,10 +248,7 @@ fn detect_cpus() -> u32 {
     {
         if let Ok(content) = std::fs::read_to_string("/sys/devices/system/cpu/online") {
             // #region agent log
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/argus-debug-58f965.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "{{\"sessionId\":\"58f965\",\"location\":\"config.rs:detect_cpus\",\"message\":\"sysfs cpu/online\",\"data\":{{\"raw\":\"{}\"}},\"timestamp\":{}}}", content.trim(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_millis()).unwrap_or(0));
-            }
+            eprintln!("[debug-58f965] detect_cpus sysfs raw=\"{}\"", content.trim());
             // #endregion
             if let Some(count) = parse_cpu_range(content.trim()) {
                 return count;
