@@ -95,10 +95,6 @@ pub struct Cli {
     #[arg(long)]
     pub action_webhook: Option<String>,
 
-    /// Enable SLURM node drain on critical link-down events.
-    #[arg(long)]
-    pub action_slurm_drain: bool,
-
     /// Enable IB port disable on critical link-down events (DANGEROUS).
     #[arg(long)]
     pub action_port_disable: bool,
@@ -106,6 +102,23 @@ pub struct Cli {
     /// Dry-run mode: log actions without executing them.
     #[arg(long)]
     pub action_dry_run: bool,
+
+    // --- Scheduler integration flags ---
+    /// Scheduler backend to use (slurm, noop). Omit to disable scheduler integration.
+    #[arg(long)]
+    pub scheduler: Option<String>,
+
+    /// Scheduler dry-run: log drain/resume without executing.
+    #[arg(long)]
+    pub scheduler_dry_run: bool,
+
+    /// Drain on Degraded health (default: only drain on Critical).
+    #[arg(long)]
+    pub drain_on_degraded: bool,
+
+    /// Minimum seconds at Healthy before auto-resuming a drained node.
+    #[arg(long)]
+    pub resume_cooldown: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +134,7 @@ pub struct FileConfig {
     pub auth: AuthSection,
     pub detection: DetectionSection,
     pub actions: ActionsSection,
+    pub scheduler: SchedulerSection,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -168,9 +182,22 @@ pub struct DetectionSection {
 #[serde(default)]
 pub struct ActionsSection {
     pub webhook_url: Option<String>,
-    pub slurm_drain: Option<bool>,
     pub port_disable: Option<bool>,
     pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SchedulerSection {
+    pub backend: Option<String>,
+    pub dry_run: Option<bool>,
+    pub drain_on_degraded: Option<bool>,
+    pub resume_cooldown_secs: Option<u64>,
+    pub reconcile_interval_secs: Option<u64>,
+    pub contested_cooldown_secs: Option<u64>,
+    pub max_consecutive_failures: Option<u32>,
+    pub state_file: Option<PathBuf>,
+    pub lock_file: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +226,7 @@ pub struct EffectiveConfig {
     pub seccomp: bool,
     pub detection: DetectionConfig,
     pub actions: crate::actions::ActionConfig,
+    pub scheduler: Option<crate::scheduler::SchedulerConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -406,10 +434,51 @@ impl Cli {
             webhook_url: self
                 .action_webhook
                 .or_else(|| fc.actions.webhook_url.clone()),
-            slurm_drain: self.action_slurm_drain || fc.actions.slurm_drain.unwrap_or(false),
             port_disable: self.action_port_disable || fc.actions.port_disable.unwrap_or(false),
             dry_run: self.action_dry_run || fc.actions.dry_run.unwrap_or(false),
         };
+
+        let scheduler_backend = self
+            .scheduler
+            .or_else(|| fc.scheduler.backend.clone());
+        let scheduler = scheduler_backend.map(|backend| {
+            use std::time::Duration;
+            let defaults = crate::scheduler::SchedulerConfig::default();
+            crate::scheduler::SchedulerConfig {
+                backend,
+                dry_run: self.scheduler_dry_run
+                    || fc.scheduler.dry_run.unwrap_or(false),
+                drain_on_degraded: self.drain_on_degraded
+                    || fc.scheduler.drain_on_degraded.unwrap_or(false),
+                resume_cooldown: Duration::from_secs(
+                    self.resume_cooldown
+                        .or(fc.scheduler.resume_cooldown_secs)
+                        .unwrap_or(defaults.resume_cooldown.as_secs()),
+                ),
+                reconcile_interval: Duration::from_secs(
+                    fc.scheduler.reconcile_interval_secs
+                        .unwrap_or(defaults.reconcile_interval.as_secs()),
+                ),
+                contested_cooldown: Duration::from_secs(
+                    fc.scheduler.contested_cooldown_secs
+                        .unwrap_or(defaults.contested_cooldown.as_secs()),
+                ),
+                max_consecutive_failures: fc
+                    .scheduler
+                    .max_consecutive_failures
+                    .unwrap_or(defaults.max_consecutive_failures),
+                state_file: fc
+                    .scheduler
+                    .state_file
+                    .clone()
+                    .unwrap_or(defaults.state_file),
+                lock_file: fc
+                    .scheduler
+                    .lock_file
+                    .clone()
+                    .unwrap_or(defaults.lock_file),
+            }
+        });
 
         Ok(EffectiveConfig {
             mode,
@@ -440,6 +509,7 @@ impl Cli {
             seccomp: self.seccomp,
             detection,
             actions,
+            scheduler,
         })
     }
 

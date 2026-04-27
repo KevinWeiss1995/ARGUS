@@ -61,6 +61,31 @@ async fn main() -> Result<()> {
     let status_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
         argus_agent::telemetry::prometheus::StatusSnapshot::default(),
     ));
+    // Construct scheduler reconciler if configured
+    let shared_reconciler: Option<
+        std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
+    > = if let Some(ref sched_cfg) = config.scheduler {
+        let hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+        let backend = argus_agent::scheduler::build_backend(sched_cfg);
+        tracing::info!(
+            backend = backend.name(),
+            node = %hostname,
+            dry_run = sched_cfg.dry_run,
+            "scheduler integration enabled"
+        );
+        match argus_agent::scheduler::Reconciler::new(backend, sched_cfg.clone(), hostname) {
+            Ok(r) => Some(std::sync::Arc::new(std::sync::Mutex::new(r))),
+            Err(e) => {
+                tracing::error!("failed to initialize scheduler reconciler: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     if let Some(ref addr_str) = config.metrics_addr {
         let addr: std::net::SocketAddr = addr_str
             .parse()
@@ -68,6 +93,7 @@ async fn main() -> Result<()> {
         let exp = prom_exporter.clone();
         let hs = health_snapshot.clone();
         let ss = status_snapshot.clone();
+        let rc = shared_reconciler.clone();
         let tls_cfg = match (&config.tls_cert, &config.tls_key) {
             (Some(cert), Some(key)) => Some(argus_agent::telemetry::prometheus::TlsConfig {
                 cert_path: cert.clone(),
@@ -79,7 +105,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             if let Err(e) =
                 argus_agent::telemetry::prometheus::serve_metrics(
-                    exp, hs, ss, addr, tls_cfg, auth_token,
+                    exp, hs, ss, rc, addr, tls_cfg, auth_token,
                 )
                 .await
             {
@@ -108,6 +134,7 @@ async fn main() -> Result<()> {
                     prom_exporter,
                     health_snapshot,
                     status_snapshot,
+                    shared_reconciler,
                     shutdown_rx,
                 )?;
             }
@@ -130,6 +157,7 @@ async fn main() -> Result<()> {
                 prom_exporter,
                 health_snapshot,
                 status_snapshot,
+                shared_reconciler,
                 shutdown_rx,
             )
             .await?;
@@ -159,6 +187,9 @@ fn run_live_mode(
     >,
     status_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
+    >,
+    shared_reconciler: Option<
+        std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -294,6 +325,30 @@ fn run_live_mode(
                 ss.source_name = dash_state.source_name.clone();
             }
 
+            // Scheduler reconciliation — uses current_state(), not alerts (M5 fix)
+            if let Some(ref rc) = shared_reconciler {
+                let health = pipeline.detection_engine().current_state();
+                if let Ok(mut reconciler) = rc.lock() {
+                    let sched_events = reconciler.maybe_reconcile(health);
+                    if !sched_events.is_empty() {
+                        if let Ok(exp) = prom_exporter.lock() {
+                            let drain_dur = reconciler
+                                .last_drain_time()
+                                .map(|t| t.elapsed().as_secs_f64())
+                                .unwrap_or(0.0);
+                            exp.update_scheduler(
+                                &reconciler.desired_state(),
+                                &reconciler.last_observed_state(),
+                                &sched_events,
+                                drain_dur,
+                                reconciler.is_dry_run(),
+                            );
+                        }
+                        reconciler.push_events(&sched_events);
+                    }
+                }
+            }
+
             pipeline.reset_window();
             window_start = std::time::Instant::now();
         }
@@ -337,6 +392,9 @@ async fn run_event_mode(
     >,
     status_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
+    >,
+    shared_reconciler: Option<
+        std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -414,6 +472,30 @@ async fn run_event_mode(
                 ss.metrics = dash_state.metrics.clone();
                 ss.recent_alerts = dash_state.recent_alerts.clone();
                 ss.source_name = dash_state.source_name.clone();
+            }
+
+            // Scheduler reconciliation (event mode)
+            if let Some(ref rc) = shared_reconciler {
+                let health = pipeline.detection_engine().current_state();
+                if let Ok(mut reconciler) = rc.lock() {
+                    let sched_events = reconciler.maybe_reconcile(health);
+                    if !sched_events.is_empty() {
+                        if let Ok(exp) = prom_exporter.lock() {
+                            let drain_dur = reconciler
+                                .last_drain_time()
+                                .map(|t| t.elapsed().as_secs_f64())
+                                .unwrap_or(0.0);
+                            exp.update_scheduler(
+                                &reconciler.desired_state(),
+                                &reconciler.last_observed_state(),
+                                &sched_events,
+                                drain_dur,
+                                reconciler.is_dry_run(),
+                            );
+                        }
+                        reconciler.push_events(&sched_events);
+                    }
+                }
             }
 
             pipeline.reset_window();
