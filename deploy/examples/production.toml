@@ -29,5 +29,5 @@ rdma_baseline_latency_ns = 2000
 slab_pressure_min_allocs = 100
 
 [actions]
-webhook_url = "https://alerting.internal/hooks/argus"
 dry_run = false
+# webhook_url = "https://alerting.internal/hooks/argus"
