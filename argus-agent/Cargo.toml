@@ -24,6 +24,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+toml = "0.8"
 rand = "0.8"
 anyhow = "1"
 ratatui = "0.29"
@@ -35,6 +36,8 @@ http-body-util = "0.1"
 sha2 = "0.10"
 hex = "0.4.3"
 hostname = "0.4.2"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = "0.13"
