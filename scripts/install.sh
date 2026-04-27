@@ -80,11 +80,27 @@ fi
 # Cargo crates with build scripts (proc-macro2, etc.) need a C compiler and linker.
 # Install them now so `cargo build` and `cargo install bpf-linker` don't fail.
 
+wait_for_apt_lock() {
+    local tries=0
+    while fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; do
+        if [[ $tries -eq 0 ]]; then
+            info "Waiting for dpkg lock (unattended-upgrades?)..."
+        fi
+        sleep 5
+        tries=$((tries + 1))
+        if [[ $tries -ge 60 ]]; then
+            die "Timed out waiting for dpkg lock after 5 minutes"
+        fi
+    done
+}
+
 install_system_deps() {
     if command -v apt-get &>/dev/null; then
         if ! dpkg -s build-essential &>/dev/null 2>&1; then
             info "Installing build-essential (gcc, make, libc-dev)..."
+            wait_for_apt_lock
             apt-get update -qq
+            wait_for_apt_lock
             apt-get install -y -qq build-essential pkg-config libssl-dev
             ok "System build dependencies installed"
         fi
