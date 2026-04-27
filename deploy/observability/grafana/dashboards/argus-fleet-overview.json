@@ -1,4 +1,18 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource that scrapes ARGUS agents",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
   "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -13,9 +27,9 @@
     {
       "id": 1, "type": "stat", "title": "Nodes Healthy",
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "count(argus_health_state{instance=~\"$node\"} == 0) or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -33,9 +47,9 @@
     {
       "id": 2, "type": "stat", "title": "Nodes Degraded",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "count(argus_health_state{instance=~\"$node\"} == 1) or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -53,9 +67,9 @@
     {
       "id": 3, "type": "stat", "title": "Nodes Critical",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "count(argus_health_state{instance=~\"$node\"} == 2) or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -73,9 +87,9 @@
     {
       "id": 4, "type": "gauge", "title": "Worst Health Score",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "max(argus_health_score_millis{instance=~\"$node\"}) / 1000 or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -99,9 +113,9 @@
     {
       "id": 5, "type": "stat", "title": "Total Alerts (15m)",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "sum(increase(argus_alerts_total{instance=~\"$node\"}[15m])) or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -123,9 +137,9 @@
     {
       "id": 15, "type": "stat", "title": "Events Processed",
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "sum(argus_events_total{instance=~\"$node\"}) or vector(0)",
         "refId": "A", "instant": true, "range": false
@@ -143,9 +157,9 @@
     {
       "id": 6, "type": "state-timeline", "title": "Node Health State",
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "argus_health_state{instance=~\"$node\"}",
         "refId": "A", "legendFormat": "{{instance}}", "range": true
@@ -177,9 +191,9 @@
       "id": 10, "type": "timeseries", "title": "IRQ Distribution (per CPU)",
       "description": "Interrupt count per CPU per window. Uneven distribution indicates affinity skew.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "sum by (cpu) (increase(argus_irq_total{instance=~\"$node\"}[$__rate_interval]))",
         "refId": "A", "legendFormat": "cpu {{cpu}}", "range": true
@@ -200,9 +214,9 @@
       "id": 11, "type": "timeseries", "title": "Slab Alloc Rate",
       "description": "Kernel slab allocations per window. Spikes correlate with memory pressure.",
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "increase(argus_slab_alloc_total{instance=~\"$node\"}[$__rate_interval])",
         "refId": "A", "legendFormat": "{{instance}}", "range": true
@@ -223,9 +237,9 @@
       "id": 12, "type": "timeseries", "title": "NAPI Utilization %",
       "description": "NIC polling budget utilization. >90% means the kernel is saturated processing packets.",
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "argus_napi_utilization_pct{instance=~\"$node\"}",
         "refId": "A", "legendFormat": "{{instance}}", "range": true
@@ -252,9 +266,9 @@
       "id": 13, "type": "timeseries", "title": "Health Score Over Time",
       "description": "Composite health score (0=healthy, 1=worst). Combines all detection signals.",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "argus_health_score_millis{instance=~\"$node\"} / 1000",
         "refId": "A", "legendFormat": "{{instance}}", "range": true
@@ -281,15 +295,15 @@
       "id": 14, "type": "timeseries", "title": "Slab Avg Latency",
       "description": "Average kernel slab allocation latency. Spikes indicate memory subsystem pressure.",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "argus_slab_avg_latency_ns{instance=~\"$node\"}",
         "refId": "A", "legendFormat": "{{instance}} avg", "range": true
       },
       {
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "argus_slab_max_latency_ns{instance=~\"$node\"}",
         "refId": "B", "legendFormat": "{{instance}} max", "range": true
@@ -309,18 +323,18 @@
     {
       "id": 7, "type": "table", "title": "All Nodes",
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 24 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
           "expr": "argus_health_state{instance=~\"$node\"}", "refId": "A",
           "exemplar": false, "format": "table", "instant": true, "legendFormat": "State", "range": false },
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
           "expr": "argus_health_score_millis{instance=~\"$node\"}", "refId": "B",
           "exemplar": false, "format": "table", "instant": true, "legendFormat": "Score", "range": false },
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
           "expr": "argus_ib_error_delta_total{instance=~\"$node\"}", "refId": "C",
           "exemplar": false, "format": "table", "instant": true, "legendFormat": "IB Errors", "range": false },
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "editorMode": "code",
           "expr": "argus_napi_utilization_pct{instance=~\"$node\"}", "refId": "D",
           "exemplar": false, "format": "table", "instant": true, "legendFormat": "NAPI %", "range": false }
       ],
@@ -367,9 +381,9 @@
     {
       "id": 8, "type": "table", "title": "Recent Alerts",
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 31 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [{
-        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "editorMode": "code",
         "expr": "sum by (kind, severity) (increase(argus_alerts_total{instance=~\"$node\"}[5m])) > 0",
         "refId": "A", "exemplar": false, "format": "table", "instant": true, "range": false
@@ -408,7 +422,7 @@
     "list": [{
       "allValue": ".*",
       "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "definition": "label_values(argus_health_state, instance)",
       "hide": 0, "includeAll": true, "label": "Node", "multi": true, "name": "node",
       "options": [],
