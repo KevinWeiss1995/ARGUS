@@ -118,7 +118,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "bytes", "noValue": "No IB device"
@@ -146,7 +146,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
@@ -185,7 +185,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 45,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "normal", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
@@ -216,7 +216,7 @@
         "defaults": {
           "color": { "mode": "thresholds" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 30,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never" },
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never" },
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 50 }
           ]},
@@ -244,7 +244,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 25,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
