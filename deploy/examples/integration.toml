@@ -1,8 +1,8 @@
-# ARGUS production configuration
+# ARGUS integration configuration -- TLS + auth + detection tuning
 # For integration with an existing Prometheus/Grafana stack.
 #
 # Install: sudo ./scripts/install.sh
-# Copy:    sudo cp deploy/examples/production.toml /etc/argus/argusd.toml
+# Copy:    sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
 # Certs:   Place TLS cert/key in /etc/argus/tls/
 # Token:   echo "my-secret-token" > /etc/argus/token && chmod 600 /etc/argus/token
 
@@ -29,5 +29,5 @@ rdma_baseline_latency_ns = 2000
 slab_pressure_min_allocs = 100
 
 [actions]
-webhook_url = "https://alerting.internal/hooks/argus"
 dry_run = false
+# webhook_url = "https://alerting.internal/hooks/argus"

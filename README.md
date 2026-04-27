@@ -56,13 +56,13 @@ You don't need root, eBPF, or InfiniBand hardware to try it out. Mock mode gener
 
 ARGUS supports two deployment modes. The agent binary is identical in both -- what changes is who runs Prometheus and Grafana.
 
-| | Standalone | Production Integration |
+| | Standalone | External Integration |
 |---|---|---|
-| Who runs Prometheus/Grafana | ARGUS (bundled Docker stack) | Your existing infrastructure |
+| Who runs Prometheus/Grafana | ARGUS (bundled Docker stack) | Your infrastructure |
 | TLS on metrics endpoint | Optional | Recommended |
 | Bearer token auth | Optional | Recommended |
 | Best for | Single-node, demos, dev | Multi-node clusters, HPC |
-| Config format | Env file or TOML | TOML (recommended) |
+| Config format | Env file or TOML | TOML |
 
 ### Prerequisites
 
@@ -147,205 +147,80 @@ If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB 
 
 ---
 
-### Option B: Production integration (plug into your existing Prometheus + Grafana)
+### Option B: Integrate with existing Prometheus + Grafana
 
-Use this when you already have a Prometheus/Grafana stack and want ARGUS to feed metrics into it. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
+Use this when you already have an observability stack. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
 
-**Step 1: Install the agent**
+**Step 1: Install and configure**
 
 ```bash
 git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 sudo ./scripts/install.sh
-```
 
-**Step 2: Configure with the production TOML template**
-
-```bash
-# Copy the production config template
-sudo cp deploy/examples/production.toml /etc/argus/argusd.toml
-
-# Enable the TOML config file in the systemd env file
+# Activate the integration TOML config
+sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
 sudo sed -i 's|# ARGUS_CONFIG=.*|ARGUS_CONFIG=/etc/argus/argusd.toml|' /etc/argus/argusd.conf
-
-# Verify it took effect
-grep ARGUS_CONFIG /etc/argus/argusd.conf
-# Should print:  ARGUS_CONFIG=/etc/argus/argusd.toml
 ```
 
-**Step 3: Set up TLS and bearer token auth**
+**Step 2: Set up TLS and auth**
 
-This secures the metrics endpoint so only your Prometheus can scrape it. Skip this step if you're on a trusted network.
+The integration template enables TLS + bearer token auth by default. Generate the credentials:
 
 ```bash
-# Create the TLS directory
 sudo mkdir -p /etc/argus/tls
-
-# Generate a self-signed certificate (for testing; use real certs in production)
 sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
   -keyout /etc/argus/tls/server.key -out /etc/argus/tls/server.crt \
   -days 365 -nodes -subj "/CN=argusd"
-
-# Generate a shared bearer token
 sudo sh -c 'openssl rand -hex 32 > /etc/argus/token'
 sudo chmod 600 /etc/argus/token
-
-# Note the token -- you'll need it for Prometheus config
-sudo cat /etc/argus/token
 ```
 
-The production TOML template already points to these paths:
-```toml
-[tls]
-cert = "/etc/argus/tls/server.crt"
-key  = "/etc/argus/tls/server.key"
+The TOML already references `/etc/argus/tls/server.{crt,key}` and `/etc/argus/token`. No edits needed.
 
-[auth]
-bearer_token_file = "/etc/argus/token"
-```
+If you're on a trusted network and don't need TLS, remove the `[tls]` and `[auth]` sections from `/etc/argus/argusd.toml`.
 
-If you skip TLS, comment out or remove the `[tls]` and `[auth]` sections from `/etc/argus/argusd.toml`.
-
-**Step 4: Edit the TOML config**
-
-Review `/etc/argus/argusd.toml` and remove or adjust anything that doesn't apply. In particular, remove the `webhook_url` line if you don't have a webhook endpoint:
+**Step 3: Start and verify**
 
 ```bash
-sudo nano /etc/argus/argusd.toml
-# or:
-sudo sed -i '/webhook_url/d' /etc/argus/argusd.toml
-```
-
-**Step 5: Start the agent**
-
-```bash
-sudo systemctl enable argusd
-sudo systemctl start argusd
-```
-
-**Step 6: Verify**
-
-```bash
-sudo systemctl status argusd
-journalctl -u argusd --no-pager -n 20
-```
-
-In the logs you should see:
-- `TLS enabled for metrics endpoint` (if TLS is configured)
-- `bearer token auth enabled for metrics endpoint` (if auth is configured)
-- `metrics/health server listening` with the bind address
-
-Test the endpoint:
-
-```bash
-# Read the token into a variable
+sudo systemctl enable --now argusd
 TOKEN=$(sudo cat /etc/argus/token)
-
-# With TLS + auth (production):
-curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics | head -5
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
-
-# Without TLS (if you skipped Step 3):
-curl localhost:9100/metrics | head -5
-curl localhost:9100/health
 ```
 
-**Step 7: Configure your Prometheus to scrape ARGUS**
+You should get a JSON response with `"state":"HEALTHY"`. Check logs with `journalctl -u argusd -n 20`.
 
-Add an ARGUS scrape job to your existing `prometheus.yml`. A full example is at `deploy/examples/prometheus-scrape-argus.yml`.
+**Step 4: Point your Prometheus at ARGUS**
 
-With TLS + bearer auth:
+Add to your `prometheus.yml` (full examples in `deploy/examples/prometheus-scrape-argus.yml`):
+
 ```yaml
 scrape_configs:
   - job_name: argus
     scrape_interval: 5s
     scheme: https
     tls_config:
-      # Copy the cert from the ARGUS node, or use your own CA
-      ca_file: /etc/prometheus/argus-ca.crt
-      # If using self-signed certs without proper SANs:
-      insecure_skip_verify: true
+      insecure_skip_verify: true    # or use ca_file with your CA cert
     bearer_token_file: /etc/prometheus/argus-token
     static_configs:
-      - targets:
-          - "node01:9100"
-          - "node02:9100"
-        labels:
-          cluster: production
+      - targets: ["node01:9100", "node02:9100"]
 ```
 
-Without TLS (plain HTTP):
-```yaml
-scrape_configs:
-  - job_name: argus
-    scrape_interval: 5s
-    static_configs:
-      - targets:
-          - "node01:9100"
-          - "node02:9100"
-        labels:
-          cluster: production
-```
-
-Copy the bearer token to your Prometheus host:
+Copy the token to your Prometheus host:
 ```bash
-# On the ARGUS node:
-sudo cat /etc/argus/token
-# Copy the output
-
-# On the Prometheus host:
-echo "THE_TOKEN" > /etc/prometheus/argus-token
-chmod 600 /etc/prometheus/argus-token
+# On Prometheus host -- paste the token from: sudo cat /etc/argus/token
+echo "YOUR_TOKEN" > /etc/prometheus/argus-token && chmod 600 /etc/prometheus/argus-token
 ```
 
-Reload Prometheus to pick up the new scrape config:
-```bash
-curl -X POST http://localhost:9090/-/reload
-# or: sudo systemctl reload prometheus
-```
+Without TLS, just use `scheme: http` and drop the `tls_config` and `bearer_token_file` lines.
 
-**Step 8: Import ARGUS dashboards into your Grafana**
+**Step 5: Import dashboards into your Grafana**
 
-The ARGUS dashboards are designed to be portable -- they use `${DS_PROMETHEUS}` datasource variables so they work with any Prometheus datasource name.
+In Grafana: **Dashboards > New > Import > Upload JSON**. Upload the three files from `deploy/observability/grafana/dashboards/`. Grafana will prompt you to select your Prometheus datasource.
 
-**Method 1 -- Grafana UI (recommended for first-time setup)**:
+For automated import: `./scripts/export-dashboards.sh --import http://grafana:3000 --api-key YOUR_KEY`
 
-1. Open your Grafana instance
-2. Go to **Dashboards** > **New** > **Import**
-3. Click **Upload dashboard JSON file**
-4. Upload each file from `deploy/observability/grafana/dashboards/`:
-   - `argus-fleet-overview.json`
-   - `argus-node-detail.json`
-   - `argus-link-drilldown.json`
-5. Grafana will prompt you to select a Prometheus datasource -- choose the one that scrapes your ARGUS nodes
-6. Click **Import**
-
-**Method 2 -- API import (for automation)**:
-
-```bash
-# From the ARGUS repo on any machine with network access to Grafana
-./scripts/export-dashboards.sh --import http://your-grafana:3000 --api-key YOUR_GRAFANA_API_KEY
-```
-
-If you don't have an API key, the script falls back to `admin:admin` basic auth.
-
-**Method 3 -- Copy JSON files for manual distribution**:
-
-```bash
-./scripts/export-dashboards.sh
-# Outputs to dist/grafana-dashboards/
-ls dist/grafana-dashboards/
-```
-
-**Step 9 (optional): Push-based delivery for firewalled nodes**
-
-If your ARGUS nodes can't be scraped directly (firewalls, NAT), deploy a Prometheus agent sidecar that scrapes the local agent and `remote_write`s to your central store:
-
-```bash
-# See deploy/examples/prometheus-agent-sidecar.yml for a Docker Compose template
-```
-
-This uses Prometheus in `--agent` mode -- it scrapes `localhost:9100` and pushes to your central Prometheus, Thanos, or Mimir instance.
+**Push-based delivery** (firewalled nodes that can't be scraped): see `deploy/examples/prometheus-agent-sidecar.yml` for a Prometheus agent-mode sidecar that `remote_write`s to your central store.
 
 ---
 
@@ -407,7 +282,7 @@ dry_run = false
 
 Example config files are in `deploy/examples/`:
 - `standalone.toml` -- no TLS, no auth, local use
-- `production.toml` -- TLS + auth + detection tuning
+- `integration.toml` -- TLS + auth + detection tuning
 
 ### Kubernetes deployment
 
@@ -435,7 +310,7 @@ After eBPF programs are loaded, ARGUS drops all capabilities and sets `PR_SET_NO
 
 ### Artifact integrity
 
-If you're deploying to production, you can pin the expected eBPF binary hash:
+For hardened deployments, you can pin the expected eBPF binary hash:
 
 ```bash
 sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf
@@ -473,7 +348,7 @@ The agent exposes two HTTP(S) endpoints when `--metrics-addr` is set (always set
 curl http://localhost:9100/metrics
 curl http://localhost:9100/health
 
-# With TLS + bearer auth (production)
+# With TLS + bearer auth
 TOKEN=$(sudo cat /etc/argus/token)
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health

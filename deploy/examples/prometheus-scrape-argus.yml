@@ -15,9 +15,9 @@ scrape_configs:
           - "node02:9100"
           - "node03:9100"
         labels:
-          cluster: production
+          cluster: gpu-cluster
 
-  # --- HTTPS with bearer auth (production) ---
+  # --- HTTPS with bearer auth ---
   # - job_name: argus-secure
   #   scrape_interval: 5s
   #   scheme: https
@@ -31,7 +31,7 @@ scrape_configs:
   #         - "node01:9100"
   #         - "node02:9100"
   #       labels:
-  #         cluster: production
+  #         cluster: gpu-cluster
 
   # --- File-based service discovery ---
   # - job_name: argus-sd

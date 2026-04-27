@@ -76,6 +76,61 @@ if ! systemctl --version &>/dev/null; then
     die "systemd not found — this installer requires a systemd-based Linux system"
 fi
 
+# --- System build dependencies ---
+# Cargo crates with build scripts (proc-macro2, etc.) need a C compiler and linker.
+# Install them now so `cargo build` and `cargo install bpf-linker` don't fail.
+
+wait_for_apt_lock() {
+    local tries=0
+    while fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; do
+        if [[ $tries -eq 0 ]]; then
+            info "Waiting for dpkg lock (unattended-upgrades?)..."
+        fi
+        sleep 5
+        tries=$((tries + 1))
+        if [[ $tries -ge 60 ]]; then
+            die "Timed out waiting for dpkg lock after 5 minutes"
+        fi
+    done
+}
+
+install_system_deps() {
+    if command -v apt-get &>/dev/null; then
+        if ! dpkg -s build-essential &>/dev/null 2>&1; then
+            info "Installing build-essential (gcc, make, libc-dev)..."
+            wait_for_apt_lock
+            apt-get update -qq
+            wait_for_apt_lock
+            apt-get install -y -qq build-essential pkg-config libssl-dev
+            ok "System build dependencies installed"
+        fi
+    elif command -v dnf &>/dev/null; then
+        if ! rpm -q gcc &>/dev/null 2>&1; then
+            info "Installing gcc and development tools..."
+            dnf install -y gcc make pkg-config openssl-devel
+            ok "System build dependencies installed"
+        fi
+    elif command -v yum &>/dev/null; then
+        if ! rpm -q gcc &>/dev/null 2>&1; then
+            info "Installing gcc and development tools..."
+            yum install -y gcc make pkg-config openssl-devel
+            ok "System build dependencies installed"
+        fi
+    elif command -v pacman &>/dev/null; then
+        if ! pacman -Qi base-devel &>/dev/null 2>&1; then
+            info "Installing base-devel..."
+            pacman -S --noconfirm base-devel openssl pkg-config
+            ok "System build dependencies installed"
+        fi
+    else
+        if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null; then
+            die "No C compiler found and couldn't detect package manager. Install gcc manually."
+        fi
+    fi
+}
+
+install_system_deps
+
 # --- Resolve the invoking user's environment ---
 # sudo strips PATH, so cargo/rustup in ~/.cargo/bin become invisible.
 # We recover them via SUDO_USER.
@@ -220,8 +275,8 @@ echo "  Config files:"
 echo "    Env:  $INSTALL_CONF"
 echo "    TOML: $INSTALL_TOML  (enable in argusd.conf: ARGUS_CONFIG=$INSTALL_TOML)"
 echo ""
-echo "  Production (TLS + auth):"
-echo "    sudo cp $REPO_ROOT/deploy/examples/production.toml $INSTALL_TOML"
+echo "  TLS + auth:"
+echo "    sudo cp $REPO_ROOT/deploy/examples/integration.toml $INSTALL_TOML"
 echo ""
 echo "  Standalone Grafana/Prometheus stack:"
 echo "    $REPO_ROOT/deploy/observability/scripts/start-observability.sh"
