@@ -169,7 +169,7 @@ pub struct HealthStateMachine {
     hold_counter: u32,
     windows_in_state: u32,
 
-    config: StateMachineConfig,
+    pub(crate) config: StateMachineConfig,
 
     last_transition_seq: u64,
     last_transition_from: HealthState,
@@ -380,8 +380,10 @@ impl DetectionEngine {
     }
 
     /// Evaluate all rules against current metrics.
-    /// Computes composite score, feeds it through EWMA+peak-hold smoothing,
-    /// then drives the state machine. Returns alerts only on state transitions.
+    /// Computes composite score boosted by rule verdicts, feeds it through
+    /// EWMA+peak-hold smoothing, then drives the state machine.
+    /// Always returns rule-generated alerts so they're visible to telemetry,
+    /// TUI, and scheduler regardless of state transitions.
     pub fn evaluate(&mut self, metrics: &AggregatedMetrics) -> Vec<Alert> {
         let mut new_alerts = Vec::new();
         let mut worst_severity = HealthState::Healthy;
@@ -396,20 +398,33 @@ impl DetectionEngine {
         }
 
         // Compute raw health score with zero-traffic carry-forward
-        let raw = self.compute_effective_raw(metrics);
+        let mut raw = self.compute_effective_raw(metrics);
+
+        // Rule severity boost: if detection rules fire at a severity level
+        // that the composite score alone can't reach (e.g., RdmaLinkDegradation
+        // fires Critical for sustained packet loss, but soft error weight caps
+        // at 0.25), use the rule verdict as a score floor. This ensures rule
+        // verdicts can't be silently overridden by insufficient score weights.
+        let severity_floor = match worst_severity {
+            HealthState::Critical => self.state_machine.config.critical_enter,
+            HealthState::Degraded | HealthState::Recovering => {
+                self.state_machine.config.degrade_enter
+            }
+            HealthState::Healthy => 0.0,
+        };
+        if severity_floor > raw {
+            raw = severity_floor;
+        }
+
         self.prev_raw_score = raw;
 
         // Dual-track smoothing
         let effective = self.score.update(raw);
 
         // Drive state machine
-        let transition = self.state_machine.evaluate(effective);
+        self.state_machine.evaluate(effective);
 
-        if transition.is_some() {
-            new_alerts
-        } else {
-            vec![]
-        }
+        new_alerts
     }
 
     /// Raw score computation with zero-traffic carry-forward.
@@ -591,15 +606,15 @@ mod tests {
         let mut engine = DetectionEngine::new();
         let metrics = bad_metrics();
 
-        // First window: score enters EWMA but dwell not met
-        let first = engine.evaluate(&metrics);
-        assert!(first.is_empty(), "single window should not trigger");
-        assert_eq!(engine.current_state(), HealthState::Healthy);
+        // First window: score enters EWMA but dwell not met — state stays Healthy
+        let _first = engine.evaluate(&metrics);
+        assert_eq!(engine.current_state(), HealthState::Healthy,
+            "single window should not transition state");
 
         // Second window: dwell met → Degraded
-        let second = engine.evaluate(&metrics);
-        assert!(!second.is_empty(), "second window should trigger transition");
-        assert_eq!(engine.current_state(), HealthState::Degraded);
+        let _second = engine.evaluate(&metrics);
+        assert_eq!(engine.current_state(), HealthState::Degraded,
+            "second window should transition to Degraded");
     }
 
     #[test]
@@ -611,23 +626,17 @@ mod tests {
     }
 
     #[test]
-    fn repeated_evaluation_deduplicates() {
+    fn alerts_always_returned_from_rules() {
         let mut engine = DetectionEngine::new();
         let metrics = bad_metrics();
 
-        let alerts = evaluate_n(&mut engine, &metrics, 2);
-        assert!(!alerts.is_empty(), "transition should emit alerts");
+        // Rule alerts are returned every window, not just on transitions
+        let first = engine.evaluate(&metrics);
+        let second = engine.evaluate(&metrics);
 
-        // Third eval at same state: should not re-emit
-        let third = engine.evaluate(&metrics);
-        assert!(third.is_empty(), "same state should not re-emit alerts");
-
-        engine.reset();
-        let after_reset = evaluate_n(&mut engine, &metrics, 2);
-        assert!(
-            !after_reset.is_empty(),
-            "alert fires again after reset + hysteresis"
-        );
+        // Both windows should return alerts since rules fire on bad metrics
+        assert!(!first.is_empty(), "rules should fire on bad metrics");
+        assert!(!second.is_empty(), "rules should continue firing");
     }
 
     // ── Flapping resistance tests ───────────────────────────────────────
