@@ -174,22 +174,31 @@
         "tooltip": { "mode": "single", "sort": "none" } }
     },
     {
-      "id": 10, "type": "timeseries", "title": "IRQ Distribution (per CPU)",
-      "description": "Interrupt count per CPU per window. Uneven distribution indicates affinity skew.",
+      "id": 10, "type": "timeseries", "title": "IRQ Imbalance (0% = balanced, 100% = all on one CPU)",
+      "description": "How unevenly IRQs are spread across CPUs, normalized for CPU count. 0% means every CPU handles its fair share. Higher values mean one CPU is doing disproportionate work. Yellow (30%) = moderate skew. Red (60%) = severe — check irqbalance or NIC affinity.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "sum by (cpu) (increase(argus_irq_total{instance=~\"$node\"}[$__rate_interval]))",
-        "refId": "A", "legendFormat": "cpu {{cpu}}", "range": true
+        "expr": "argus_irq_imbalance_pct{instance=~\"$node\"}",
+        "refId": "A", "legendFormat": "{{instance}} imbalance", "range": true
       }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "fillOpacity": 80,
-            "stacking": { "mode": "normal", "group": "A" }, "showPoints": "never" },
-          "unit": "short"
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20,
+            "stacking": { "mode": "none" }, "showPoints": "never",
+            "thresholdsStyle": { "mode": "line" } },
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 60 }
+            ]
+          }
         }, "overrides": []
       },
       "options": {
