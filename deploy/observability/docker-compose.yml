@@ -6,6 +6,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ./argus-targets.json:/etc/prometheus/argus-targets.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
