@@ -93,7 +93,7 @@ The install script builds and installs:
 | `/usr/local/bin/argus-status` | CLI health check (local or remote) |
 | `/usr/local/bin/argus-discover` | Subnet scanner for node discovery |
 | `/usr/local/bin/argus-manage-targets` | Manage Prometheus scrape targets |
-| `/usr/local/bin/argus-scheduler` | Scheduler integration (enable, disable, hold, release, setup) |
+| `/usr/local/bin/argus-scheduler` | Scheduler integration (enable, disable, hold, release, validate) |
 | `/usr/local/lib/argus/argus-ebpf` | eBPF object |
 | `/etc/argus/argusd.conf` | Environment-based config |
 | `/etc/systemd/system/argusd.service` | Systemd unit |
@@ -337,17 +337,19 @@ Example configs: `deploy/examples/standalone.toml`, `deploy/examples/integration
 
 ARGUS can automatically drain and resume nodes via a workload scheduler when it detects health changes. A state-driven reconciliation loop compares ARGUS's *desired* node state (derived from health) against the *observed* scheduler state and converges them.
 
-**Quick start (SLURM)**:
+ARGUS does not install or manage SLURM (or any scheduler). You bring a working scheduler; ARGUS integrates with it.
+
+**Prerequisites**: A running SLURM cluster where this node is registered, `scontrol` is in PATH, and munge is active. Validate with:
 
 ```bash
-# If SLURM isn't installed yet:
-sudo argus-scheduler setup-slurm
+argus-scheduler validate
+```
 
-# Enable ARGUS → SLURM integration:
-sudo argus-scheduler enable slurm
+**Enable integration**:
 
-# Check status:
-argus-scheduler status
+```bash
+sudo argus-scheduler enable slurm   # validates prerequisites, updates argusd.conf, restarts argusd
+argus-scheduler status              # verify it's active
 ```
 
 **Operator holds**: If someone drains a node outside ARGUS (e.g., `scontrol update State=DRAIN Reason="maintenance"`), ARGUS detects the external drain and enters `HeldByOperator` mode — it will not resume the node.
@@ -355,11 +357,21 @@ argus-scheduler status
 ```bash
 argus-scheduler hold              # set hold manually
 argus-scheduler release           # release hold
-argus-scheduler status            # see current state
 sudo argus-scheduler disable      # turn off scheduler integration entirely
 ```
 
-**Advanced flags** (via TOML or CLI):
+**TOML configuration** (alternative to CLI):
+
+```toml
+[scheduler]
+backend = "slurm"
+dry_run = false
+drain_on_degraded = false
+resume_cooldown_secs = 60
+reconcile_interval_secs = 10
+```
+
+**CLI flags** (override TOML):
 - `--scheduler slurm` / `--scheduler noop` — backend selection
 - `--scheduler-dry-run` — log actions without executing
 - `--drain-on-degraded` — drain on Degraded (default: only Critical)

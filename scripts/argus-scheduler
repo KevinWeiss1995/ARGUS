@@ -2,13 +2,13 @@
 # argus-scheduler — Manage ARGUS scheduler integration.
 #
 # Usage:
-#   argus-scheduler enable slurm       # enable SLURM backend and restart argusd
-#   argus-scheduler enable noop        # enable noop (dry-run) backend
+#   argus-scheduler enable slurm       # validate SLURM, enable integration, restart argusd
+#   argus-scheduler enable noop        # enable noop backend (log-only, no real actions)
 #   argus-scheduler disable            # disable scheduler integration and restart argusd
 #   argus-scheduler status             # show current scheduler state
 #   argus-scheduler hold               # set operator hold (ARGUS won't resume this node)
 #   argus-scheduler release            # release operator hold
-#   argus-scheduler setup-slurm        # install and configure single-node SLURM
+#   argus-scheduler validate           # check that SLURM is correctly configured for ARGUS
 
 set -euo pipefail
 
@@ -29,10 +29,10 @@ Usage: argus-scheduler <command> [args]
 Commands:
   enable <backend>    Enable scheduler integration (slurm, noop)
   disable             Disable scheduler integration
-  status              Show scheduler state (desired, observed, backend)
+  status              Show scheduler state (desired, observed, counters)
   hold                Set operator hold — ARGUS will not resume this node
   release             Release operator hold
-  setup-slurm         Install and configure single-node SLURM (for testing)
+  validate            Check SLURM prerequisites (scontrol, munge, node registration)
 
 Options:
   --port PORT         ARGUS metrics port (default: 9100)
@@ -54,6 +54,80 @@ require_root() {
     fi
 }
 
+# ── validate ──────────────────────────────────────────────────────────
+# Checks that the host's SLURM installation is compatible with ARGUS.
+# Returns 0 if all checks pass, 1 otherwise.
+
+cmd_validate() {
+    local errors=0
+
+    info "Checking SLURM prerequisites..."
+    echo ""
+
+    # 1. scontrol binary
+    if command -v scontrol &>/dev/null; then
+        ok "scontrol found at $(command -v scontrol)"
+    else
+        die "scontrol not found in PATH — SLURM must be installed and configured before enabling ARGUS integration"
+    fi
+
+    # 2. munge running
+    if systemctl is-active --quiet munge 2>/dev/null; then
+        ok "munge is running"
+    elif pgrep -x munged &>/dev/null; then
+        ok "munged process running"
+    else
+        echo -e "\033[1;31mFAIL\033[0m munge is not running"
+        echo "      SLURM requires munge for authentication."
+        echo "      Fix: sudo systemctl enable --now munge"
+        errors=$((errors + 1))
+    fi
+
+    # 3. slurmctld reachable
+    local hostname
+    hostname=$(hostname -s)
+    if scontrol ping &>/dev/null; then
+        ok "slurmctld is reachable"
+    else
+        echo -e "\033[1;31mFAIL\033[0m slurmctld is not reachable (scontrol ping failed)"
+        echo "      Ensure slurmctld is running and this node can reach it."
+        errors=$((errors + 1))
+    fi
+
+    # 4. This node is registered in SLURM
+    local node_info
+    if node_info=$(scontrol show node "$hostname" -o 2>/dev/null); then
+        local state
+        state=$(echo "$node_info" | grep -oP 'State=\S+' || echo "State=?")
+        ok "Node '${hostname}' is registered in SLURM (${state})"
+    else
+        echo -e "\033[1;31mFAIL\033[0m Node '${hostname}' is not registered in SLURM"
+        echo "      This hostname must appear as a NodeName in slurm.conf."
+        errors=$((errors + 1))
+    fi
+
+    # 5. Permission check — can we update node state?
+    if [[ $EUID -eq 0 ]]; then
+        if scontrol update "NodeName=${hostname}" State=RESUME 2>/dev/null; then
+            ok "Root can update node state via scontrol"
+        else
+            echo -e "\033[1;31mFAIL\033[0m scontrol update failed — check SlurmUser and permissions"
+            errors=$((errors + 1))
+        fi
+    else
+        warn "Skipping write permission check (not root). ARGUS runs as root via systemd."
+    fi
+
+    echo ""
+    if [[ $errors -eq 0 ]]; then
+        ok "All checks passed — ready to enable"
+        echo "  Run: sudo argus-scheduler enable slurm"
+        return 0
+    else
+        die "${errors} check(s) failed — fix the above issues before enabling"
+    fi
+}
+
 # ── enable ────────────────────────────────────────────────────────────
 
 cmd_enable() {
@@ -67,14 +141,19 @@ cmd_enable() {
 
     require_root
 
+    # Validate SLURM prerequisites before enabling
+    if [[ "$backend" == "slurm" ]]; then
+        cmd_validate || exit 1
+        echo ""
+    fi
+
     if [[ ! -f "$CONF" ]]; then
-        die "Config not found: $CONF"
+        die "Config not found: $CONF — run install.sh first"
     fi
 
     local current
     current=$(grep '^ARGUS_EXTRA_ARGS=' "$CONF" 2>/dev/null | head -1 || echo "")
 
-    # Remove any existing --scheduler flag, then append the new one
     local cleaned
     cleaned=$(echo "$current" | sed -E 's/--scheduler[= ][a-z]+//g; s/--scheduler-dry-run//g' | sed 's/  */ /g')
     local base
@@ -178,7 +257,6 @@ cmd_status() {
         echo "  Persisted:   ${persisted_desired}"
     fi
 
-    # Show SLURM state if scontrol is available
     if command -v scontrol &>/dev/null; then
         local hostname
         hostname=$(hostname -s)
@@ -212,90 +290,6 @@ cmd_release() {
     ok "Operator hold released — ARGUS will manage this node normally"
 }
 
-# ── setup-slurm ───────────────────────────────────────────────────────
-
-cmd_setup_slurm() {
-    require_root
-
-    info "Installing SLURM packages..."
-    if command -v apt-get &>/dev/null; then
-        apt-get update -qq
-        apt-get install -y -qq slurm-wlm slurm-client munge
-    elif command -v dnf &>/dev/null; then
-        dnf install -y slurm slurm-slurmd slurm-slurmctld munge
-    elif command -v yum &>/dev/null; then
-        yum install -y slurm slurm-slurmd slurm-slurmctld munge
-    else
-        die "Unsupported package manager — install slurm-wlm and munge manually"
-    fi
-    ok "SLURM packages installed"
-
-    info "Creating spool and log directories..."
-    mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
-    chown slurm:slurm /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
-    ok "Directories ready"
-
-    local hostname
-    hostname=$(hostname -s)
-    local ncpus
-    ncpus=$(nproc)
-
-    if [[ -f /etc/slurm/slurm.conf ]]; then
-        warn "slurm.conf already exists — not overwriting"
-    else
-        info "Generating /etc/slurm/slurm.conf..."
-        mkdir -p /etc/slurm
-        cat > /etc/slurm/slurm.conf << SLURM_EOF
-ClusterName=argus-test
-SlurmctldHost=${hostname}
-MpiDefault=none
-ProctrackType=proctrack/linuxproc
-ReturnToService=2
-SlurmctldPidFile=/run/slurmctld.pid
-SlurmdPidFile=/run/slurmd.pid
-SlurmdSpoolDir=/var/spool/slurmd
-StateSaveLocation=/var/spool/slurmctld
-SlurmUser=slurm
-TaskPlugin=task/none
-SchedulerType=sched/backfill
-SelectType=select/cons_tres
-AccountingStorageType=accounting_storage/none
-SlurmctldLogFile=/var/log/slurm/slurmctld.log
-SlurmdLogFile=/var/log/slurm/slurmd.log
-NodeName=${hostname} CPUs=${ncpus} State=UNKNOWN
-PartitionName=test Nodes=${hostname} Default=YES MaxTime=INFINITE State=UP
-SLURM_EOF
-        ok "slurm.conf generated for ${hostname} (${ncpus} CPUs)"
-    fi
-
-    info "Starting SLURM services..."
-    systemctl enable --now munge
-    systemctl enable --now slurmctld
-    systemctl enable --now slurmd
-    sleep 3
-
-    if ! systemctl is-active --quiet slurmctld; then
-        warn "slurmctld failed to start — checking logs..."
-        journalctl -u slurmctld --no-pager -n 10
-        die "Fix the above errors and re-run"
-    fi
-
-    # Bring node online
-    scontrol update "NodeName=${hostname}" State=RESUME 2>/dev/null || true
-    ok "SLURM services running"
-
-    # Verify
-    echo ""
-    sinfo
-    echo ""
-    scontrol show node "$hostname" | grep -E 'NodeName|State|Reason'
-    echo ""
-    ok "Single-node SLURM cluster ready"
-    echo ""
-    echo "  Enable in ARGUS:  sudo argus-scheduler enable slurm"
-    echo "  Check status:     argus-scheduler status"
-}
-
 # ── Parse global options and dispatch ─────────────────────────────────
 
 while [[ $# -gt 0 ]]; do
@@ -318,7 +312,7 @@ case "$COMMAND" in
     status)       cmd_status ;;
     hold)         cmd_hold ;;
     release)      cmd_release ;;
-    setup-slurm)  cmd_setup_slurm ;;
+    validate)     cmd_validate ;;
     help|-h|--help) usage ;;
     *)            die "Unknown command: $COMMAND"; usage ;;
 esac
