@@ -6,7 +6,7 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/argus/argusd.conf
-ExecStart=/bin/sh -c 'exec /usr/local/bin/argusd --mode "$ARGUS_MODE" --ebpf-path "$ARGUS_EBPF_PATH" --metrics-addr "$ARGUS_METRICS_ADDR" --log-level "$ARGUS_LOG_LEVEL" --window-secs "$ARGUS_WINDOW_SECS" $ARGUS_EXTRA_ARGS'
+ExecStart=/bin/sh -c 'exec /usr/local/bin/argusd ${ARGUS_CONFIG:+--config "$ARGUS_CONFIG"} --mode "$ARGUS_MODE" --ebpf-path "$ARGUS_EBPF_PATH" --metrics-addr "$ARGUS_METRICS_ADDR" --log-level "$ARGUS_LOG_LEVEL" --window-secs "$ARGUS_WINDOW_SECS" $ARGUS_EXTRA_ARGS'
 
 Restart=on-failure
 RestartSec=5
