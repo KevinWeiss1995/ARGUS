@@ -146,21 +146,34 @@ Each target node needs `argusd` installed and port 9100 reachable from the Prome
 
 The agent exposes a standard `/metrics` endpoint. No Docker or ARGUS-managed stack required.
 
-**Install and configure:**
+#### 1. Install the agent (on each node you want to monitor)
 
 ```bash
 git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 sudo ./scripts/install.sh
-
-# Activate the integration TOML config
-sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
-sudo sed -i 's|# ARGUS_CONFIG=.*|ARGUS_CONFIG=/etc/argus/argusd.toml|' /etc/argus/argusd.conf
 ```
 
-**Set up TLS and auth** (skip if on a trusted network — just remove `[tls]` and `[auth]` from the TOML):
+#### 2. Enable the integration config
+
+The default install uses an env-file config (`/etc/argus/argusd.conf`). For integration with an existing stack, switch to the TOML config which supports TLS and auth:
 
 ```bash
+sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
+```
+
+Then edit `/etc/argus/argusd.conf` and uncomment the `ARGUS_CONFIG` line:
+
+```bash
+ARGUS_CONFIG=/etc/argus/argusd.toml
+```
+
+#### 3. Choose: TLS + auth or plain HTTP
+
+**With TLS + auth** (recommended for multi-node / untrusted networks):
+
+```bash
+# Generate a self-signed cert and bearer token
 sudo mkdir -p /etc/argus/tls
 sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
   -keyout /etc/argus/tls/server.key -out /etc/argus/tls/server.crt \
@@ -169,15 +182,34 @@ sudo sh -c 'openssl rand -hex 32 > /etc/argus/token'
 sudo chmod 600 /etc/argus/token
 ```
 
-**Start and verify:**
+The TOML already references these paths. No edits needed.
+
+**Without TLS** (trusted network, simpler setup): edit `/etc/argus/argusd.toml` and delete the `[tls]` and `[auth]` sections.
+
+#### 4. Start the agent
 
 ```bash
 sudo systemctl enable --now argusd
+```
+
+Verify it's running:
+
+```bash
+# Plain HTTP:
+curl http://localhost:9100/health
+
+# With TLS + auth:
 TOKEN=$(sudo cat /etc/argus/token)
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health
 ```
 
-**Point your Prometheus at ARGUS** (full examples in `deploy/examples/prometheus-scrape-argus.yml`):
+You should see `{"state":"HEALTHY",...}`. If not, check `journalctl -u argusd -n 20`.
+
+#### 5. Add ARGUS to your Prometheus
+
+Add to your `prometheus.yml` (full examples in `deploy/examples/prometheus-scrape-argus.yml`):
+
+**With TLS + auth:**
 
 ```yaml
 scrape_configs:
@@ -185,15 +217,44 @@ scrape_configs:
     scrape_interval: 5s
     scheme: https
     tls_config:
-      insecure_skip_verify: true    # or use ca_file with your CA cert
+      insecure_skip_verify: true   # or ca_file: /path/to/ca.crt
     bearer_token_file: /etc/prometheus/argus-token
     static_configs:
       - targets: ["node01:9100", "node02:9100"]
 ```
 
-**Import dashboards** into your Grafana: **Dashboards > New > Import > Upload JSON**. Upload the three files from `deploy/observability/grafana/dashboards/`. Grafana will prompt you to select your Prometheus datasource.
+Copy the token to your Prometheus host:
 
-**Push-based delivery** (firewalled nodes): see `deploy/examples/prometheus-agent-sidecar.yml` for a Prometheus agent-mode sidecar that `remote_write`s to your central store.
+```bash
+# On the Prometheus host — paste the token value from: sudo cat /etc/argus/token
+echo "YOUR_TOKEN_HERE" | sudo tee /etc/prometheus/argus-token > /dev/null
+sudo chmod 600 /etc/prometheus/argus-token
+```
+
+**Without TLS:**
+
+```yaml
+scrape_configs:
+  - job_name: argus
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["node01:9100", "node02:9100"]
+```
+
+#### 6. Import dashboards into your Grafana
+
+1. In Grafana, go to **Dashboards > New > Import**
+2. Click **Upload dashboard JSON file**
+3. Upload each file from `deploy/observability/grafana/dashboards/`:
+   - `argus-fleet-overview.json`
+   - `argus-node-detail.json`
+   - `argus-link-drilldown.json`
+4. When prompted, select your Prometheus datasource
+5. Click **Import**
+
+The dashboards use template variables so they'll auto-populate with your ARGUS nodes once Prometheus starts scraping.
+
+**Push-based delivery** (firewalled nodes that can't be scraped): see `deploy/examples/prometheus-agent-sidecar.yml` for a Prometheus agent-mode sidecar that `remote_write`s to your central store.
 
 ---
 
