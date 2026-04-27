@@ -20,6 +20,9 @@ struct ArgusPrometheusMetrics {
     alert_count: Family<Vec<(String, String)>, Counter>,
     state_transitions: Family<Vec<(String, String)>, Counter>,
     irq_total: Family<Vec<(String, String)>, Counter>,
+    irq_skew_pct: Gauge,
+    irq_dominant_cpu: Gauge,
+    irq_total_rate: Gauge,
     slab_alloc_count: Counter,
     slab_avg_latency_ns: Gauge,
     slab_max_latency_ns: Gauge,
@@ -87,6 +90,27 @@ impl PrometheusExporter {
             "argus_irq",
             "Total interrupts by CPU",
             irq_total.clone(),
+        );
+
+        let irq_skew_pct = Gauge::default();
+        registry.register(
+            "argus_irq_skew_pct",
+            "Percentage of IRQs handled by the busiest CPU (0-100)",
+            irq_skew_pct.clone(),
+        );
+
+        let irq_dominant_cpu = Gauge::default();
+        registry.register(
+            "argus_irq_dominant_cpu",
+            "CPU ID handling the most IRQs in the current window",
+            irq_dominant_cpu.clone(),
+        );
+
+        let irq_total_rate = Gauge::default();
+        registry.register(
+            "argus_irq_total_rate",
+            "Total IRQ count across all CPUs in the current window",
+            irq_total_rate.clone(),
         );
 
         let slab_alloc_count = Counter::default();
@@ -236,6 +260,9 @@ impl PrometheusExporter {
             alert_count,
             state_transitions,
             irq_total,
+            irq_skew_pct,
+            irq_dominant_cpu,
+            irq_total_rate,
             slab_alloc_count,
             slab_avg_latency_ns,
             slab_max_latency_ns,
@@ -328,13 +355,9 @@ impl PrometheusExporter {
             .cq_p99_latency_ns
             .set(metrics.cq_jitter.estimated_p99_ns() as i64);
 
-        // IRQ per-CPU
-        for (i, &count) in metrics
-            .interrupt_distribution
-            .per_cpu_counts
-            .iter()
-            .enumerate()
-        {
+        // IRQ per-CPU (detail) + aggregate skew metrics
+        let dist = &metrics.interrupt_distribution;
+        for (i, &count) in dist.per_cpu_counts.iter().enumerate() {
             let counter = self
                 .metrics
                 .irq_total
@@ -343,6 +366,25 @@ impl PrometheusExporter {
                 counter.inc_by(count);
             }
         }
+        let skew = dist.dominant_cpu_pct();
+        self.metrics.irq_skew_pct.set(skew as i64);
+        // #region agent log
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/argus-debug-58f965.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "{{\"sessionId\":\"58f965\",\"location\":\"prometheus.rs:update\",\"message\":\"irq_metrics\",\"data\":{{\"skew_pct\":{:.1},\"total\":{},\"per_cpu_len\":{}}},\"timestamp\":{}}}", skew, dist.total_count, dist.per_cpu_counts.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_millis()).unwrap_or(0));
+        }
+        // #endregion
+        let dominant_cpu = dist
+            .per_cpu_counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &c)| c)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.metrics.irq_dominant_cpu.set(dominant_cpu as i64);
+        self.metrics
+            .irq_total_rate
+            .set(dist.total_count as i64);
 
         // NAPI utilization
         let napi_util = if metrics.network_metrics.napi_total_budget > 0 {
