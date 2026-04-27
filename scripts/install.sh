@@ -14,7 +14,8 @@
 # Installed paths:
 #   /usr/local/bin/argusd                  — agent binary
 #   /usr/local/lib/argus/argus-ebpf       — eBPF object
-#   /etc/argus/argusd.conf                 — configuration (preserved on upgrade)
+#   /etc/argus/argusd.conf                 — env configuration (preserved on upgrade)
+#   /etc/argus/argusd.toml                 — TOML config example (preserved on upgrade)
 #   /etc/systemd/system/argusd.service     — systemd unit
 
 set -euo pipefail
@@ -30,6 +31,7 @@ INSTALL_EBPF_DIR="/usr/local/lib/argus"
 INSTALL_EBPF="$INSTALL_EBPF_DIR/argus-ebpf"
 INSTALL_CONF_DIR="/etc/argus"
 INSTALL_CONF="$INSTALL_CONF_DIR/argusd.conf"
+INSTALL_TOML="$INSTALL_CONF_DIR/argusd.toml"
 INSTALL_UNIT="/etc/systemd/system/argusd.service"
 
 NO_BUILD=false
@@ -187,6 +189,14 @@ else
     ok "$INSTALL_CONF"
 fi
 
+if [[ -f "$INSTALL_TOML" ]]; then
+    warn "TOML config already exists at $INSTALL_TOML — not overwriting"
+else
+    info "Installing example TOML config to $INSTALL_TOML"
+    install -m 0644 "$REPO_ROOT/deploy/examples/standalone.toml" "$INSTALL_TOML"
+    ok "$INSTALL_TOML"
+fi
+
 # --- Install systemd unit ---
 
 info "Installing systemd unit to $INSTALL_UNIT"
@@ -205,8 +215,14 @@ echo "  Enable on boot:   systemctl enable argusd"
 echo "  Start now:         systemctl start argusd"
 echo "  View logs:         journalctl -u argusd -f"
 echo "  Check metrics:     curl localhost:9100/metrics"
-echo "  Edit config:       $INSTALL_CONF"
 echo ""
-echo "  To deploy the Grafana/Prometheus stack:"
+echo "  Config files:"
+echo "    Env:  $INSTALL_CONF"
+echo "    TOML: $INSTALL_TOML  (enable in argusd.conf: ARGUS_CONFIG=$INSTALL_TOML)"
+echo ""
+echo "  Production (TLS + auth):"
+echo "    sudo cp $REPO_ROOT/deploy/examples/production.toml $INSTALL_TOML"
+echo ""
+echo "  Standalone Grafana/Prometheus stack:"
 echo "    $REPO_ROOT/deploy/observability/scripts/start-observability.sh"
 echo ""
