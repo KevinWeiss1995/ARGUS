@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# argus-scheduler — Manage ARGUS scheduler integration.
+#
+# Usage:
+#   argus-scheduler enable slurm       # validate SLURM, enable integration, restart argusd
+#   argus-scheduler enable noop        # enable noop backend (log-only, no real actions)
+#   argus-scheduler disable            # disable scheduler integration and restart argusd
+#   argus-scheduler status             # show current scheduler state
+#   argus-scheduler hold               # set operator hold (ARGUS won't resume this node)
+#   argus-scheduler release            # release operator hold
+#   argus-scheduler validate           # check that SLURM is correctly configured for ARGUS
+
+set -euo pipefail
+
+CONF="${ARGUS_CONF:-/etc/argus/argusd.conf}"
+PORT="${ARGUS_PORT:-9100}"
+HOST="${ARGUS_HOST:-localhost}"
+SCHEME="http"
+
+die()  { echo -e "\033[1;31mERR\033[0m $*" >&2; exit 1; }
+ok()   { echo -e "\033[1;32m OK\033[0m $*"; }
+info() { echo -e "\033[1;34m==>\033[0m $*"; }
+warn() { echo -e "\033[1;33mWRN\033[0m $*"; }
+
+usage() {
+    cat <<EOF
+Usage: argus-scheduler <command> [args]
+
+Commands:
+  enable <backend>    Enable scheduler integration (slurm, noop)
+  disable             Disable scheduler integration
+  status              Show scheduler state (desired, observed, counters)
+  hold                Set operator hold — ARGUS will not resume this node
+  release             Release operator hold
+  validate            Check SLURM prerequisites (scontrol, munge, node registration)
+
+Options:
+  --port PORT         ARGUS metrics port (default: 9100)
+  --host HOST         ARGUS host (default: localhost)
+  --conf PATH         argusd.conf path (default: /etc/argus/argusd.conf)
+  -h, --help          Show this help
+
+Environment:
+  ARGUS_CONF          Override argusd.conf path
+  ARGUS_PORT          Override metrics port
+  ARGUS_HOST          Override host
+EOF
+    exit 0
+}
+
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        die "This command requires root (sudo argus-scheduler $*)"
+    fi
+}
+
+# ── validate ──────────────────────────────────────────────────────────
+# Checks that the host's SLURM installation is compatible with ARGUS.
+# Returns 0 if all checks pass, 1 otherwise.
+
+cmd_validate() {
+    local errors=0
+
+    info "Checking SLURM prerequisites..."
+    echo ""
+
+    # 1. scontrol binary
+    if command -v scontrol &>/dev/null; then
+        ok "scontrol found at $(command -v scontrol)"
+    else
+        die "scontrol not found in PATH — SLURM must be installed and configured before enabling ARGUS integration"
+    fi
+
+    # 2. munge running
+    if systemctl is-active --quiet munge 2>/dev/null; then
+        ok "munge is running"
+    elif pgrep -x munged &>/dev/null; then
+        ok "munged process running"
+    else
+        echo -e "\033[1;31mFAIL\033[0m munge is not running"
+        echo "      SLURM requires munge for authentication."
+        echo "      Fix: sudo systemctl enable --now munge"
+        errors=$((errors + 1))
+    fi
+
+    # 3. slurmctld reachable
+    local hostname
+    hostname=$(hostname -s)
+    if scontrol ping &>/dev/null; then
+        ok "slurmctld is reachable"
+    else
+        echo -e "\033[1;31mFAIL\033[0m slurmctld is not reachable (scontrol ping failed)"
+        echo "      Ensure slurmctld is running and this node can reach it."
+        errors=$((errors + 1))
+    fi
+
+    # 4. This node is registered in SLURM
+    local node_info
+    if node_info=$(scontrol show node "$hostname" -o 2>/dev/null); then
+        local state
+        state=$(echo "$node_info" | grep -oP 'State=\S+' || echo "State=?")
+        ok "Node '${hostname}' is registered in SLURM (${state})"
+    else
+        echo -e "\033[1;31mFAIL\033[0m Node '${hostname}' is not registered in SLURM"
+        echo "      This hostname must appear as a NodeName in slurm.conf."
+        errors=$((errors + 1))
+    fi
+
+    # 5. Permission check — use Comment as an idempotent no-op write
+    if [[ $EUID -eq 0 ]]; then
+        if scontrol update "NodeName=${hostname}" Comment="argus-validate" 2>/dev/null; then
+            ok "Root can update node state via scontrol"
+            scontrol update "NodeName=${hostname}" Comment="" 2>/dev/null || true
+        else
+            echo -e "\033[1;31mFAIL\033[0m scontrol update failed — check SlurmUser and permissions"
+            errors=$((errors + 1))
+        fi
+    else
+        warn "Skipping write permission check (not root). ARGUS runs as root via systemd."
+    fi
+
+    echo ""
+    if [[ $errors -eq 0 ]]; then
+        ok "All checks passed — ready to enable"
+        echo "  Run: sudo argus-scheduler enable slurm"
+        return 0
+    else
+        die "${errors} check(s) failed — fix the above issues before enabling"
+    fi
+}
+
+# ── enable ────────────────────────────────────────────────────────────
+
+cmd_enable() {
+    local backend="${1:-}"
+    [[ -z "$backend" ]] && die "Usage: argus-scheduler enable <slurm|noop>"
+
+    case "$backend" in
+        slurm|noop) ;;
+        *) die "Unknown backend: $backend (supported: slurm, noop)" ;;
+    esac
+
+    require_root
+
+    # Validate SLURM prerequisites before enabling
+    if [[ "$backend" == "slurm" ]]; then
+        cmd_validate || exit 1
+        echo ""
+    fi
+
+    if [[ ! -f "$CONF" ]]; then
+        die "Config not found: $CONF — run install.sh first"
+    fi
+
+    local current
+    current=$(grep '^ARGUS_EXTRA_ARGS=' "$CONF" 2>/dev/null | head -1 || echo "")
+
+    local cleaned
+    cleaned=$(echo "$current" | sed -E 's/--scheduler[= ][a-z]+//g; s/--scheduler-dry-run//g' | sed 's/  */ /g')
+    local base
+    base=$(echo "$cleaned" | sed 's/^ARGUS_EXTRA_ARGS=//' | sed 's/^ *//;s/ *$//')
+
+    local new_args="--scheduler ${backend}"
+    if [[ -n "$base" ]]; then
+        new_args="${base} ${new_args}"
+    fi
+
+    sed -i "s|^ARGUS_EXTRA_ARGS=.*|ARGUS_EXTRA_ARGS=${new_args}|" "$CONF"
+    ok "Scheduler backend set to '${backend}' in ${CONF}"
+
+    if systemctl is-active argusd &>/dev/null; then
+        systemctl restart argusd
+        ok "argusd restarted"
+    else
+        warn "argusd is not running — start with: systemctl start argusd"
+    fi
+}
+
+# ── disable ───────────────────────────────────────────────────────────
+
+cmd_disable() {
+    require_root
+
+    if [[ ! -f "$CONF" ]]; then
+        die "Config not found: $CONF"
+    fi
+
+    local current
+    current=$(grep '^ARGUS_EXTRA_ARGS=' "$CONF" 2>/dev/null | head -1 || echo "ARGUS_EXTRA_ARGS=")
+
+    local cleaned
+    cleaned=$(echo "$current" | sed -E 's/--scheduler[= ][a-z]+//g; s/--scheduler-dry-run//g' | sed 's/  */ /g; s/^ *//;s/ *$//')
+
+    sed -i "s|^ARGUS_EXTRA_ARGS=.*|${cleaned}|" "$CONF"
+    ok "Scheduler integration disabled"
+
+    if systemctl is-active argusd &>/dev/null; then
+        systemctl restart argusd
+        ok "argusd restarted"
+    fi
+}
+
+# ── status ────────────────────────────────────────────────────────────
+
+cmd_status() {
+    local metrics
+    if ! metrics=$(curl -sf --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/metrics" 2>/dev/null); then
+        die "Cannot reach ARGUS at ${HOST}:${PORT}"
+    fi
+
+    local desired observed drains resumes errors
+    desired=$(echo "$metrics" | grep '^argus_scheduler_desired_state ' | awk '{print $2}')
+    observed=$(echo "$metrics" | grep '^argus_scheduler_observed_state ' | awk '{print $2}')
+    drains=$(echo "$metrics" | grep '^argus_scheduler_drain_total' | awk '{print $2}' | head -1)
+    resumes=$(echo "$metrics" | grep '^argus_scheduler_resume_total' | awk '{print $2}' | head -1)
+    errors=$(echo "$metrics" | grep '^argus_scheduler_errors_total' | awk '{print $2}' | head -1)
+    local drain_dur
+    drain_dur=$(echo "$metrics" | grep '^argus_scheduler_drain_duration_seconds ' | awk '{print $2}')
+
+    if [[ -z "$desired" ]]; then
+        echo "Scheduler integration is not active."
+        echo ""
+        echo "Enable with: sudo argus-scheduler enable slurm"
+        return
+    fi
+
+    local desired_str observed_str
+    case "$desired" in
+        0) desired_str="\033[32mAvailable\033[0m" ;;
+        1) desired_str="\033[33mDraining\033[0m" ;;
+        2) desired_str="\033[31mHeldByOperator\033[0m" ;;
+        *) desired_str="Unknown ($desired)" ;;
+    esac
+    case "$observed" in
+        0) observed_str="\033[32mAvailable\033[0m" ;;
+        1) observed_str="\033[33mDraining\033[0m" ;;
+        2) observed_str="\033[33mDrained\033[0m" ;;
+        3) observed_str="\033[31mDown\033[0m" ;;
+        4) observed_str="Unknown" ;;
+        *) observed_str="? ($observed)" ;;
+    esac
+
+    echo "ARGUS Scheduler Status"
+    echo "══════════════════════"
+    echo ""
+    echo -e "  Desired:     ${desired_str}"
+    echo -e "  Observed:    ${observed_str}"
+    [[ -n "$drain_dur" && "$drain_dur" != "0" ]] && echo "  Drain dur:   ${drain_dur}s"
+    echo "  Drains:      ${drains:-0}"
+    echo "  Resumes:     ${resumes:-0}"
+    echo "  Errors:      ${errors:-0}"
+    echo ""
+
+    if [[ -f /var/lib/argus/scheduler-state.json ]]; then
+        echo "  State file:  /var/lib/argus/scheduler-state.json"
+        local persisted_desired
+        persisted_desired=$(python3 -c "import json; print(json.load(open('/var/lib/argus/scheduler-state.json')).get('desired','?'))" 2>/dev/null || echo "?")
+        echo "  Persisted:   ${persisted_desired}"
+    fi
+
+    if command -v scontrol &>/dev/null; then
+        local hostname
+        hostname=$(hostname -s)
+        local slurm_state
+        slurm_state=$(scontrol show node "$hostname" -o 2>/dev/null | grep -oP 'State=\S+' || echo "")
+        local slurm_reason
+        slurm_reason=$(scontrol show node "$hostname" -o 2>/dev/null | grep -oP 'Reason=\S+' || echo "")
+        if [[ -n "$slurm_state" ]]; then
+            echo ""
+            echo "  SLURM:       ${slurm_state} ${slurm_reason}"
+        fi
+    fi
+}
+
+# ── hold / release ────────────────────────────────────────────────────
+
+cmd_hold() {
+    local resp
+    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/scheduler/hold" 2>/dev/null); then
+        die "Cannot reach ARGUS at ${HOST}:${PORT} (is scheduler enabled?)"
+    fi
+    ok "Operator hold set — ARGUS will not resume this node"
+    echo "  Release with: argus-scheduler release"
+}
+
+cmd_release() {
+    local resp
+    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/scheduler/release" 2>/dev/null); then
+        die "Cannot reach ARGUS at ${HOST}:${PORT} (is scheduler enabled?)"
+    fi
+    ok "Operator hold released — ARGUS will manage this node normally"
+}
+
+# ── Parse global options and dispatch ─────────────────────────────────
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)  PORT="$2"; shift 2 ;;
+        --host)  HOST="$2"; shift 2 ;;
+        --conf)  CONF="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        -*) die "Unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+
+COMMAND="${1:-help}"
+shift || true
+
+case "$COMMAND" in
+    enable)       cmd_enable "$@" ;;
+    disable)      cmd_disable ;;
+    status)       cmd_status ;;
+    hold)         cmd_hold ;;
+    release)      cmd_release ;;
+    validate)     cmd_validate ;;
+    help|-h|--help) usage ;;
+    *)            die "Unknown command: $COMMAND"; usage ;;
+esac

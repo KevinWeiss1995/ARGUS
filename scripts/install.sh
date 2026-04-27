@@ -232,11 +232,11 @@ install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
 ok "$INSTALL_EBPF"
 
 info "Installing CLI tools to /usr/local/bin"
-for tool in argus-status argus-discover argus-manage-targets; do
+for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
     install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/local/bin/$tool"
 done
 ln -sf /usr/local/bin/argusd /usr/local/bin/argus-tui
-ok "argus-status, argus-discover, argus-manage-targets, argus-tui"
+ok "argus-status, argus-discover, argus-manage-targets, argus-scheduler, argus-tui"
 
 # --- Install config (preserve existing) ---
 

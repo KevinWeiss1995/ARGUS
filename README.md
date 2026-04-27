@@ -93,6 +93,7 @@ The install script builds and installs:
 | `/usr/local/bin/argus-status` | CLI health check (local or remote) |
 | `/usr/local/bin/argus-discover` | Subnet scanner for node discovery |
 | `/usr/local/bin/argus-manage-targets` | Manage Prometheus scrape targets |
+| `/usr/local/bin/argus-scheduler` | Scheduler integration (enable, disable, hold, release, validate) |
 | `/usr/local/lib/argus/argus-ebpf` | eBPF object |
 | `/etc/argus/argusd.conf` | Environment-based config |
 | `/etc/systemd/system/argusd.service` | Systemd unit |
@@ -334,14 +335,44 @@ Example configs: `deploy/examples/standalone.toml`, `deploy/examples/integration
 
 ### Scheduler integration
 
-ARGUS can automatically drain/resume nodes via a scheduler when it detects health changes. Enable with `--scheduler slurm` or the `[scheduler]` TOML section.
+ARGUS can automatically drain and resume nodes via a workload scheduler when it detects health changes. A state-driven reconciliation loop compares ARGUS's *desired* node state (derived from health) against the *observed* scheduler state and converges them.
 
-**How it works**: A state-driven reconciliation loop compares ARGUS's *desired* node state (derived from health) against the *observed* scheduler state, and converges them. This replaces the old fire-and-forget `--action-slurm-drain` flag.
+ARGUS does not install or manage SLURM (or any scheduler). You bring a working scheduler; ARGUS integrates with it.
 
-**Operator holds**: If someone drains a node outside ARGUS (e.g., `scontrol update State=DRAIN Reason="maintenance"`), ARGUS detects the external drain and enters `HeldByOperator` mode — it will not resume the node. Release holds via `POST /scheduler/release` or `curl -X POST http://localhost:9100/scheduler/release`.
+**Prerequisites**: A running SLURM cluster where this node is registered, `scontrol` is in PATH, and munge is active. Validate with:
 
-**CLI flags**:
-- `--scheduler slurm` — enable SLURM backend
+```bash
+argus-scheduler validate
+```
+
+**Enable integration**:
+
+```bash
+sudo argus-scheduler enable slurm   # validates prerequisites, updates argusd.conf, restarts argusd
+argus-scheduler status              # verify it's active
+```
+
+**Operator holds**: If someone drains a node outside ARGUS (e.g., `scontrol update State=DRAIN Reason="maintenance"`), ARGUS detects the external drain and enters `HeldByOperator` mode — it will not resume the node.
+
+```bash
+argus-scheduler hold              # set hold manually
+argus-scheduler release           # release hold
+sudo argus-scheduler disable      # turn off scheduler integration entirely
+```
+
+**TOML configuration** (alternative to CLI):
+
+```toml
+[scheduler]
+backend = "slurm"
+dry_run = false
+drain_on_degraded = false
+resume_cooldown_secs = 60
+reconcile_interval_secs = 10
+```
+
+**CLI flags** (override TOML):
+- `--scheduler slurm` / `--scheduler noop` — backend selection
 - `--scheduler-dry-run` — log actions without executing
 - `--drain-on-degraded` — drain on Degraded (default: only Critical)
 - `--resume-cooldown 60` — seconds healthy before auto-resume
@@ -466,6 +497,7 @@ scripts/
   argus-tui               Symlink → argusd; TUI attach mode
   argus-discover          Subnet scanner, generates Prometheus targets
   argus-manage-targets    Add/remove/list/verify scrape targets
+  argus-scheduler         Scheduler integration CLI (enable, hold, setup-slurm)
   export-dashboards.sh    Export dashboards for import into external Grafana
   e2e-test.sh             End-to-end + fault injection tests
 deploy/
