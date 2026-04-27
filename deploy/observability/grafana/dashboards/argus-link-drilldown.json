@@ -1,7 +1,5 @@
 {
-  "annotations": {
-    "list": []
-  },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -10,1015 +8,280 @@
   "liveNow": false,
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
-      "title": "Link Status",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_link_downed_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "{{device}}/{{port}}",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
+      "id": 100, "type": "text", "title": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "### InfiniBand Link Drill-Down\nSelect a **Node**, **Device**, and **Port** above. If the dropdowns are empty, no IB hardware was discovered on the selected node. This dashboard requires physical InfiniBand or Soft-RoCE to populate."
+      }
+    },
+    {
+      "id": 1, "type": "stat", "title": "Link Status",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_ib_link_downed_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
+        "legendFormat": "{{device}}/{{port}}", "range": false, "refId": "A", "instant": true
+      }],
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Up",
-                  "color": "green"
-                }
-              }
-            },
-            {
-              "type": "range",
-              "options": {
-                "from": 1e-06,
-                "to": 1000000000000000.0,
-                "result": {
-                  "text": "Down",
-                  "color": "red"
-                }
-              }
-            }
+            { "type": "value", "options": { "0": { "text": "Up", "color": "green" } } },
+            { "type": "range", "options": { "from": 0.000001, "to": 1e15, "result": { "text": "Down", "color": "red" } } }
           ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+          "unit": "none", "noValue": "No IB device"
+        }, "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto", "textMode": "value_and_name", "colorMode": "value", "graphMode": "none" }
     },
     {
-      "id": 2,
-      "type": "stat",
-      "title": "Error Recovery Events",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 0
+      "id": 2, "type": "stat", "title": "Error Recovery Events",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
+        "legendFormat": "", "range": false, "refId": "A", "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 }
+          ]},
+          "unit": "none", "noValue": "No IB device"
+        }, "overrides": []
       },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Total Errors",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
+        "legendFormat": "", "range": false, "refId": "A", "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 50 }
+          ]},
+          "unit": "none", "noValue": "No IB device"
+        }, "overrides": []
       },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Congestion Wait",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "editorMode": "code",
+        "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
+        "legendFormat": "", "range": false, "refId": "A", "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 100 }
+          ]},
+          "unit": "none", "noValue": "No IB device"
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "RX/TX Bytes",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "RX bytes", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_throughput_xmit_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "TX bytes", "range": true, "refId": "B" }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 10
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 3,
-      "type": "stat",
-      "title": "Total Errors",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 0
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(argus_ib_symbol_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}) + sum(argus_ib_link_error_recovery_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}) + sum(argus_ib_port_rcv_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}) + sum(argus_ib_port_xmit_discards_delta{instance=\"$node\", device=\"$device\", port=\"$port\"})",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 50
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "Congestion Wait",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 100
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "RX/TX Bytes",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "RX bytes",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_throughput_xmit_bytes{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "TX bytes",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 1,
-            "fillOpacity": 18,
-            "gradientMode": "opacity",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "bytes"
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
+            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" } },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "bytes", "noValue": "No IB device"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "RX bytes"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "TX bytes"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "semi-dark-green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "RX bytes" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "TX bytes" }, "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }] }
         ]
       },
       "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      }
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
     },
     {
-      "id": 6,
-      "type": "timeseries",
-      "title": "RX/TX Packets",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 6, "type": "timeseries", "title": "RX/TX Packets",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_throughput_rcv_pkts{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "RX pkts",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_throughput_xmit_pkts{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "TX pkts",
-          "range": true,
-          "refId": "B"
-        }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_throughput_rcv_pkts{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "RX pkts", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_throughput_xmit_pkts{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "TX pkts", "range": true, "refId": "B" }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 1,
-            "fillOpacity": 18,
-            "gradientMode": "opacity",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "unit": "short"
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
+            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" } },
+          "unit": "short", "noValue": "No IB device"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "RX pkts"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "TX pkts"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "RX pkts" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "TX pkts" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
         ]
       },
       "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      }
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
     },
     {
-      "id": 7,
-      "type": "timeseries",
-      "title": "Error Counters",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 12
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 7, "type": "timeseries", "title": "Error Counters",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_symbol_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "symbol_errors_delta",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "link_error_recovery_delta",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_port_rcv_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "port_rcv_errors_delta",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_port_xmit_discards_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "port_xmit_discards_delta",
-          "range": true,
-          "refId": "D"
-        }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "symbol_errors", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "link_error_recovery", "range": true, "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_rcv_errors", "range": true, "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_xmit_discards", "range": true, "refId": "D" }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 1,
-            "fillOpacity": 45,
-            "gradientMode": "opacity",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "unit": "short"
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 45,
+            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "short", "noValue": "No IB device"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "symbol_errors_delta"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "link_error_recovery_delta"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "orange",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "port_rcv_errors_delta"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "port_xmit_discards_delta"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "dark-red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "symbol_errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "link_error_recovery" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "port_rcv_errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "port_xmit_discards" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }] }
         ]
       },
       "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      }
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
     },
     {
-      "id": 8,
-      "type": "timeseries",
-      "title": "Congestion (xmit_wait)",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 12
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "xmit_wait",
-          "range": true,
-          "refId": "A"
-        }
-      ],
+      "id": 8, "type": "timeseries", "title": "Congestion (xmit_wait)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+        "expr": "argus_ib_port_xmit_wait_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "xmit_wait", "range": true, "refId": "A"
+      }],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 1,
-            "fillOpacity": 30,
-            "gradientMode": "opacity",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 50
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
+          "color": { "mode": "thresholds" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 30,
+            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 50 }
+          ]},
+          "unit": "short", "noValue": "No IB device"
+        }, "overrides": []
       },
       "options": {
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      }
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
     },
     {
-      "id": 9,
-      "type": "timeseries",
-      "title": "Errors vs Throughput",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 20
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      "id": 9, "type": "timeseries", "title": "Errors vs Throughput",
+      "description": "Dual-axis: errors (left, red) vs throughput (right, green). Divergence = link degradation.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=\"$device\", port=\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=\"$device\", port=\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=\"$device\", port=\"$port\"})",
-          "legendFormat": "total_errors",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=\"$device\", port=\"$port\"} + argus_ib_throughput_xmit_bytes{instance=\"$node\", device=\"$device\", port=\"$port\"}",
-          "legendFormat": "throughput_bytes",
-          "range": true,
-          "refId": "B"
-        }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
+          "legendFormat": "total_errors", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code",
+          "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_throughput_xmit_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
+          "legendFormat": "throughput_bytes", "range": true, "refId": "B" }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "barAlignment": 0,
-            "lineWidth": 1,
-            "fillOpacity": 25,
-            "gradientMode": "opacity",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "unit": "short"
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 25,
+            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" } },
+          "unit": "short", "noValue": "No IB device"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "total_errors"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "left"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "throughput_bytes"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "bytes"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
+          { "matcher": { "id": "byName", "options": "total_errors" }, "properties": [
+            { "id": "custom.axisPlacement", "value": "left" },
+            { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+            { "id": "custom.axisSoftMin", "value": 0 }
+          ]},
+          { "matcher": { "id": "byName", "options": "throughput_bytes" }, "properties": [
+            { "id": "custom.axisPlacement", "value": "right" },
+            { "id": "unit", "value": "bytes" },
+            { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+          ]}
         ]
       },
       "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      }
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": [
-    "argus",
-    "link",
-    "drilldown"
-  ],
+  "tags": ["argus", "link", "drilldown"],
   "templating": {
     "list": [
-      {
-        "name": "node",
-        "type": "query",
-        "label": "Node",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
+      { "name": "node", "type": "query", "label": "Node",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "definition": "label_values(argus_health_state, instance)",
         "query": "label_values(argus_health_state, instance)",
-        "refresh": 1,
-        "regex": "",
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "skipUrlSync": false,
-        "sort": 1,
-        "current": {},
-        "options": []
-      },
-      {
-        "name": "device",
-        "type": "query",
-        "label": "Device",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
+        "refresh": 1, "regex": "", "hide": 0, "includeAll": false, "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] },
+      { "name": "device", "type": "query", "label": "Device",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
         "definition": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\"}, device)",
         "query": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\"}, device)",
-        "refresh": 1,
-        "regex": "",
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "skipUrlSync": false,
-        "sort": 1,
-        "current": {},
-        "options": []
-      },
-      {
-        "name": "port",
-        "type": "query",
-        "label": "Port",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
-        "definition": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=\"$device\"}, port)",
-        "query": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=\"$device\"}, port)",
-        "refresh": 1,
-        "regex": "",
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "skipUrlSync": false,
-        "sort": 1,
-        "current": {},
-        "options": []
-      }
+        "refresh": 1, "regex": "", "hide": 0, "includeAll": true, "allValue": ".*", "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] },
+      { "name": "port", "type": "query", "label": "Port",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" },
+        "definition": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\"}, port)",
+        "query": "label_values(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\"}, port)",
+        "refresh": 1, "regex": "", "hide": 0, "includeAll": true, "allValue": ".*", "multi": false, "skipUrlSync": false, "sort": 1, "current": {}, "options": [] }
     ]
   },
-  "time": {
-    "from": "now-15m",
-    "to": "now"
-  },
+  "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
   "timezone": "",
   "title": "ARGUS Link Drill-Down",
   "uid": "argus-link-drilldown",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
