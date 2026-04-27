@@ -145,6 +145,43 @@ Three dashboards are pre-loaded under the ARGUS folder:
 
 If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB hardware detected" / "No CQ data" -- this is expected. The kernel probe panels (IRQ, slab, NAPI) will be active on any Linux node.
 
+#### Adding more nodes
+
+ARGUS uses Prometheus [file-based service discovery](https://prometheus.io/docs/guides/file-sd/). Targets are stored in `deploy/observability/argus-targets.json` and Prometheus picks up changes within 30 seconds -- no restart required.
+
+**Add nodes individually:**
+
+```bash
+scripts/argus-manage-targets add 10.0.0.5
+scripts/argus-manage-targets add 10.0.0.6
+scripts/argus-manage-targets add 10.0.0.7:9200   # non-default port
+```
+
+**Scan a subnet for nodes running ARGUS:**
+
+```bash
+scripts/argus-discover --subnet 10.0.0.0/24 \
+  --output deploy/observability/argus-targets.json
+```
+
+The scanner probes each IP on port 9100 (the ARGUS `/health` endpoint) and writes discovered nodes to the targets file. Run it as a cron job for continuous discovery.
+
+**Or do it all at startup:**
+
+```bash
+deploy/observability/scripts/start-observability.sh --discover 10.0.0.0/24
+```
+
+**Manage targets:**
+
+```bash
+scripts/argus-manage-targets list       # show configured nodes
+scripts/argus-manage-targets verify     # probe each node, report status
+scripts/argus-manage-targets remove 10.0.0.5
+```
+
+Each target node needs `argusd` installed (`sudo scripts/install.sh && sudo systemctl enable --now argusd`) and port 9100 reachable from the Prometheus host.
+
 ---
 
 ### Option B: Integrate with existing Prometheus + Grafana
@@ -418,12 +455,18 @@ argus-ebpf/           eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
 argus-common/         Shared types between agent and tests
 argus-test-scenarios/ JSON scenario files for replay and regression testing
 xtask/                Build tooling (eBPF compilation)
-scripts/              Install, export-dashboards, E2E tests, fault injection, Soft-RoCE
+scripts/
+  install.sh          Build and install argusd as a systemd service
+  argus-discover      Scan a subnet for ARGUS nodes, generate targets JSON
+  argus-manage-targets  Add/remove/list/verify Prometheus scrape targets
+  export-dashboards.sh  Export dashboards for import into external Grafana
+  e2e-test.sh         End-to-end tests, fault injection, Soft-RoCE
 deploy/
   argusd.service      Systemd unit
   argusd.conf         Environment file (simple config)
   examples/           TOML configs, Prometheus scrape snippets, K8s manifests
-  observability/      Bundled Prometheus + Grafana + Alertmanager stack
+  observability/
+    argus-targets.json  Prometheus file_sd targets (auto-reloaded, no restart)
     grafana/dashboards/  Portable Grafana dashboards (importable into any Grafana)
 ```
 
