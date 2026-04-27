@@ -67,7 +67,7 @@
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
+        "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_duplicate_request_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_seq_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_retry_exceeded_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_send_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
         "legendFormat": "", "range": false, "refId": "A", "instant": true
       }],
       "fieldConfig": {
@@ -118,7 +118,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "bytes", "noValue": "No IB device"
@@ -146,7 +146,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 18,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
@@ -171,13 +171,21 @@
         { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_rcv_errors", "range": true, "refId": "C" },
         { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
-          "expr": "argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_xmit_discards", "range": true, "refId": "D" }
+          "expr": "argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "port_xmit_discards", "range": true, "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
+          "expr": "argus_ib_rxe_duplicate_request_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "rxe_duplicate_request", "range": true, "refId": "E" },
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
+          "expr": "argus_ib_rxe_seq_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "rxe_seq_error", "range": true, "refId": "F" },
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
+          "expr": "argus_ib_rxe_retry_exceeded_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "rxe_retry_exceeded", "range": true, "refId": "G" },
+        { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
+          "expr": "argus_ib_rxe_send_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"}", "legendFormat": "rxe_send_error", "range": true, "refId": "H" }
       ],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 45,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "normal", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
@@ -185,7 +193,11 @@
           { "matcher": { "id": "byName", "options": "symbol_errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
           { "matcher": { "id": "byName", "options": "link_error_recovery" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
           { "matcher": { "id": "byName", "options": "port_rcv_errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "port_xmit_discards" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }] }
+          { "matcher": { "id": "byName", "options": "port_xmit_discards" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rxe_duplicate_request" }, "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rxe_seq_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "light-purple", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rxe_retry_exceeded" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-purple", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rxe_send_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "super-light-purple", "mode": "fixed" } }] }
         ]
       },
       "options": {
@@ -204,7 +216,7 @@
         "defaults": {
           "color": { "mode": "thresholds" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 30,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never" },
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never" },
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 50 }
           ]},
@@ -222,7 +234,7 @@
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
-          "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
+          "expr": "(argus_ib_symbol_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_link_error_recovery_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_rcv_errors_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_port_xmit_discards_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_duplicate_request_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_seq_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_retry_exceeded_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_rxe_send_error_delta{instance=\"$node\", device=~\"$device\", port=~\"$port\"})",
           "legendFormat": "total_errors", "range": true, "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" }, "editorMode": "code",
           "expr": "argus_ib_throughput_rcv_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"} + argus_ib_throughput_xmit_bytes{instance=\"$node\", device=~\"$device\", port=~\"$port\"}",
@@ -232,7 +244,7 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 1, "fillOpacity": 25,
-            "gradientMode": "opacity", "spanNulls": false, "showPoints": "never",
+            "gradientMode": "opacity", "spanNulls": true, "showPoints": "never",
             "stacking": { "mode": "none", "group": "A" } },
           "unit": "short", "noValue": "No IB device"
         },
