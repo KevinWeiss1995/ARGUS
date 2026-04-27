@@ -1810,7 +1810,7 @@
     },
     {
       "after_event_index": 199,
-      "expected_state": "Degraded"
+      "expected_state": "Healthy"
     }
   ]
 }
