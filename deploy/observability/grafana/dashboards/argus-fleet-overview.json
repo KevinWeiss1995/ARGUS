@@ -174,15 +174,15 @@
         "tooltip": { "mode": "single", "sort": "none" } }
     },
     {
-      "id": 10, "type": "timeseries", "title": "IRQ Imbalance",
-      "description": "Normalized IRQ imbalance across CPUs. 0=balanced, 100=all on one CPU. Scales to any CPU count.",
+      "id": 10, "type": "timeseries", "title": "IRQ Imbalance (0% = balanced, 100% = all on one CPU)",
+      "description": "How unevenly IRQs are spread across CPUs, normalized for CPU count. 0% means every CPU handles its fair share. Higher values mean one CPU is doing disproportionate work. Yellow (30%) = moderate skew. Red (60%) = severe — check irqbalance or NIC affinity.",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
         "expr": "argus_irq_imbalance_pct{instance=~\"$node\"}",
-        "refId": "A", "legendFormat": "{{instance}}", "range": true
+        "refId": "A", "legendFormat": "{{instance}} imbalance", "range": true
       }],
       "fieldConfig": {
         "defaults": {

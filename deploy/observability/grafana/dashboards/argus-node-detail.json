@@ -100,8 +100,8 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "collapsed": false, "panels": []
     },
     {
-      "id": 11, "type": "timeseries", "title": "IRQ Imbalance",
-      "description": "Normalized IRQ imbalance. 0=balanced, 100=all on one CPU. Scales to any CPU count.",
+      "id": 11, "type": "timeseries", "title": "IRQ Imbalance (0% = balanced)",
+      "description": "How unevenly IRQs are spread across CPUs, normalized for CPU count. 0% = every CPU handles its fair share. Higher = one CPU doing disproportionate work. Yellow (30%) = moderate. Red (60%) = severe.",
       "gridPos": { "h": 8, "w": 5, "x": 0, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
