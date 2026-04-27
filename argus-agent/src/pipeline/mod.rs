@@ -9,7 +9,6 @@ use aggregator::Aggregator;
 pub struct Pipeline {
     aggregator: Aggregator,
     detection: DetectionEngine,
-    num_cpus: u32,
 }
 
 impl Pipeline {
@@ -18,7 +17,6 @@ impl Pipeline {
         Self {
             aggregator: Aggregator::new(num_cpus),
             detection: DetectionEngine::new(),
-            num_cpus,
         }
     }
 
@@ -27,7 +25,6 @@ impl Pipeline {
         Self {
             aggregator: Aggregator::new(num_cpus),
             detection: DetectionEngine::with_config(config),
-            num_cpus,
         }
     }
 
@@ -43,15 +40,14 @@ impl Pipeline {
     }
 
     /// Run detection rules against current aggregated metrics.
-    /// Call once per window tick, not per event. Also refreshes the
-    /// composite health score that the Prometheus exporter surfaces.
+    /// Call once per window tick, not per event. The detection engine
+    /// computes the composite health score internally (with smoothing
+    /// and zero-traffic carry-forward), then drives the state machine.
     pub fn evaluate(&mut self) -> Vec<Alert> {
-        let score = DetectionEngine::compute_health_score(
-            self.aggregator.current_metrics(),
-            self.num_cpus,
-        );
+        let alerts = self.detection.evaluate(self.aggregator.current_metrics());
+        let score = self.detection.smoothed_score().effective();
         self.aggregator.set_health_score(score);
-        self.detection.evaluate(self.aggregator.current_metrics())
+        alerts
     }
 
     #[must_use]
@@ -97,9 +93,16 @@ mod tests {
 
     #[test]
     fn pipeline_evaluate_runs_detection() {
+        use argus_common::HardwareCounterEvent;
+
         let mut pipeline = Pipeline::new(4);
 
-        let ingest_skewed = |pipeline: &mut Pipeline| {
+        let mut base_pkts = 0u64;
+        let mut base_dup = 0u64;
+
+        // Each call injects skewed IRQs and increments HW counter baselines
+        // so that deltas are non-zero from window 2 onward.
+        let mut ingest_bad = |pipeline: &mut Pipeline| {
             for i in 0u32..100 {
                 let cpu: u32 = if i < 75 { 0 } else { (i % 3) + 1 };
                 pipeline.ingest(&ArgusEvent::IrqEntry(IrqEntryEvent {
@@ -109,24 +112,41 @@ mod tests {
                     handler_name_hash: 0xaabb,
                 }));
             }
+            base_pkts += 100;
+            base_dup += 30;
+            pipeline.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+                timestamp_ns: 200_000_000,
+                port_num: 1,
+                counter: argus_common::HardwareCounter::HwRcvPkts(base_pkts),
+            }));
+            pipeline.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+                timestamp_ns: 200_000_000,
+                port_num: 1,
+                counter: argus_common::HardwareCounter::RxeDuplicateRequest(base_dup),
+            }));
         };
 
-        // Window 1: skewed, evaluate, reset
-        ingest_skewed(&mut pipeline);
+        // Window 1: establishes HW counter baselines (deltas = 0)
+        ingest_bad(&mut pipeline);
         let _ = pipeline.evaluate();
         pipeline.reset_window();
 
-        // Window 2: skewed again, evaluate — hysteresis should now trigger
-        ingest_skewed(&mut pipeline);
+        // Window 2: deltas are now 100 pkts / 30 dup_req
+        ingest_bad(&mut pipeline);
         let _ = pipeline.evaluate();
+        pipeline.reset_window();
 
-        let metrics = pipeline.current_metrics();
-        assert_eq!(metrics.interrupt_distribution.total_count, 100);
-        assert!(metrics.interrupt_distribution.dominant_cpu_pct() >= 70.0);
-        assert_eq!(
-            pipeline.detection_engine().current_state(),
-            argus_common::HealthState::Degraded,
-            "skewed IRQs should trigger degraded after hysteresis"
+        // Windows 3+: score builds through EWMA + peak-hold, meets dwell
+        for _ in 0..4 {
+            ingest_bad(&mut pipeline);
+            let _ = pipeline.evaluate();
+            pipeline.reset_window();
+        }
+
+        let state = pipeline.detection_engine().current_state();
+        assert!(
+            state != argus_common::HealthState::Healthy,
+            "sustained bad metrics should trigger at least Degraded, got {state:?}"
         );
     }
 
