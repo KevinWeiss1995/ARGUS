@@ -1,21 +1,29 @@
 # Add this snippet to your existing Prometheus prometheus.yml under scrape_configs.
 #
-# Adjust targets to list your ARGUS nodes. For service discovery, consider
-# file_sd_configs, consul_sd_configs, or kubernetes_sd_configs.
-#
-# If ARGUS is configured with TLS + bearer auth, include scheme/tls_config/bearer_token_file.
+# RECOMMENDED: Use file_sd_configs for automatic target management.
+# Add nodes with: scripts/argus-manage-targets add <host>
+# Scan subnets with: scripts/argus-discover --subnet 10.0.0.0/24 --output targets.json
+# Prometheus reloads file_sd targets every 30s — no restart required.
 
 scrape_configs:
-  # --- Plain HTTP (standalone / trusted network) ---
+  # --- File-based service discovery (recommended) ---
   - job_name: argus
     scrape_interval: 5s
-    static_configs:
-      - targets:
-          - "node01:9100"
-          - "node02:9100"
-          - "node03:9100"
-        labels:
-          cluster: gpu-cluster
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/argus-targets.json
+        refresh_interval: 30s
+
+  # --- Static targets (simple, but requires restart on changes) ---
+  # - job_name: argus
+  #   scrape_interval: 5s
+  #   static_configs:
+  #     - targets:
+  #         - "node01:9100"
+  #         - "node02:9100"
+  #         - "node03:9100"
+  #       labels:
+  #         cluster: gpu-cluster
 
   # --- HTTPS with bearer auth ---
   # - job_name: argus-secure
@@ -23,19 +31,8 @@ scrape_configs:
   #   scheme: https
   #   tls_config:
   #     ca_file: /etc/prometheus/argus-ca.crt
-  #     # Disable hostname verification if using IP SANs:
   #     # insecure_skip_verify: true
   #   bearer_token_file: /etc/prometheus/argus-token
-  #   static_configs:
-  #     - targets:
-  #         - "node01:9100"
-  #         - "node02:9100"
-  #       labels:
-  #         cluster: gpu-cluster
-
-  # --- File-based service discovery ---
-  # - job_name: argus-sd
-  #   scrape_interval: 5s
   #   file_sd_configs:
   #     - files:
   #         - /etc/prometheus/argus-targets.json
