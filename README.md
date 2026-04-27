@@ -56,13 +56,13 @@ You don't need root, eBPF, or InfiniBand hardware to try it out. Mock mode gener
 
 ARGUS supports two deployment modes. The agent binary is identical in both -- what changes is who runs Prometheus and Grafana.
 
-| | Standalone | Production Integration |
+| | Standalone | External Integration |
 |---|---|---|
-| Who runs Prometheus/Grafana | ARGUS (bundled Docker stack) | Your existing infrastructure |
+| Who runs Prometheus/Grafana | ARGUS (bundled Docker stack) | Your infrastructure |
 | TLS on metrics endpoint | Optional | Recommended |
 | Bearer token auth | Optional | Recommended |
 | Best for | Single-node, demos, dev | Multi-node clusters, HPC |
-| Config format | Env file or TOML | TOML (recommended) |
+| Config format | Env file or TOML | TOML |
 
 ### Prerequisites
 
@@ -147,9 +147,9 @@ If the node has no InfiniBand hardware, the IB and CQ sections will show "No IB 
 
 ---
 
-### Option B: Production integration (plug into your existing Prometheus + Grafana)
+### Option B: Integrate with existing Prometheus + Grafana
 
-Use this when you already have a Prometheus/Grafana stack. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
+Use this when you already have an observability stack. The agent exposes a standard `/metrics` endpoint that any Prometheus can scrape. No Docker or ARGUS-managed stack required.
 
 **Step 1: Install and configure**
 
@@ -158,14 +158,14 @@ git clone https://github.com/KevinWeiss1995/ARGUS.git
 cd ARGUS
 sudo ./scripts/install.sh
 
-# Activate the production TOML config
-sudo cp deploy/examples/production.toml /etc/argus/argusd.toml
+# Activate the integration TOML config
+sudo cp deploy/examples/integration.toml /etc/argus/argusd.toml
 sudo sed -i 's|# ARGUS_CONFIG=.*|ARGUS_CONFIG=/etc/argus/argusd.toml|' /etc/argus/argusd.conf
 ```
 
 **Step 2: Set up TLS and auth**
 
-The production template enables TLS + bearer token auth by default. Generate the credentials:
+The integration template enables TLS + bearer token auth by default. Generate the credentials:
 
 ```bash
 sudo mkdir -p /etc/argus/tls
@@ -282,7 +282,7 @@ dry_run = false
 
 Example config files are in `deploy/examples/`:
 - `standalone.toml` -- no TLS, no auth, local use
-- `production.toml` -- TLS + auth + detection tuning
+- `integration.toml` -- TLS + auth + detection tuning
 
 ### Kubernetes deployment
 
@@ -310,7 +310,7 @@ After eBPF programs are loaded, ARGUS drops all capabilities and sets `PR_SET_NO
 
 ### Artifact integrity
 
-If you're deploying to production, you can pin the expected eBPF binary hash:
+For hardened deployments, you can pin the expected eBPF binary hash:
 
 ```bash
 sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf
@@ -348,7 +348,7 @@ The agent exposes two HTTP(S) endpoints when `--metrics-addr` is set (always set
 curl http://localhost:9100/metrics
 curl http://localhost:9100/health
 
-# With TLS + bearer auth (production)
+# With TLS + bearer auth
 TOKEN=$(sudo cat /etc/argus/token)
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/metrics
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:9100/health

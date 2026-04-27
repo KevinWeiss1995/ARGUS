@@ -57,7 +57,7 @@ if [[ -n "$api_key" ]]; then
     auth_header="Authorization: Bearer $api_key"
 else
     auth_header="Authorization: Basic $(echo -n admin:admin | base64)"
-    echo "Warning: using default admin:admin credentials (pass --api-key for production)" >&2
+    echo "Warning: using default admin:admin credentials (pass --api-key for non-dev environments)" >&2
 fi
 
 for f in "$SRC_DIR"/*.json; do
