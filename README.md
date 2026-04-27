@@ -52,9 +52,50 @@ cargo run --release -- --mode mock --profile spike --tui
 
 You don't need root, eBPF, or InfiniBand hardware to try it out. Mock mode generates synthetic events that exercise the full pipeline.
 
-## Running with live eBPF
+## Production deployment (systemd)
 
-This requires Linux with eBPF support and root (or `CAP_BPF` + `CAP_PERFMON`).
+The recommended way to run ARGUS in production is as a systemd service. The install script handles everything — building, installing, and configuring the service:
+
+```bash
+git clone https://github.com/KevinWeiss1995/ARGUS.git
+cd ARGUS
+sudo ./scripts/install.sh
+sudo systemctl enable argusd
+sudo systemctl start argusd
+```
+
+The install script will:
+1. Detect your Rust toolchain (handles `sudo` PATH correctly via `SUDO_USER`)
+2. Install missing prerequisites (nightly, rust-src, bpf-linker) if needed
+3. Build the agent and eBPF probes in release mode
+4. Install binaries to `/usr/local/bin/argusd` and `/usr/local/lib/argus/argus-ebpf`
+5. Install the default config to `/etc/argus/argusd.conf` (preserves existing config on upgrade)
+6. Install the systemd unit and run `daemon-reload`
+
+Verify it's working:
+
+```bash
+journalctl -u argusd -f       # logs
+curl localhost:9100/metrics    # Prometheus metrics
+curl localhost:9100/health     # health check
+```
+
+Configuration lives in `/etc/argus/argusd.conf`. Edit and `systemctl restart argusd` to apply changes. If you already have pre-built binaries, use `sudo ./scripts/install.sh --no-build` to skip compilation.
+
+### Observability stack (Prometheus + Grafana)
+
+A ready-made docker-compose stack is included for monitoring:
+
+```bash
+# Start Prometheus (port 9091), Grafana (port 3000), and Alertmanager (port 9093)
+deploy/observability/scripts/start-observability.sh
+```
+
+Grafana is pre-provisioned with an ARGUS dashboard. Prometheus scrapes `argusd` on port 9100 by default.
+
+## Running with live eBPF (manual)
+
+If you prefer to run ARGUS directly without systemd:
 
 ```bash
 # One-time setup: install nightly toolchain and bpf-linker
@@ -101,14 +142,14 @@ Scenarios include expected state transitions so they double as regression tests.
 ## Prometheus and health endpoints
 
 ```bash
-# Enable the metrics server
-./target/release/argus-agent --mode mock --metrics-addr 127.0.0.1:9090
+# Enable the metrics server (default port in systemd: 9100)
+./target/release/argus-agent --mode mock --metrics-addr 127.0.0.1:9100
 
 # Scrape metrics
-curl http://127.0.0.1:9090/metrics
+curl http://127.0.0.1:9100/metrics
 
 # Health check (for Kubernetes probes, SLURM health checks, etc.)
-curl http://127.0.0.1:9090/health
+curl http://127.0.0.1:9100/health
 ```
 
 The health endpoint returns JSON:
@@ -117,7 +158,7 @@ The health endpoint returns JSON:
 ```
 
 ## Don't have an HPC cluster but want to test ARGUS?
-No problem. Detailed instructions for setting up Lima VMs with soft-roce and running ARGUS can be found here: 
+No problem. Detailed instructions for setting up Lima VMs with soft-roce and running ARGUS can be found here: (WIP)
 
 ## Architecture
 
@@ -170,7 +211,8 @@ argus-ebpf/           eBPF kernel probes (Rust, aya-ebpf, compiled with nightly)
 argus-common/         Shared types between agent and tests
 argus-test-scenarios/ JSON scenario files for replay and regression testing
 xtask/                Build tooling (eBPF compilation)
-scripts/              E2E tests, fault injection, Soft-RoCE setup
+scripts/              Install script, E2E tests, fault injection, Soft-RoCE setup
+deploy/               Systemd unit, config, observability stack (Prometheus/Grafana)
 ```
 
 ## Testing
@@ -238,18 +280,19 @@ ARGUS is designed to be invisible to workloads. In live mode, the agent:
 
 ### CPU scheduling controls
 
-For production deployments, you can further limit the agent's CPU impact:
+The systemd unit (`deploy/argusd.service`) ships with resource limits pre-configured:
+
+```ini
+CPUQuota=5%
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=256M
+```
+
+For manual runs, use `nice`:
 
 ```bash
-# Run with reduced scheduling priority
-nice +10 sudo ./target/release/argus-agent --mode live ...
-
-# Or use systemd resource controls
-# In your argus.service unit:
-#   [Service]
-#   CPUQuota=5%
-#   Nice=10
-#   IOSchedulingClass=idle
+nice +19 sudo ./target/release/argus-agent --mode live ...
 ```
 
 ### Tuning `--window-secs`

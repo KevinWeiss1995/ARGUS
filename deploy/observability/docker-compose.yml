@@ -29,7 +29,3 @@ services:
     depends_on:
       - prometheus
     restart: unless-stopped
-a/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-    restart: unless-stopped
