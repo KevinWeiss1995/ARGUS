@@ -1,0 +1,26 @@
+# ARGUS standalone configuration
+# Use with the bundled Prometheus + Grafana stack (deploy/observability/)
+#
+# Install: sudo ./scripts/install.sh
+# Copy:    sudo cp deploy/examples/standalone.toml /etc/argus/argusd.toml
+
+[agent]
+mode = "live"
+ebpf_path = "/usr/local/lib/argus/argus-ebpf"
+log_level = "info"
+window_secs = 3
+
+[metrics]
+addr = "0.0.0.0:9100"
+
+# No TLS or auth — the bundled stack runs on the same host.
+# [tls]
+# [auth]
+
+[detection]
+irq_skew_threshold_pct = 70.0
+rdma_spike_factor = 5.0
+
+[actions]
+dry_run = false
+# webhook_url = "http://localhost:9093/api/v1/alerts"
