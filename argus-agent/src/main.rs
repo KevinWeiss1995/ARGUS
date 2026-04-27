@@ -488,10 +488,15 @@ async fn run_event_mode(
 async fn run_attach_tui(addr: &str) -> Result<()> {
     use argus_agent::telemetry::prometheus::StatusSnapshot;
 
-    let addr = if addr.contains("://") {
+    let addr_with_port = if addr.contains(':') {
         addr.to_string()
     } else {
-        format!("http://{addr}")
+        format!("{addr}:9100")
+    };
+    let addr = if addr_with_port.contains("://") {
+        addr_with_port
+    } else {
+        format!("http://{addr_with_port}")
     };
     let status_url = format!("{addr}/status");
     let client = reqwest::Client::builder()
