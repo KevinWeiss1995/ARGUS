@@ -19,6 +19,7 @@ PORT=9100
 OUTPUT=""
 TIMEOUT=2
 DRY_RUN=false
+START_STACK=false
 LABELS=()
 SUBNET=""
 
@@ -33,6 +34,7 @@ Options:
   --label KEY=VALUE   Add label to all discovered targets (repeatable)
   --timeout SECS      Connection timeout per host (default: 2)
   --dry-run           Print discovered hosts but don't write file
+  --start             Discover nodes then start the Grafana + Prometheus stack
   -h, --help          Show this help
 EOF
     exit 0
@@ -46,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --label)    LABELS+=("$2"); shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --dry-run)  DRY_RUN=true; shift ;;
+        --start)    START_STACK=true; shift ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -149,7 +152,16 @@ ENDJSON
 
 JSON=$(build_json)
 
-if [[ -n "$OUTPUT" ]]; then
+if $START_STACK; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    STACK_DIR="$(cd "$SCRIPT_DIR/../deploy/observability" && pwd)"
+    TARGETS_FILE="${OUTPUT:-$STACK_DIR/argus-targets.json}"
+    mkdir -p "$(dirname "$TARGETS_FILE")"
+    echo "$JSON" > "$TARGETS_FILE"
+    echo "Wrote ${TARGETS_FILE}" >&2
+    echo "Starting observability stack..." >&2
+    exec "$STACK_DIR/scripts/start-observability.sh"
+elif [[ -n "$OUTPUT" ]]; then
     mkdir -p "$(dirname "$OUTPUT")"
     echo "$JSON" > "$OUTPUT"
     echo "Wrote ${OUTPUT}" >&2

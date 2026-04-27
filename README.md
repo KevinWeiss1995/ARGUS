@@ -131,10 +131,10 @@ curl localhost:9100/health
 The full terminal dashboard can be attached to any running `argusd` process without interrupting it. It connects read-only to the agent's `/status` endpoint:
 
 ```bash
-argus-tui                       # local node (localhost:9100)
-argus-tui 192.168.105.17:9100   # remote node
-argusd --attach                 # equivalent to argus-tui
-argusd --attach 10.0.0.5:9100   # equivalent to argus-tui 10.0.0.5:9100
+argus-tui                            # local node (localhost:9100)
+argus-tui --attach 192.168.105.17    # remote node (port 9100 implied)
+argusd --attach                      # equivalent
+argusd --attach 10.0.0.5:9200        # non-default port
 ```
 
 Press `q` or `Esc` to detach. The agent keeps running.
@@ -176,16 +176,23 @@ scripts/argus-manage-targets add 10.0.0.6
 scripts/argus-manage-targets add 10.0.0.7:9200   # non-default port
 ```
 
-**Scan a subnet for nodes running ARGUS:**
+**Scan a subnet and start the stack in one shot:**
 
 ```bash
-scripts/argus-discover --subnet 10.0.0.0/24 \
-  --output deploy/observability/argus-targets.json
+argus-discover --subnet 10.0.0.0/24 --start
 ```
 
-The scanner probes each IP on port 9100 (the ARGUS `/health` endpoint) and writes discovered nodes to the targets file. Run it as a cron job for continuous discovery.
+This discovers all ARGUS nodes, writes the targets file, and launches Grafana + Prometheus + Alertmanager.
 
-**Or do it all at startup:**
+**Scan only (for integration with an existing Prometheus):**
+
+```bash
+argus-discover --subnet 10.0.0.0/24 --output /etc/prometheus/argus-targets.json
+```
+
+The scanner probes each IP on port 9100 (the ARGUS `/health` endpoint) and writes discovered nodes in Prometheus `file_sd_configs` format. Run it as a cron job for continuous discovery.
+
+**Or start the stack with manual discovery/additions:**
 
 ```bash
 deploy/observability/scripts/start-observability.sh --discover 10.0.0.0/24
