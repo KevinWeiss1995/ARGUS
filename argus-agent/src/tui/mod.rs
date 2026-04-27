@@ -160,6 +160,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let (style, label) = match state.health {
         HealthState::Healthy => (Style::default().fg(Color::Green).bold(), "HEALTHY"),
         HealthState::Degraded => (Style::default().fg(Color::Yellow).bold(), "DEGRADED"),
+        HealthState::Recovering => (Style::default().fg(Color::Yellow).bold(), "RECOVERING"),
         HealthState::Critical => (
             Style::default()
                 .fg(Color::Red)
@@ -419,7 +420,7 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
             let ts_secs = alert.timestamp_ns as f64 / 1_000_000_000.0;
             let severity_style = match alert.severity {
                 HealthState::Healthy => Style::default().fg(Color::Green),
-                HealthState::Degraded => Style::default().fg(Color::Yellow),
+                HealthState::Degraded | HealthState::Recovering => Style::default().fg(Color::Yellow),
                 HealthState::Critical => Style::default().fg(Color::Red).bold(),
             };
 
