@@ -100,27 +100,70 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "collapsed": false, "panels": []
     },
     {
-      "id": 11, "type": "timeseries", "title": "IRQ per CPU",
-      "description": "Interrupt distribution across CPUs. Large imbalance = affinity skew.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+      "id": 11, "type": "timeseries", "title": "IRQ Skew %",
+      "description": "Share of all IRQs handled by the busiest CPU. >70% = affinity problem. Works at any CPU count.",
+      "gridPos": { "h": 8, "w": 5, "x": 0, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "sum by (cpu) (increase(argus_irq_total{instance=\"$node\"}[$__rate_interval]))",
-        "legendFormat": "cpu {{cpu}}", "range": true, "refId": "A"
+        "expr": "argus_irq_skew_pct{instance=\"$node\"}",
+        "legendFormat": "skew %", "range": true, "refId": "A"
       }],
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "bars", "lineInterpolation": "linear", "fillOpacity": 80,
-            "stacking": { "mode": "normal", "group": "A" }, "showPoints": "never" },
-          "unit": "short"
+          "color": { "mode": "thresholds" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20,
+            "showPoints": "never", "thresholdsStyle": { "mode": "area" } },
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 70 }
+          ]}
         }, "overrides": []
       },
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" } }
+        "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 21, "type": "stat", "title": "Dominant CPU",
+      "description": "Which CPU is handling the most IRQs right now.",
+      "gridPos": { "h": 4, "w": 3, "x": 5, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+        "editorMode": "code",
+        "expr": "argus_irq_dominant_cpu{instance=\"$node\"}",
+        "legendFormat": "", "range": false, "refId": "A", "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "text", "mode": "fixed" },
+          "unit": "none", "noValue": "N/A"
+        }, "overrides": []
+      },
+      "options": { "colorMode": "none", "graphMode": "none", "justifyMode": "center", "orientation": "auto",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "textMode": "value" }
+    },
+    {
+      "id": 22, "type": "stat", "title": "IRQ Rate (all CPUs)",
+      "description": "Total IRQs across all CPUs in the current window.",
+      "gridPos": { "h": 4, "w": 3, "x": 5, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+        "editorMode": "code",
+        "expr": "argus_irq_total_rate{instance=\"$node\"}",
+        "legendFormat": "", "range": false, "refId": "A", "instant": true
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "unit": "short", "noValue": "0"
+        }, "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "auto",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "textMode": "auto" }
     },
     {
       "id": 12, "type": "timeseries", "title": "Slab Alloc Rate",
