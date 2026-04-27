@@ -440,12 +440,14 @@ impl PrometheusExporter {
     }
 
     /// Update per-device/port IB counter gauges.
-    /// Call once per device per window with the device name and port.
+    /// Call once per device per window with the device name, port, and device type.
+    /// Soft-RoCE (rxe) metrics are only emitted when `device_type` is `SoftRoCE`.
     pub fn update_ib_counters(
         &self,
         device: &str,
         port: &str,
         deltas: &argus_common::IbCounterDeltas,
+        device_type: crate::sources::hwcounters::DeviceType,
     ) {
         let labels = vec![
             ("device".to_string(), device.to_string()),
@@ -492,22 +494,25 @@ impl PrometheusExporter {
             .ib_throughput_xmit_pkts
             .get_or_create(&labels)
             .set(deltas.hw_xmit_pkts_delta as i64);
-        self.metrics
-            .ib_rxe_duplicate_request
-            .get_or_create(&labels)
-            .set(deltas.rxe_duplicate_request_delta as i64);
-        self.metrics
-            .ib_rxe_seq_error
-            .get_or_create(&labels)
-            .set(deltas.rxe_seq_error_delta as i64);
-        self.metrics
-            .ib_rxe_retry_exceeded
-            .get_or_create(&labels)
-            .set(deltas.rxe_retry_exceeded_delta as i64);
-        self.metrics
-            .ib_rxe_send_error
-            .get_or_create(&labels)
-            .set(deltas.rxe_send_error_delta as i64);
+
+        if device_type == crate::sources::hwcounters::DeviceType::SoftRoCE {
+            self.metrics
+                .ib_rxe_duplicate_request
+                .get_or_create(&labels)
+                .set(deltas.rxe_duplicate_request_delta as i64);
+            self.metrics
+                .ib_rxe_seq_error
+                .get_or_create(&labels)
+                .set(deltas.rxe_seq_error_delta as i64);
+            self.metrics
+                .ib_rxe_retry_exceeded
+                .get_or_create(&labels)
+                .set(deltas.rxe_retry_exceeded_delta as i64);
+            self.metrics
+                .ib_rxe_send_error
+                .get_or_create(&labels)
+                .set(deltas.rxe_send_error_delta as i64);
+        }
     }
 
     /// Record an alert in Prometheus counters.
@@ -846,10 +851,19 @@ mod tests {
             ..Default::default()
         };
 
-        exporter.update_ib_counters("mlx5_0", "1", &deltas);
+        exporter.update_ib_counters(
+            "mlx5_0",
+            "1",
+            &deltas,
+            crate::sources::hwcounters::DeviceType::HardwareIB,
+        );
         let output = exporter.encode().expect("encoding should not fail");
         assert!(output.contains("argus_ib_symbol_errors_delta"));
         assert!(output.contains("mlx5_0"));
+        assert!(
+            !output.contains("argus_ib_rxe_duplicate_request_delta{"),
+            "rxe time series should not appear for HardwareIB devices"
+        );
     }
 
     #[test]

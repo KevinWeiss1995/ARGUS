@@ -269,11 +269,12 @@ fn run_live_mode(
 
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
-                for (device, port, _dev_type) in hw_reader.discovered_ports() {
+                for (device, port, dev_type) in hw_reader.discovered_ports() {
                     exp.update_ib_counters(
                         &device,
                         &port.to_string(),
                         &pipeline.current_metrics().ib_counter_deltas,
+                        dev_type,
                     );
                 }
             }
