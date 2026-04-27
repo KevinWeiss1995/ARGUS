@@ -37,13 +37,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+INPUTS_BLOCK='{"name":"DS_PROMETHEUS","label":"Prometheus","description":"Prometheus datasource","type":"datasource","pluginId":"prometheus","pluginName":"Prometheus"}'
+
 if [[ -z "$import_url" ]]; then
     mkdir -p "$DIST_DIR"
     for f in "$SRC_DIR"/*.json; do
-        sed 's/"uid": "DS_PROMETHEUS"/"uid": "${DS_PROMETHEUS}"/g' "$f" > "$DIST_DIR/$(basename "$f")"
+        sed 's/"uid": "DS_PROMETHEUS"/"uid": "${DS_PROMETHEUS}"/g' "$f" \
+          | jq --argjson inputs "[$INPUTS_BLOCK]" '. + {"__inputs": $inputs}' \
+          > "$DIST_DIR/$(basename "$f")"
     done
     echo "Exported dashboards to $DIST_DIR/"
-    echo "(datasource UIDs converted to \${DS_PROMETHEUS} for import compatibility)"
+    echo "(converted for Grafana import: \${DS_PROMETHEUS} variable + __inputs block added)"
     echo ""
     echo "To import into Grafana:"
     echo "  1. Open Grafana > Dashboards > Import"
