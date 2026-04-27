@@ -21,9 +21,17 @@ fn run_scenario(scenario_path: &str) {
 
         for expected in &scenario.expected_states {
             if expected.after_event_index == i {
-                // Evaluate multiple times to satisfy hysteresis (2 windows).
-                // Since all events are in the same window, we evaluate twice.
-                let _ = pipeline.evaluate();
+                // Evaluate multiple windows to let the score build through
+                // EWMA + peak-hold and satisfy dwell timers. Each iteration
+                // re-ingests the same event set into a fresh window, then
+                // evaluates. This simulates sustained signal.
+                for _ in 0..6 {
+                    let _ = pipeline.evaluate();
+                    pipeline.reset_window();
+                    for ev in &scenario.events[..=i] {
+                        pipeline.ingest(ev);
+                    }
+                }
                 let _ = pipeline.evaluate();
                 let actual_state = pipeline.detection_engine().current_state();
                 assert_eq!(
