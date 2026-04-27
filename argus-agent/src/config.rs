@@ -247,9 +247,6 @@ fn detect_cpus() -> u32 {
     #[cfg(target_os = "linux")]
     {
         if let Ok(content) = std::fs::read_to_string("/sys/devices/system/cpu/online") {
-            // #region agent log
-            eprintln!("[debug-58f965] detect_cpus sysfs raw=\"{}\"", content.trim());
-            // #endregion
             if let Some(count) = parse_cpu_range(content.trim()) {
                 return count;
             }

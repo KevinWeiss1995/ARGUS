@@ -375,9 +375,6 @@ impl PrometheusExporter {
             0.0
         };
         self.metrics.irq_skew_pct.set(imbalance as i64);
-        // #region agent log
-        eprintln!("[debug-58f965] irq imbalance_pct={:.1} n_cpus={} total={} per_cpu_len={}", imbalance, n, dist.total_count, dist.per_cpu_counts.len());
-        // #endregion
         let dominant_cpu = dist
             .per_cpu_counts
             .iter()
