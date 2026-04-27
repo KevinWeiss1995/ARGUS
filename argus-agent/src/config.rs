@@ -241,9 +241,38 @@ pub struct DetectionConfig {
 }
 
 fn detect_cpus() -> u32 {
+    // Don't use available_parallelism() — it's cgroup-aware and returns 1
+    // when systemd CPUQuota is low (e.g. 5%). We need the actual online CPU
+    // count to correctly size per-CPU BPF map reads.
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = std::fs::read_to_string("/sys/devices/system/cpu/online") {
+            if let Some(count) = parse_cpu_range(content.trim()) {
+                return count;
+            }
+        }
+    }
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4)
+}
+
+/// Parse kernel CPU range format like "0-3" or "0-1,4-7" into a count.
+#[cfg(any(target_os = "linux", test))]
+fn parse_cpu_range(s: &str) -> Option<u32> {
+    let mut count = 0u32;
+    for part in s.split(',') {
+        let part = part.trim();
+        if let Some((lo, hi)) = part.split_once('-') {
+            let lo: u32 = lo.parse().ok()?;
+            let hi: u32 = hi.parse().ok()?;
+            count += hi - lo + 1;
+        } else {
+            let _: u32 = part.parse().ok()?;
+            count += 1;
+        }
+    }
+    if count > 0 { Some(count) } else { None }
 }
 
 impl Default for AgentConfig {
@@ -420,5 +449,34 @@ impl EffectiveConfig {
     #[must_use]
     pub fn resolve_num_cpus(&self) -> u32 {
         self.num_cpus
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cpu_range_simple() {
+        assert_eq!(parse_cpu_range("0-1"), Some(2));
+        assert_eq!(parse_cpu_range("0-3"), Some(4));
+        assert_eq!(parse_cpu_range("0-7"), Some(8));
+    }
+
+    #[test]
+    fn parse_cpu_range_multi_segment() {
+        assert_eq!(parse_cpu_range("0-3,8-11"), Some(8));
+        assert_eq!(parse_cpu_range("0-1,4-7"), Some(6));
+    }
+
+    #[test]
+    fn parse_cpu_range_single_cpu() {
+        assert_eq!(parse_cpu_range("0"), Some(1));
+    }
+
+    #[test]
+    fn parse_cpu_range_invalid() {
+        assert_eq!(parse_cpu_range(""), None);
+        assert_eq!(parse_cpu_range("abc"), None);
     }
 }
