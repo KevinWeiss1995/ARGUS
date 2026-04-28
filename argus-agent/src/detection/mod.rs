@@ -10,33 +10,6 @@ use rules::{
 
 use crate::config::DetectionConfig;
 
-// #region agent log
-fn debug_log(msg: &str, data: &str, hypothesis: &str) {
-    use std::io::Write;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let line = format!(
-        r#"{{"sessionId":"58f965","hypothesisId":"{}","location":"detection/mod.rs","message":"{}","data":{},"timestamp":{}}}"#,
-        hypothesis, msg, data, ts
-    );
-    for path in &[
-        "/tmp/argus-debug-58f965.log",
-        "/Users/kweiss/projects/networking/ARGUS/.cursor/debug-58f965.log",
-    ] {
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{}", line);
-        }
-    }
-    eprintln!("[ARGUS-DBG] {}", line);
-}
-// #endregion
-
 // ---------------------------------------------------------------------------
 // SmoothedHealthScore — dual-track EWMA + peak-hold
 // ---------------------------------------------------------------------------
@@ -348,16 +321,6 @@ impl HealthStateMachine {
         self.windows_in_state = 0;
     }
 
-    // #region agent log
-    #[must_use]
-    pub fn stability_evidence(&self) -> u32 {
-        self.stability_evidence
-    }
-    #[must_use]
-    pub fn escalation_evidence(&self) -> u32 {
-        self.escalation_evidence
-    }
-    // #endregion
 }
 
 // ---------------------------------------------------------------------------
@@ -425,28 +388,18 @@ impl DetectionEngine {
     pub fn evaluate(&mut self, metrics: &AggregatedMetrics) -> Vec<Alert> {
         let mut new_alerts = Vec::new();
         let mut worst_severity = HealthState::Healthy;
-        // #region agent log
-        let mut fired_rules: Vec<String> = Vec::new();
-        // #endregion
 
         for rule in &mut self.rules {
             if let Some(alert) = rule.evaluate_mut(metrics) {
                 if severity_rank(alert.severity) > severity_rank(worst_severity) {
                     worst_severity = alert.severity;
                 }
-                // #region agent log
-                fired_rules.push(format!("{}:{}", alert.kind_name(), alert.severity));
-                // #endregion
                 new_alerts.push(alert);
             }
         }
 
         // Compute raw health score with zero-traffic carry-forward
         let mut raw = self.compute_effective_raw(metrics);
-
-        // #region agent log
-        let raw_before_floor = raw;
-        // #endregion
 
         // Rule severity boost: if detection rules fire at a severity level
         // that the composite score alone can't reach (e.g., RdmaLinkDegradation
@@ -469,43 +422,8 @@ impl DetectionEngine {
         // Dual-track smoothing
         let effective = self.score.update(raw);
 
-        // #region agent log
-        let d = &metrics.ib_counter_deltas;
-        let has_ib_signal = d.has_traffic()
-            || d.total_soft_error_delta() > 0
-            || d.total_hard_error_delta() > 0
-            || d.link_error_recovery_delta > 0
-            || d.link_downed_delta > 0;
-        let state_before = self.state_machine.current();
-        // #endregion
-
         // Drive state machine
-        let transition = self.state_machine.evaluate(effective);
-
-        // #region agent log
-        let state_after = self.state_machine.current();
-        debug_log("evaluate_window", &format!(
-            r#"{{"has_ib_signal":{},"has_traffic":{},"soft_errs":{},"hard_errs":{},"throughput_pkts":{},"raw_before_floor":{:.4},"severity_floor":{:.4},"worst_severity":"{}","raw_after_floor":{:.4},"ewma":{:.4},"peak_hold":{:.4},"effective":{:.4},"state_before":"{}","state_after":"{}","transition":{},"stability_ev":{},"escalation_ev":{},"fired_rules":"{}"}}"#,
-            has_ib_signal,
-            d.has_traffic(),
-            d.total_soft_error_delta(),
-            d.total_hard_error_delta(),
-            d.throughput_pkts(),
-            raw_before_floor,
-            severity_floor,
-            worst_severity,
-            raw,
-            self.score.ewma(),
-            self.score.peak_hold(),
-            effective,
-            state_before,
-            state_after,
-            transition.is_some(),
-            self.state_machine.stability_evidence(),
-            self.state_machine.escalation_evidence(),
-            fired_rules.join(";"),
-        ), "ALL");
-        // #endregion
+        self.state_machine.evaluate(effective);
 
         new_alerts
     }
