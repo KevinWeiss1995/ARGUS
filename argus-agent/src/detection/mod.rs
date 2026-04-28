@@ -427,17 +427,32 @@ impl DetectionEngine {
         new_alerts
     }
 
-    /// Raw score computation with zero-traffic carry-forward.
+    /// Raw score computation with IB-aware carry-forward.
+    ///
+    /// When there's no IB signal (no traffic, no errors) but the system is
+    /// otherwise active (IRQs, slab allocs), carry forward the previous
+    /// score at 0.9 decay. This prevents false recovery during RDMA traffic
+    /// gaps caused by retransmission backoff or QP error recovery — the
+    /// underlying impairment (e.g., tc netem loss) hasn't gone away, the
+    /// measurement just temporarily disappeared.
+    ///
+    /// We take max(carry, fresh) so that independent signals like IRQ skew
+    /// or slab pressure can still push the score higher on their own.
     fn compute_effective_raw(&self, metrics: &AggregatedMetrics) -> f64 {
-        let has_any_activity = metrics.ib_counter_deltas.has_traffic()
-            || metrics.network_metrics.napi_polls > 0
-            || metrics.slab_metrics.alloc_count > 0
-            || metrics.interrupt_distribution.total_count > 0;
+        let d = &metrics.ib_counter_deltas;
+        let has_ib_signal = d.has_traffic()
+            || d.total_soft_error_delta() > 0
+            || d.total_hard_error_delta() > 0
+            || d.link_error_recovery_delta > 0
+            || d.link_downed_delta > 0;
 
-        if !has_any_activity {
-            return self.prev_raw_score * 0.9;
+        let fresh = Self::compute_health_score(metrics, self.num_cpus);
+
+        if !has_ib_signal {
+            let carry = self.prev_raw_score * 0.9;
+            return carry.max(fresh);
         }
-        Self::compute_health_score(metrics, self.num_cpus)
+        fresh
     }
 
     #[must_use]
@@ -772,11 +787,10 @@ mod tests {
     }
 
     #[test]
-    fn zero_traffic_carry_forward_prevents_false_recovery() {
+    fn ib_traffic_gap_carries_forward_score() {
         let mut engine = DetectionEngine::new();
 
-        // Simulate a bad window with soft errors
-        let bad_metrics = AggregatedMetrics {
+        let bad = AggregatedMetrics {
             ib_counter_deltas: IbCounterDeltas {
                 rxe_duplicate_request_delta: 20,
                 hw_rcv_pkts_delta: 80,
@@ -792,20 +806,107 @@ mod tests {
             ..Default::default()
         };
 
-        // Drive with bad metrics
         for _ in 0..4 {
-            engine.evaluate(&bad_metrics);
+            engine.evaluate(&bad);
+        }
+        let score_before = engine.score.effective();
+
+        // Simulate traffic gap: eBPF still captures IRQs (as always in live
+        // mode), but RDMA traffic has paused (retransmission backoff).
+        // The old code would reset score to ~0 here because has_any_activity
+        // was true (IRQs) but IB deltas were zero.
+        let gap = AggregatedMetrics {
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![25, 25, 25, 25],
+                total_count: 100,
+            },
+            ..Default::default()
+        };
+        engine.evaluate(&gap);
+
+        assert!(
+            engine.score.effective() > score_before * 0.5,
+            "IB traffic gap should carry forward score, got {} (was {})",
+            engine.score.effective(),
+            score_before,
+        );
+    }
+
+    #[test]
+    fn carry_forward_decays_without_full_engine() {
+        // Test the raw carry-forward math in isolation: when there's no
+        // IB signal, prev_raw decays at 0.9/window.
+        let mut score = SmoothedHealthScore::new();
+        let mut prev_raw = 0.55_f64;
+
+        // Simulate 30 windows of carry-forward decay
+        for _ in 0..30 {
+            prev_raw *= 0.9;
+            score.update(prev_raw);
         }
 
-        // Now send an empty (zero-traffic) window
-        let empty = AggregatedMetrics::default();
-        engine.evaluate(&empty);
-
-        // The score should NOT have dropped to zero
+        // 0.55 * 0.9^30 ≈ 0.023
         assert!(
-            engine.score.effective() > 0.05,
-            "zero-traffic window should carry forward, got {}",
-            engine.score.effective()
+            score.effective() < 0.05,
+            "carry-forward should decay to near-zero, got {}",
+            score.effective(),
+        );
+    }
+
+    #[test]
+    fn clean_traffic_restores_healthy() {
+        let mut engine = DetectionEngine::new();
+
+        let bad = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                rxe_duplicate_request_delta: 20,
+                hw_rcv_pkts_delta: 80,
+                hw_xmit_pkts_delta: 20,
+                ..Default::default()
+            },
+            network_metrics: NetworkMetrics {
+                napi_polls: 10,
+                napi_total_work: 5,
+                napi_total_budget: 64,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        for _ in 0..6 {
+            engine.evaluate(&bad);
+        }
+        assert_eq!(engine.current_state(), HealthState::Critical);
+
+        // Impairment removed: traffic continues but errors stop.
+        // This should allow full recovery.
+        let clean = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                hw_rcv_pkts_delta: 100,
+                hw_xmit_pkts_delta: 100,
+                ..Default::default()
+            },
+            network_metrics: NetworkMetrics {
+                napi_polls: 10,
+                napi_total_work: 5,
+                napi_total_budget: 64,
+                ..Default::default()
+            },
+            interrupt_distribution: InterruptDistribution {
+                per_cpu_counts: vec![25, 25, 25, 25],
+                total_count: 100,
+            },
+            ..Default::default()
+        };
+
+        for _ in 0..40 {
+            engine.evaluate(&clean);
+        }
+
+        assert_eq!(
+            engine.current_state(),
+            HealthState::Healthy,
+            "clean traffic should eventually restore Healthy"
         );
     }
 
