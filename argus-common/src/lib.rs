@@ -4,6 +4,12 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub mod capability;
+pub use capability::{
+    BackendId, BackendOutcome, BackendProbeResult, Capability, CapabilityCoverage, CoverageGrade,
+    CoverageReport, Quality, Sample,
+};
+
 // ---------------------------------------------------------------------------
 // Event types emitted by eBPF probes (or mock/replay sources)
 // ---------------------------------------------------------------------------
