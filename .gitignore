@@ -5,4 +5,5 @@
 .DS_Store
 *.log
 .cursorrules
+TODO.txt
 argus-ebpf/target/
