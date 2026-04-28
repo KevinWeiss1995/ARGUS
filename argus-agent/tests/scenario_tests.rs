@@ -1,3 +1,5 @@
+use argus_agent::capabilities::FabricEnv;
+use argus_agent::config::DetectionConfig;
 use argus_agent::pipeline::Pipeline;
 use argus_common::TestScenario;
 use std::path::PathBuf;
@@ -14,7 +16,11 @@ fn run_scenario(scenario_path: &str) {
     let scenario: TestScenario = serde_json::from_str(&contents)
         .unwrap_or_else(|e| panic!("Failed to parse scenario {scenario_path}: {e}"));
 
-    let mut pipeline = Pipeline::new(4);
+    // Use synthetic env so capability providers report Available at full
+    // quality (otherwise the coverage-weighted severity floor would scale
+    // rule verdicts to ~0 on hosts that lack RDMA hardware, e.g., CI).
+    let mut pipeline =
+        Pipeline::with_fabric(4, FabricEnv::synthetic(), &DetectionConfig::default());
 
     for (i, event) in scenario.events.iter().enumerate() {
         pipeline.ingest(event);
