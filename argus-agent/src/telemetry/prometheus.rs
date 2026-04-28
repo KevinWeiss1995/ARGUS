@@ -60,6 +60,17 @@ struct ArgusPrometheusMetrics {
     scheduler_errors_total: Family<Vec<(String, String)>, Counter>,
     scheduler_last_action_ts: Gauge,
     scheduler_drain_duration_secs: Gauge,
+    // Capability framework
+    capability_coverage: Family<Vec<(String, String)>, Gauge>,
+    capability_grade: Gauge,
+    sample_contribution_millis: Gauge,
+    cq_latency_p50_ns: Gauge,
+    cq_latency_p95_ns: Gauge,
+    cq_latency_p99_ns: Gauge,
+    cq_latency_p999_ns: Gauge,
+    timescale_state: Family<Vec<(String, String)>, Gauge>,
+    timescale_score_millis: Family<Vec<(String, String)>, Gauge>,
+    burst_classification: Family<Vec<(String, String)>, Gauge>,
 }
 
 impl PrometheusExporter {
@@ -375,6 +386,73 @@ impl PrometheusExporter {
             scheduler_drain_duration_secs.clone(),
         );
 
+        let capability_coverage = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_capability_coverage",
+            "Capability provider quality tier (0=absent, 1=low, 2=medium, 3=high) by capability and active backend",
+            capability_coverage.clone(),
+        );
+
+        let capability_grade = Gauge::default();
+        registry.register(
+            "argus_capability_grade",
+            "Overall coverage grade (0=F, 1=C, 2=B, 3=A)",
+            capability_grade.clone(),
+        );
+
+        let sample_contribution_millis = Gauge::default();
+        registry.register(
+            "argus_sample_contribution_millis",
+            "Last fusion contribution from capability samples to raw health score (0-500 millis)",
+            sample_contribution_millis.clone(),
+        );
+
+        let cq_latency_p50_ns = Gauge::default();
+        registry.register(
+            "argus_cq_latency_p50_ns",
+            "CQ completion latency p50 (DDSketch)",
+            cq_latency_p50_ns.clone(),
+        );
+        let cq_latency_p95_ns = Gauge::default();
+        registry.register(
+            "argus_cq_latency_p95_ns",
+            "CQ completion latency p95 (DDSketch)",
+            cq_latency_p95_ns.clone(),
+        );
+        let cq_latency_p99_ns = Gauge::default();
+        registry.register(
+            "argus_cq_latency_p99_ns",
+            "CQ completion latency p99 (DDSketch)",
+            cq_latency_p99_ns.clone(),
+        );
+        let cq_latency_p999_ns = Gauge::default();
+        registry.register(
+            "argus_cq_latency_p999_ns",
+            "CQ completion latency p99.9 (DDSketch)",
+            cq_latency_p999_ns.clone(),
+        );
+
+        let timescale_state = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_timescale_state",
+            "Per-timescale health state (0=healthy, 1=degraded, 2=critical, 3=recovering)",
+            timescale_state.clone(),
+        );
+
+        let timescale_score_millis = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_timescale_score_millis",
+            "Per-timescale effective health score (0-1000 millis)",
+            timescale_score_millis.clone(),
+        );
+
+        let burst_classification = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_burst_classification",
+            "Burst classifier output (1 if active for the labeled class, 0 otherwise)",
+            burst_classification.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -420,6 +498,16 @@ impl PrometheusExporter {
             scheduler_errors_total,
             scheduler_last_action_ts,
             scheduler_drain_duration_secs,
+            capability_coverage,
+            capability_grade,
+            sample_contribution_millis,
+            cq_latency_p50_ns,
+            cq_latency_p95_ns,
+            cq_latency_p99_ns,
+            cq_latency_p999_ns,
+            timescale_state,
+            timescale_score_millis,
+            burst_classification,
         };
 
         Self {
@@ -677,6 +765,97 @@ impl PrometheusExporter {
         }
     }
 
+    /// Update the capability-coverage gauge family. Call this once at
+    /// startup (post-detection) and any time the registry is rebuilt.
+    pub fn update_capability_coverage(&self, report: &argus_common::CoverageReport) {
+        for cap in &report.capabilities {
+            let backend = cap
+                .active_backend
+                .map(|b| b.name().to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let labels = vec![
+                ("capability".to_string(), cap.capability.name().to_string()),
+                ("backend".to_string(), backend),
+            ];
+            self.metrics
+                .capability_coverage
+                .get_or_create(&labels)
+                .set(cap.quality.as_i64());
+        }
+        let grade_val: i64 = match report.grade {
+            argus_common::CoverageGrade::A => 3,
+            argus_common::CoverageGrade::B => 2,
+            argus_common::CoverageGrade::C => 1,
+            argus_common::CoverageGrade::F => 0,
+        };
+        self.metrics.capability_grade.set(grade_val);
+    }
+
+    /// Record the most recent fusion contribution (in milliunits, 0-500).
+    pub fn update_sample_contribution(&self, contribution: f64) {
+        self.metrics
+            .sample_contribution_millis
+            .set((contribution * 1000.0) as i64);
+    }
+
+    /// Update per-timescale state and score gauges from the multi-timescale
+    /// evaluator. Called once per window.
+    pub fn update_timescales(&self, evaluator: &crate::detection::timescale::MultiTimescaleEvaluator) {
+        for (ts, state) in evaluator.states() {
+            let val: i64 = match state {
+                argus_common::HealthState::Healthy => 0,
+                argus_common::HealthState::Degraded => 1,
+                argus_common::HealthState::Critical => 2,
+                argus_common::HealthState::Recovering => 3,
+            };
+            self.metrics
+                .timescale_state
+                .get_or_create(&vec![("timescale".to_string(), ts.name().to_string())])
+                .set(val);
+        }
+        for (ts, score) in evaluator.effective_scores() {
+            self.metrics
+                .timescale_score_millis
+                .get_or_create(&vec![("timescale".to_string(), ts.name().to_string())])
+                .set((score * 1000.0) as i64);
+        }
+    }
+
+    /// Update burst classification gauges. The classifier supplies a
+    /// pre-computed map of class → 0/1.
+    pub fn update_burst_classification(&self, classes: &[(&str, bool)]) {
+        for (class, active) in classes {
+            self.metrics
+                .burst_classification
+                .get_or_create(&vec![("class".to_string(), (*class).to_string())])
+                .set(if *active { 1 } else { 0 });
+        }
+    }
+
+    /// Update the CQ latency percentile gauges from a `CompletionLatency`
+    /// sample stream (filtered to the selected backend by the caller).
+    /// Samples whose `device` label is one of "p50", "p95", "p99", "p999"
+    /// drive the matching gauge; others are ignored.
+    pub fn update_cq_latency_quantiles(&self, samples: &[argus_common::Sample]) {
+        for s in samples {
+            if s.capability != argus_common::Capability::CompletionLatency {
+                continue;
+            }
+            let label = match s.device.as_deref() {
+                Some(l) => l,
+                None => continue,
+            };
+            let value = s.value as i64;
+            match label {
+                "p50" => self.metrics.cq_latency_p50_ns.set(value),
+                "p95" => self.metrics.cq_latency_p95_ns.set(value),
+                "p99" => self.metrics.cq_latency_p99_ns.set(value),
+                "p999" => self.metrics.cq_latency_p999_ns.set(value),
+                _ => 0,
+            };
+        }
+    }
+
     /// Update smoothed health score component gauges.
     pub fn update_score_components(&self, score: &crate::detection::SmoothedHealthScore) {
         self.metrics
@@ -736,6 +915,9 @@ pub type SharedStatusState = Arc<Mutex<StatusSnapshot>>;
 
 /// Shared reconciler handle for /scheduler/hold and /scheduler/release.
 pub type SharedReconciler = Arc<Mutex<crate::scheduler::Reconciler>>;
+
+/// Shared capability coverage snapshot for the `/coverage` endpoint.
+pub type SharedCoverage = Arc<Mutex<argus_common::CoverageReport>>;
 
 #[derive(Clone)]
 pub struct HealthSnapshot {
@@ -799,6 +981,7 @@ pub async fn serve_metrics(
     health: SharedHealthState,
     status: SharedStatusState,
     reconciler: Option<SharedReconciler>,
+    coverage: Option<SharedCoverage>,
     addr: std::net::SocketAddr,
     tls: Option<TlsConfig>,
     auth_token: Option<String>,
@@ -824,6 +1007,7 @@ pub async fn serve_metrics(
         let health = health.clone();
         let status = status.clone();
         let reconciler = reconciler.clone();
+        let coverage = coverage.clone();
         let auth = auth_token.clone();
 
         if let Some(ref acceptor) = tls_acceptor {
@@ -837,12 +1021,12 @@ pub async fn serve_metrics(
                     }
                 };
                 let io = TokioIo::new(tls_stream);
-                serve_connection(io, exporter, health, status, reconciler, auth).await;
+                serve_connection(io, exporter, health, status, reconciler, coverage, auth).await;
             });
         } else {
             let io = TokioIo::new(stream);
             tokio::spawn(async move {
-                serve_connection(io, exporter, health, status, reconciler, auth).await;
+                serve_connection(io, exporter, health, status, reconciler, coverage, auth).await;
             });
         }
     }
@@ -854,6 +1038,7 @@ async fn serve_connection<I>(
     health: SharedHealthState,
     status: SharedStatusState,
     reconciler: Option<SharedReconciler>,
+    coverage: Option<SharedCoverage>,
     auth_token: Option<Arc<str>>,
 ) where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
@@ -868,6 +1053,7 @@ async fn serve_connection<I>(
         let health = health.clone();
         let status = status.clone();
         let reconciler = reconciler.clone();
+        let coverage = coverage.clone();
         let auth = auth_token.clone();
         async move {
             if let Some(ref expected) = auth {
@@ -928,6 +1114,29 @@ async fn serve_connection<I>(
                         .header("content-type", "application/json")
                         .body(Full::new(Bytes::from(body)))
                         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                }
+                "/coverage" => {
+                    if let Some(ref cov) = coverage {
+                        let snap = cov.lock().map(|c| c.clone()).ok();
+                        let body = match snap {
+                            Some(report) => {
+                                serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
+                            }
+                            None => r#"{"error":"coverage lock poisoned"}"#.to_string(),
+                        };
+                        Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(body)))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    } else {
+                        Ok(Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Full::new(Bytes::from(
+                                r#"{"error":"coverage not configured"}"#,
+                            )))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    }
                 }
                 "/scheduler/hold" => {
                     if let Some(ref rc) = reconciler {
