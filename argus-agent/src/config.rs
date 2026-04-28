@@ -176,6 +176,20 @@ pub struct DetectionSection {
     pub rdma_baseline_latency_ns: Option<u64>,
     pub slab_pressure_min_allocs: Option<u64>,
     pub slab_pressure_alloc_rate_threshold: Option<u64>,
+    pub state_machine: Option<StateMachineSection>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct StateMachineSection {
+    pub degrade_enter: Option<f64>,
+    pub degrade_exit: Option<f64>,
+    pub critical_enter: Option<f64>,
+    pub critical_exit: Option<f64>,
+    pub enter_windows: Option<u32>,
+    pub exit_windows: Option<u32>,
+    pub recover_windows: Option<u32>,
+    pub max_hold_windows: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -273,6 +287,7 @@ pub struct DetectionConfig {
     pub rdma_baseline_latency_ns: u64,
     pub slab_pressure_min_allocs: u64,
     pub slab_pressure_alloc_rate_threshold: u64,
+    pub state_machine: Option<crate::detection::StateMachineConfig>,
 }
 
 fn detect_cpus() -> u32 {
@@ -328,6 +343,7 @@ impl Default for DetectionConfig {
             rdma_baseline_latency_ns: 2_000,
             slab_pressure_min_allocs: 100,
             slab_pressure_alloc_rate_threshold: 5_000,
+            state_machine: None,
         }
     }
 }
@@ -406,6 +422,19 @@ impl Cli {
         };
 
         let defaults = DetectionConfig::default();
+        let sm_defaults = crate::detection::StateMachineConfig::default();
+        let state_machine = fc.detection.state_machine.as_ref().map(|sm| {
+            crate::detection::StateMachineConfig {
+                degrade_enter: sm.degrade_enter.unwrap_or(sm_defaults.degrade_enter),
+                degrade_exit: sm.degrade_exit.unwrap_or(sm_defaults.degrade_exit),
+                critical_enter: sm.critical_enter.unwrap_or(sm_defaults.critical_enter),
+                critical_exit: sm.critical_exit.unwrap_or(sm_defaults.critical_exit),
+                enter_windows: sm.enter_windows.unwrap_or(sm_defaults.enter_windows),
+                exit_windows: sm.exit_windows.unwrap_or(sm_defaults.exit_windows),
+                recover_windows: sm.recover_windows.unwrap_or(sm_defaults.recover_windows),
+                max_hold_windows: sm.max_hold_windows.unwrap_or(sm_defaults.max_hold_windows),
+            }
+        });
         let detection = DetectionConfig {
             num_cpus,
             irq_skew_threshold_pct: fc
@@ -428,6 +457,7 @@ impl Cli {
                 .detection
                 .slab_pressure_alloc_rate_threshold
                 .unwrap_or(defaults.slab_pressure_alloc_rate_threshold),
+            state_machine,
         };
 
         let actions = crate::actions::ActionConfig {

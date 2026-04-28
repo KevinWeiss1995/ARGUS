@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2d5892e24277abfa83d1be0c720fc4518a0224dcd4d7ceb6e34c0eed682401db # shrinks to latency_factor = 17.47108442295423
+cc 5e004dbd9fdd221d98afff3508890fa77fa126c885513a7d94cfe439306aa577 # shrinks to skew_pct = 70

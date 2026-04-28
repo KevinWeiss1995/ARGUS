@@ -47,6 +47,11 @@ struct ArgusPrometheusMetrics {
     ib_rxe_retry_exceeded: Family<Vec<(String, String)>, Gauge>,
     ib_rxe_send_error: Family<Vec<(String, String)>, Gauge>,
     napi_utilization_pct: Gauge,
+    // Smoothed health score components
+    health_score_raw: Gauge,
+    health_score_effective: Gauge,
+    health_score_ewma: Gauge,
+    health_score_peak_hold: Gauge,
     // Scheduler metrics
     scheduler_desired_state: Gauge,
     scheduler_observed_state: Gauge,
@@ -293,6 +298,34 @@ impl PrometheusExporter {
             napi_utilization_pct.clone(),
         );
 
+        let health_score_raw = Gauge::default();
+        registry.register(
+            "argus_health_score_raw_millis",
+            "Raw composite health score before smoothing (0-1000 millis)",
+            health_score_raw.clone(),
+        );
+
+        let health_score_effective = Gauge::default();
+        registry.register(
+            "argus_health_score_effective_millis",
+            "Effective smoothed health score fed to state machine (0-1000 millis)",
+            health_score_effective.clone(),
+        );
+
+        let health_score_ewma = Gauge::default();
+        registry.register(
+            "argus_health_score_ewma_millis",
+            "EWMA track of smoothed health score (0-1000 millis)",
+            health_score_ewma.clone(),
+        );
+
+        let health_score_peak_hold = Gauge::default();
+        registry.register(
+            "argus_health_score_peak_hold_millis",
+            "Peak-hold track of smoothed health score (0-1000 millis)",
+            health_score_peak_hold.clone(),
+        );
+
         let scheduler_desired_state = Gauge::default();
         registry.register(
             "argus_scheduler_desired_state",
@@ -376,6 +409,10 @@ impl PrometheusExporter {
             ib_rxe_retry_exceeded,
             ib_rxe_send_error,
             napi_utilization_pct,
+            health_score_raw,
+            health_score_effective,
+            health_score_ewma,
+            health_score_peak_hold,
             scheduler_desired_state,
             scheduler_observed_state,
             scheduler_drain_total,
@@ -398,6 +435,7 @@ impl PrometheusExporter {
             HealthState::Healthy => 0,
             HealthState::Degraded => 1,
             HealthState::Critical => 2,
+            HealthState::Recovering => 3,
         };
         self.metrics.health_state.set(state_val);
         self.metrics
@@ -637,6 +675,22 @@ impl PrometheusExporter {
                 _ => {}
             }
         }
+    }
+
+    /// Update smoothed health score component gauges.
+    pub fn update_score_components(&self, score: &crate::detection::SmoothedHealthScore) {
+        self.metrics
+            .health_score_raw
+            .set((score.raw() * 1000.0) as i64);
+        self.metrics
+            .health_score_effective
+            .set((score.effective() * 1000.0) as i64);
+        self.metrics
+            .health_score_ewma
+            .set((score.ewma() * 1000.0) as i64);
+        self.metrics
+            .health_score_peak_hold
+            .set((score.peak_hold() * 1000.0) as i64);
     }
 
     /// Record an alert in Prometheus counters.

@@ -77,7 +77,8 @@ impl SchedulingPolicy {
     /// Translate health state into desired scheduling state.
     /// Never auto-releases operator holds.
     pub fn evaluate(&mut self, health: HealthState) -> DesiredNodeState {
-        let new = match health {
+        let effective = health.for_scheduler();
+        let new = match effective {
             HealthState::Healthy => {
                 if self.desired == DesiredNodeState::HeldByOperator {
                     DesiredNodeState::HeldByOperator
@@ -85,7 +86,7 @@ impl SchedulingPolicy {
                     DesiredNodeState::Available
                 }
             }
-            HealthState::Degraded => {
+            HealthState::Degraded | HealthState::Recovering => {
                 if self.drain_on_degraded {
                     DesiredNodeState::Draining
                 } else {

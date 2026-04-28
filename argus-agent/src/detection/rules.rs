@@ -172,22 +172,20 @@ pub struct RdmaLinkDegradationRule {
     rcv_error_rate: RollingStats,
     soft_error_rate: RollingStats,
     link_state: LinkHealthState,
-    /// Errors per window below which we stay silent (noise floor).
     error_budget: u64,
     z_threshold: f64,
-    /// Consecutive windows spent in ElevatedErrors state.
     elevated_windows: u32,
-    /// Absolute error rate ceiling (errors / traffic). Above this = always alert,
-    /// regardless of EWMA. Prevents "boiling frog" where sustained errors
-    /// become the new normal.
     absolute_error_rate_ceiling: f64,
+    /// Cooldown windows remaining before elevated_windows can step down.
+    cooldown_remaining: u32,
+    /// How many clean windows to wait before each step-down.
+    cooldown_windows: u32,
 }
 
 impl RdmaLinkDegradationRule {
     #[must_use]
     pub fn new(z_threshold: f64, error_budget: u64) -> Self {
         Self {
-            // Clamped at 3x baseline: EWMA can't adapt beyond 3× the initial error rate
             symbol_error_rate: RollingStats::with_clamp(0.1, 3.0),
             rcv_error_rate: RollingStats::with_clamp(0.1, 3.0),
             soft_error_rate: RollingStats::with_clamp(0.1, 3.0),
@@ -196,6 +194,8 @@ impl RdmaLinkDegradationRule {
             z_threshold,
             elevated_windows: 0,
             absolute_error_rate_ceiling: 0.05,
+            cooldown_remaining: 0,
+            cooldown_windows: 3,
         }
     }
 }
@@ -314,7 +314,8 @@ impl DetectionRule for RdmaLinkDegradationRule {
         // --- Excessive hard errors in a single window (above budget) ---
         let hard = d.total_hard_error_delta();
         if hard > self.error_budget {
-            self.elevated_windows += 1;
+            self.elevated_windows = (self.elevated_windows + 1).min(10);
+            self.cooldown_remaining = self.cooldown_windows;
             self.link_state = LinkHealthState::ElevatedErrors;
             let severity = if hard > self.error_budget * 10 {
                 HealthState::Critical
@@ -345,7 +346,8 @@ impl DetectionRule for RdmaLinkDegradationRule {
         if total_errors > 0 && d.has_traffic() {
             let total_rate = total_errors as f64 / throughput;
             if total_rate >= self.absolute_error_rate_ceiling {
-                self.elevated_windows += 1;
+                self.elevated_windows = (self.elevated_windows + 1).min(10);
+                self.cooldown_remaining = self.cooldown_windows;
                 self.link_state = LinkHealthState::ElevatedErrors;
                 let severity = if total_rate >= self.absolute_error_rate_ceiling * 3.0
                     || self.elevated_windows >= 3
@@ -378,7 +380,8 @@ impl DetectionRule for RdmaLinkDegradationRule {
             let max_z = sym_z.max(rcv_z).max(soft_z);
 
             if max_z >= self.z_threshold && total_errors > 0 {
-                self.elevated_windows += 1;
+                self.elevated_windows = (self.elevated_windows + 1).min(10);
+                self.cooldown_remaining = self.cooldown_windows;
                 self.link_state = LinkHealthState::ElevatedErrors;
 
                 let severity = if max_z >= self.z_threshold * 2.0 || self.elevated_windows >= 3 {
@@ -412,9 +415,14 @@ impl DetectionRule for RdmaLinkDegradationRule {
             }
         }
 
-        // --- No significant errors: trend toward nominal ---
-        if self.elevated_windows > 0 {
+        // --- No significant errors: trend toward nominal with cooldown ---
+        if self.cooldown_remaining > 0 {
+            self.cooldown_remaining -= 1;
+        } else if self.elevated_windows > 0 {
             self.elevated_windows = self.elevated_windows.saturating_sub(1);
+            if self.elevated_windows > 0 {
+                self.cooldown_remaining = self.cooldown_windows;
+            }
         }
         if self.elevated_windows == 0 {
             self.link_state = LinkHealthState::Nominal;

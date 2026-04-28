@@ -300,6 +300,7 @@ fn run_live_mode(
 
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
+                exp.update_score_components(pipeline.detection_engine().smoothed_score());
                 for (device, port, dev_type) in hw_reader.discovered_ports() {
                     exp.update_ib_counters(
                         &device,
@@ -457,6 +458,7 @@ async fn run_event_mode(
 
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
+                exp.update_score_components(pipeline.detection_engine().smoothed_score());
             }
             if let Ok(mut hs) = health_snapshot.lock() {
                 hs.state = dash_state.health;
