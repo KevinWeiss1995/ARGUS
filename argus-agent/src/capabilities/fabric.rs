@@ -298,9 +298,27 @@ fn read_kernel_release() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Effective UID from `/proc/self/status` (fields: real, effective, saved, fs).
+/// Avoids `libc::geteuid()` so this crate stays `#![deny(unsafe_code)]`-clean.
+#[cfg(target_os = "linux")]
+fn effective_uid_from_proc_status() -> Option<u32> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        let line = line.trim_start();
+        let rest = line.strip_prefix("Uid:")?;
+        let mut nums = rest
+            .split_whitespace()
+            .filter_map(|s| s.parse::<u32>().ok());
+        let _real = nums.next()?;
+        let effective = nums.next()?;
+        return Some(effective);
+    }
+    None
+}
+
 #[cfg(target_os = "linux")]
 fn detect_privileges() -> PrivilegeProfile {
-    let uid_zero = unsafe { libc::geteuid() } == 0;
+    let uid_zero = effective_uid_from_proc_status() == Some(0);
     let mut profile = PrivilegeProfile {
         uid_zero,
         ..Default::default()
