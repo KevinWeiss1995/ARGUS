@@ -47,14 +47,57 @@ async fn main() -> Result<()> {
     let num_cpus = config.num_cpus;
     tracing::info!(num_cpus, "CPU count resolved");
 
-    let pipeline = Pipeline::with_config(num_cpus, &config.detection);
+    // Detect fabric first so we can apply the right detection profile.
+    let fabric_env = argus_agent::capabilities::FabricEnv::detect();
+    let fabric_name = fabric_env
+        .fabric
+        .map(|f| f.name().to_string())
+        .unwrap_or_else(|| "none".into());
+
+    // Apply per-fabric profile overrides if one matches the detected fabric.
+    let detection_config = if let Some(profile) = config.fabric_profiles.get(&fabric_name) {
+        tracing::info!(fabric = %fabric_name, "applying fabric-specific detection profile");
+        config.detection.with_profile(profile)
+    } else {
+        config.detection.clone()
+    };
+
+    let pipeline = Pipeline::with_fabric(num_cpus, fabric_env, &detection_config);
     let telemetry = TelemetryCollector::default();
     let dash_state = DashboardState::default();
     let start = std::time::Instant::now();
 
+    // Surface capability coverage at startup so operators see what fabric was
+    // detected and which backends are active.
+    {
+        let coverage = pipeline.coverage();
+        tracing::info!(
+            grade = %coverage.grade.as_char(),
+            fabric = coverage.fabric.as_deref().unwrap_or("none"),
+            "capability coverage"
+        );
+        for cap in &coverage.capabilities {
+            let backend = cap
+                .active_backend
+                .map(|b| b.name())
+                .unwrap_or("none");
+            tracing::info!(
+                capability = %cap.capability,
+                backend = backend,
+                quality = %cap.quality,
+                "capability tier"
+            );
+        }
+    }
+
     let prom_exporter = std::sync::Arc::new(std::sync::Mutex::new(
         argus_agent::telemetry::prometheus::PrometheusExporter::new(),
     ));
+    let coverage_snapshot: std::sync::Arc<std::sync::Mutex<argus_common::CoverageReport>> =
+        std::sync::Arc::new(std::sync::Mutex::new(pipeline.coverage().clone()));
+    if let Ok(exp) = prom_exporter.lock() {
+        exp.update_capability_coverage(pipeline.coverage());
+    }
     let health_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
         argus_agent::telemetry::prometheus::HealthSnapshot::default(),
     ));
@@ -94,6 +137,7 @@ async fn main() -> Result<()> {
         let hs = health_snapshot.clone();
         let ss = status_snapshot.clone();
         let rc = shared_reconciler.clone();
+        let cov = Some(coverage_snapshot.clone());
         let tls_cfg = match (&config.tls_cert, &config.tls_key) {
             (Some(cert), Some(key)) => Some(argus_agent::telemetry::prometheus::TlsConfig {
                 cert_path: cert.clone(),
@@ -105,7 +149,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             if let Err(e) =
                 argus_agent::telemetry::prometheus::serve_metrics(
-                    exp, hs, ss, rc, addr, tls_cfg, auth_token,
+                    exp, hs, ss, rc, cov, addr, tls_cfg, auth_token,
                 )
                 .await
             {
@@ -301,6 +345,18 @@ fn run_live_mode(
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
                 exp.update_score_components(pipeline.detection_engine().smoothed_score());
+                exp.update_sample_contribution(
+                    pipeline.detection_engine().last_sample_contribution(),
+                );
+                exp.update_cq_latency_quantiles(pipeline.last_samples());
+                exp.update_timescales(pipeline.detection_engine().multi_timescale());
+                let class = pipeline.detection_engine().burst_class();
+                exp.update_burst_classification(&[
+                    ("quiet", class == argus_agent::detection::burst::BurstClass::Quiet),
+                    ("burst", class == argus_agent::detection::burst::BurstClass::Burst),
+                    ("sustained", class == argus_agent::detection::burst::BurstClass::Sustained),
+                    ("mixed", class == argus_agent::detection::burst::BurstClass::MixedBurstSustained),
+                ]);
                 for (device, port, dev_type) in hw_reader.discovered_ports() {
                     exp.update_ib_counters(
                         &device,
@@ -459,6 +515,18 @@ async fn run_event_mode(
             if let Ok(mut exp) = prom_exporter.lock() {
                 exp.update(pipeline.current_metrics(), dash_state.health, event_count);
                 exp.update_score_components(pipeline.detection_engine().smoothed_score());
+                exp.update_sample_contribution(
+                    pipeline.detection_engine().last_sample_contribution(),
+                );
+                exp.update_cq_latency_quantiles(pipeline.last_samples());
+                exp.update_timescales(pipeline.detection_engine().multi_timescale());
+                let class = pipeline.detection_engine().burst_class();
+                exp.update_burst_classification(&[
+                    ("quiet", class == argus_agent::detection::burst::BurstClass::Quiet),
+                    ("burst", class == argus_agent::detection::burst::BurstClass::Burst),
+                    ("sustained", class == argus_agent::detection::burst::BurstClass::Sustained),
+                    ("mixed", class == argus_agent::detection::burst::BurstClass::MixedBurstSustained),
+                ]);
             }
             if let Ok(mut hs) = health_snapshot.lock() {
                 hs.state = dash_state.health;
