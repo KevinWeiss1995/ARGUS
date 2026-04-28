@@ -21,13 +21,19 @@ fn debug_log(msg: &str, data: &str, hypothesis: &str) {
         r#"{{"sessionId":"58f965","hypothesisId":"{}","location":"detection/mod.rs","message":"{}","data":{},"timestamp":{}}}"#,
         hypothesis, msg, data, ts
     );
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/Users/kweiss/projects/networking/ARGUS/.cursor/debug-58f965.log")
-    {
-        let _ = writeln!(f, "{}", line);
+    for path in &[
+        "/tmp/argus-debug-58f965.log",
+        "/Users/kweiss/projects/networking/ARGUS/.cursor/debug-58f965.log",
+    ] {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{}", line);
+        }
     }
+    eprintln!("[ARGUS-DBG] {}", line);
 }
 // #endregion
 
