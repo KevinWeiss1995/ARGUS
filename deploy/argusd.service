@@ -10,7 +10,6 @@ ExecStart=/bin/sh -c 'exec /usr/local/bin/argusd ${ARGUS_CONFIG:+--config "$ARGU
 
 Restart=on-failure
 RestartSec=5
-WatchdogSec=60
 
 # Resource limits — ARGUS targets <1% CPU overhead
 CPUQuota=5%
