@@ -6,28 +6,40 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/argus/argusd.conf
-ExecStart=/bin/sh -c 'exec /usr/local/bin/argusd ${ARGUS_CONFIG:+--config "$ARGUS_CONFIG"} --mode "$ARGUS_MODE" --ebpf-path "$ARGUS_EBPF_PATH" --metrics-addr "$ARGUS_METRICS_ADDR" --log-level "$ARGUS_LOG_LEVEL" --window-secs "$ARGUS_WINDOW_SECS" $ARGUS_EXTRA_ARGS'
+ExecStart=/bin/sh -c 'exec /usr/bin/argusd \
+    ${ARGUS_CONFIG:+--config "$ARGUS_CONFIG"} \
+    --mode "$ARGUS_MODE" \
+    --ebpf-path "$ARGUS_EBPF_PATH" \
+    --metrics-addr "$ARGUS_METRICS_ADDR" \
+    --log-level "$ARGUS_LOG_LEVEL" \
+    --window-secs "$ARGUS_WINDOW_SECS" \
+    $ARGUS_EXTRA_ARGS'
 
 Restart=on-failure
 RestartSec=5
 
-# Resource limits — ARGUS targets <1% CPU overhead
+# Resource limits
 CPUQuota=5%
 Nice=19
 IOSchedulingClass=idle
 MemoryMax=256M
 
-# Security hardening — root is required for eBPF + sysfs, but we lock
-# down everything else.
+# Managed directories (systemd creates/removes these automatically)
+RuntimeDirectory=argus
+StateDirectory=argus
+
+# Security hardening
 NoNewPrivileges=yes
-ProtectHome=read-only
+ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/sys /var/lib/argus /var/run/argus
+ReadWritePaths=/sys/class/infiniband /sys/kernel /var/lib/argus
+ReadOnlyPaths=/proc
 PrivateTmp=yes
 ProtectKernelModules=yes
 RestrictSUIDSGID=yes
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_NET_ADMIN
 
-# Logging to journald (agent emits JSON when --tui is absent)
+# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=argusd
