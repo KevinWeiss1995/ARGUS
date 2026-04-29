@@ -1,0 +1,117 @@
+policy_module(argus, 1.0.0)
+
+########################################
+# Type declarations
+########################################
+
+type argusd_t;
+type argusd_exec_t;
+init_daemon_domain(argusd_t, argusd_exec_t)
+
+type argusd_var_lib_t;
+files_type(argusd_var_lib_t)
+
+type argusd_var_run_t;
+files_type(argusd_var_run_t)
+
+type argusd_conf_t;
+files_type(argusd_conf_t)
+
+type argusd_ebpf_t;
+files_type(argusd_ebpf_t)
+
+########################################
+# Daemon permissions
+########################################
+
+# Allow argusd to execute itself
+allow argusd_t argusd_exec_t:file { read execute execute_no_trans getattr open };
+
+# Configuration files
+allow argusd_t argusd_conf_t:file { read getattr open };
+allow argusd_t argusd_conf_t:dir { search getattr };
+
+# eBPF object files
+allow argusd_t argusd_ebpf_t:file { read getattr open map };
+
+# Runtime state directories
+allow argusd_t argusd_var_lib_t:dir { create read write add_name remove_name search getattr };
+allow argusd_t argusd_var_lib_t:file { create read write getattr open unlink };
+allow argusd_t argusd_var_run_t:dir { create read write add_name remove_name search getattr };
+allow argusd_t argusd_var_run_t:file { create read write getattr open unlink };
+allow argusd_t argusd_var_run_t:sock_file { create read write getattr unlink };
+
+########################################
+# Network: metrics endpoint (TCP/9100)
+########################################
+
+corenet_tcp_bind_generic_node(argusd_t)
+allow argusd_t self:tcp_socket { create bind listen accept read write getattr setopt getopt shutdown };
+allow argusd_t self:netlink_route_socket { create bind getattr read write nlmsg_read };
+
+########################################
+# Procfs / sysfs access (Tier 1 + Tier 2)
+########################################
+
+# /proc/interrupts, /proc/slabinfo, /proc/net/softnet_stat
+kernel_read_system_state(argusd_t)
+kernel_read_network_state(argusd_t)
+
+# /sys/class/infiniband/*/ports/*/counters/*
+dev_read_sysfs(argusd_t)
+
+# /proc/sys/kernel/osrelease, /proc/kallsyms
+kernel_read_kernel_sysctls(argusd_t)
+allow argusd_t proc_t:file { read getattr open };
+
+########################################
+# eBPF subsystem (Tier 1 only)
+########################################
+
+# bpf() syscall
+allow argusd_t self:bpf { map_create map_read map_write prog_load prog_run };
+allow argusd_t self:perf_event { open read write };
+
+# /sys/kernel/btf/vmlinux
+allow argusd_t sysfs_t:file { read getattr open };
+
+# /sys/kernel/tracing (tracefs)
+allow argusd_t tracefs_t:dir { read search getattr };
+allow argusd_t tracefs_t:file { read getattr open write };
+
+# /sys/kernel/debug/kprobes
+allow argusd_t debugfs_t:dir { read search getattr };
+allow argusd_t debugfs_t:file { read getattr open };
+
+# /sys/kernel/security/lockdown
+allow argusd_t security_t:file { read getattr open };
+
+# /sys/fs/selinux/enforce
+allow argusd_t selinux_config_t:file { read getattr open };
+
+########################################
+# Capabilities
+########################################
+
+# CAP_BPF (since 5.8 / RHEL 8.4+), CAP_PERFMON for perf events,
+# CAP_SYS_ADMIN fallback for older kernels without CAP_BPF.
+# CAP_NET_ADMIN for network tracepoints.
+allow argusd_t self:capability { sys_admin net_admin };
+allow argusd_t self:capability2 { bpf perfmon };
+
+########################################
+# Logging
+########################################
+
+logging_send_syslog_msg(argusd_t)
+
+########################################
+# File context specifications
+########################################
+
+# These are normally in argus.fc, inline here for reference:
+#   /usr/local/bin/argusd        -- gen_context(system_u:object_r:argusd_exec_t,s0)
+#   /usr/local/lib/argus(/.*)?   -- gen_context(system_u:object_r:argusd_ebpf_t,s0)
+#   /etc/argus(/.*)?             -- gen_context(system_u:object_r:argusd_conf_t,s0)
+#   /var/lib/argus(/.*)?         -- gen_context(system_u:object_r:argusd_var_lib_t,s0)
+#   /var/run/argus(/.*)?         -- gen_context(system_u:object_r:argusd_var_run_t,s0)

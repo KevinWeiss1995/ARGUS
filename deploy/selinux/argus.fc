@@ -1,0 +1,9 @@
+# ARGUS file context definitions for SELinux
+# Apply with: semanage fcontext -a -t <type> '<pattern>'
+#         or: restorecon -Rv /usr/local/bin/argusd /usr/local/lib/argus /etc/argus /var/lib/argus /var/run/argus
+
+/usr/local/bin/argusd                   --  gen_context(system_u:object_r:argusd_exec_t,s0)
+/usr/local/lib/argus(/.*)?                  gen_context(system_u:object_r:argusd_ebpf_t,s0)
+/etc/argus(/.*)?                            gen_context(system_u:object_r:argusd_conf_t,s0)
+/var/lib/argus(/.*)?                        gen_context(system_u:object_r:argusd_var_lib_t,s0)
+/var/run/argus(/.*)?                        gen_context(system_u:object_r:argusd_var_run_t,s0)
