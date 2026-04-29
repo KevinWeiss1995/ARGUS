@@ -109,9 +109,4 @@ logging_send_syslog_msg(argusd_t)
 # File context specifications
 ########################################
 
-# These are normally in argus.fc, inline here for reference:
-#   /usr/local/bin/argusd        -- gen_context(system_u:object_r:argusd_exec_t,s0)
-#   /usr/local/lib/argus(/.*)?   -- gen_context(system_u:object_r:argusd_ebpf_t,s0)
-#   /etc/argus(/.*)?             -- gen_context(system_u:object_r:argusd_conf_t,s0)
-#   /var/lib/argus(/.*)?         -- gen_context(system_u:object_r:argusd_var_lib_t,s0)
-#   /var/run/argus(/.*)?         -- gen_context(system_u:object_r:argusd_var_run_t,s0)
+# File context specs are in argus.fc — covers both /usr (RPM) and /usr/local (dev).
