@@ -18,6 +18,16 @@ WATCH_MODE=false
 ALL_MODE=false
 TOKEN=""
 
+# Format host for curl — wrap IPv6 addresses in brackets
+curl_host() {
+    local h="$1"
+    if [[ "$h" == *:* && "$h" != \[* ]]; then
+        echo "[$h]"
+    else
+        echo "$h"
+    fi
+}
+
 TARGETS_FILE="${ARGUS_TARGETS_FILE:-}"
 if [[ -z "$TARGETS_FILE" ]]; then
     for candidate in \
@@ -114,7 +124,7 @@ check_node() {
     curl_args=$(build_curl_args)
 
     local health_json
-    if ! health_json=$(curl $curl_args "${SCHEME}://${host}:${port}/health" 2>/dev/null); then
+    if ! health_json=$(curl $curl_args "${SCHEME}://$(curl_host "$host"):${port}/health" 2>/dev/null); then
         if $JSON_MODE; then
             echo "{\"host\":\"${host}:${port}\",\"error\":\"unreachable\"}"
         else
@@ -147,7 +157,7 @@ check_node() {
     # Fetch key metrics from /metrics
     local irq_imbalance="" slab_latency="" napi_pct=""
     local metrics_text
-    if metrics_text=$(curl $curl_args "${SCHEME}://${host}:${port}/metrics" 2>/dev/null); then
+    if metrics_text=$(curl $curl_args "${SCHEME}://$(curl_host "$host"):${port}/metrics" 2>/dev/null); then
         irq_imbalance=$(echo "$metrics_text" | grep '^argus_irq_imbalance_pct ' | awk '{print $2}' | head -1)
         slab_latency=$(echo "$metrics_text" | grep '^argus_slab_avg_latency_ns ' | awk '{print $2}' | head -1)
         napi_pct=$(echo "$metrics_text" | grep '^argus_napi_utilization_pct ' | awk '{print $2}' | head -1)
@@ -182,7 +192,7 @@ for group in data:
         print(t)
 ")
         else
-            targets=$(grep -o '"[0-9][^"]*:[0-9]*"' "$TARGETS_FILE" | tr -d '"')
+            targets=$(grep -oE '"[^"]+:[0-9]+"' "$TARGETS_FILE" | tr -d '"')
         fi
 
         if [[ -z "$targets" ]]; then
@@ -196,8 +206,15 @@ for group in data:
 
         local total=0 healthy=0 degraded=0 critical=0 down=0
         while IFS= read -r target; do
-            local h="${target%:*}"
-            local p="${target#*:}"
+            local h p
+            if [[ "$target" == \[* ]]; then
+                h="${target%%]:*}"
+                h="${h#[}"
+                p="${target##*]:}"
+            else
+                h="${target%:*}"
+                p="${target#*:}"
+            fi
             total=$((total + 1))
             local result
             if result=$(check_node "$h" "$p" 2>&1); then
