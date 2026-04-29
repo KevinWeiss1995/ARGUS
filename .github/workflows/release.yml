@@ -1,0 +1,157 @@
+name: Build & Release RPM
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (e.g. 0.2.0)'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY_TOOLCHAIN: nightly-2025-12-01
+
+jobs:
+  build-rpm:
+    name: RPM (${{ matrix.distro }}, ${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: el9, arch: x86_64, container: "rockylinux:9" }
+          - { distro: el8, arch: x86_64, container: "rockylinux:8" }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system build dependencies
+        run: |
+          dnf install -y gcc make rpm-build rpmdevtools
+          dnf install -y openssl-devel elfutils-libelf-devel pkgconf-pkg-config
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          source "$HOME/.cargo/env"
+          rustup install $NIGHTLY_TOOLCHAIN
+          rustup component add rust-src --toolchain $NIGHTLY_TOOLCHAIN
+          cargo install bpf-linker
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            SHORT=$(git rev-parse --short HEAD)
+            echo "version=0.0.0~${SHORT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build RPM
+        run: |
+          source "$HOME/.cargo/env"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rpmdev-setuptree
+
+          VER="${{ steps.version.outputs.version }}"
+
+          # Create source tarball from git archive
+          mkdir -p "argus-${VER}"
+          git archive HEAD | tar -x -C "argus-${VER}"
+          tar czf "$HOME/rpmbuild/SOURCES/argus-${VER}.tar.gz" "argus-${VER}"
+
+          # Inject cargo path so rpmbuild %build can find it
+          rpmbuild -ba deploy/argus.spec \
+            --define "_version ${VER}" \
+            --define "dist .${{ matrix.distro }}" \
+            --define "__cargo $HOME/.cargo/bin/cargo"
+
+      - name: List built RPMs
+        run: find ~/rpmbuild/RPMS -name '*.rpm' -ls
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-${{ steps.version.outputs.version }}-${{ matrix.distro }}.${{ matrix.arch }}
+          path: ~/rpmbuild/RPMS/**/*.rpm
+          retention-days: 30
+
+  build-rpm-arm64:
+    name: RPM (el9, aarch64)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            SHORT=$(git rev-parse --short HEAD)
+            echo "version=0.0.0~${SHORT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: uraimo/run-on-arch-action@v2
+        name: Build in aarch64 container
+        with:
+          arch: aarch64
+          distro: rocky_linux_latest
+          githubToken: ${{ github.token }}
+          install: |
+            dnf install -y gcc make rpm-build rpmdevtools git
+            dnf install -y openssl-devel elfutils-libelf-devel pkgconf-pkg-config
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            source "$HOME/.cargo/env"
+            rustup install ${{ env.NIGHTLY_TOOLCHAIN }}
+            rustup component add rust-src --toolchain ${{ env.NIGHTLY_TOOLCHAIN }}
+            cargo install bpf-linker
+          run: |
+            source "$HOME/.cargo/env"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rpmdev-setuptree
+            VER="${{ steps.version.outputs.version }}"
+            mkdir -p "argus-${VER}"
+            git archive HEAD | tar -x -C "argus-${VER}"
+            tar czf "$HOME/rpmbuild/SOURCES/argus-${VER}.tar.gz" "argus-${VER}"
+            rpmbuild -ba deploy/argus.spec \
+              --define "_version ${VER}" \
+              --define "dist .el9"
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-${{ steps.version.outputs.version }}-el9.aarch64
+          path: ~/rpmbuild/RPMS/**/*.rpm
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: [build-rpm, build-rpm-arm64]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.rpm
+          generate_release_notes: true
