@@ -138,7 +138,7 @@ install_system_deps
 # sudo strips PATH, so cargo/rustup in ~/.cargo/bin become invisible.
 # We recover them via SUDO_USER.
 
-BUILD_USER="${SUDO_USER:-$USER}"
+BUILD_USER="${SUDO_USER:-${USER:-root}}"
 BUILD_HOME=$(eval echo "~$BUILD_USER")
 
 resolve_cargo_env() {
