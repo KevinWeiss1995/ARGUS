@@ -571,7 +571,13 @@ impl DetectionRule for RisingErrorTrendRule {
 }
 
 // ---------------------------------------------------------------------------
-// Predictive: Latency Drift (slab alloc latency deviates from EWMA baseline)
+// Predictive: CQ Latency Drift (completion queue latency deviates from EWMA baseline)
+//
+// Tracks RDMA completion queue latency, NOT slab allocation latency.
+// Slab latency drifts naturally due to kernel allocator behavior (cache
+// pressure, NUMA effects, fragmentation) and produces false degraded
+// classifications when used as a health signal. CQ latency is a direct
+// measure of RDMA path health and a valid drift indicator.
 // ---------------------------------------------------------------------------
 
 pub struct LatencyDriftRule {
@@ -584,7 +590,7 @@ impl LatencyDriftRule {
     pub fn new(z_threshold: f64) -> Self {
         Self {
             z_threshold,
-            stats: RollingStats::new(0.1),
+            stats: RollingStats::with_clamp(0.1, 5.0),
         }
     }
 }
@@ -609,7 +615,11 @@ impl DetectionRule for LatencyDriftRule {
     }
 
     fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
-        let latency = metrics.slab_metrics.avg_latency_ns() as f64;
+        let cq = &metrics.cq_jitter;
+        if cq.completion_count == 0 {
+            return None;
+        }
+        let latency = cq.total_latency_ns as f64 / cq.completion_count as f64;
         let z = self.stats.z_score(latency);
         self.stats.push(latency);
 
@@ -617,7 +627,7 @@ impl DetectionRule for LatencyDriftRule {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::LatencyDrift {
-                    metric_name: "slab_avg_latency_ns".into(),
+                    metric_name: "cq_avg_latency_ns".into(),
                     z_score: z,
                     current_value: latency,
                     ewma: self.stats.mean(),
@@ -628,7 +638,7 @@ impl DetectionRule for LatencyDriftRule {
                     HealthState::Degraded
                 },
                 message: format!(
-                    "Slab latency drift: {latency:.0}ns (z={z:.1}, baseline={:.0}ns)",
+                    "CQ latency drift: {latency:.0}ns (z={z:.1}, baseline={:.0}ns)",
                     self.stats.mean()
                 ),
             })

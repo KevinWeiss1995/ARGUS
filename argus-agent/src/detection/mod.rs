@@ -600,9 +600,15 @@ impl DetectionEngine {
             score += (soft_rate * 100.0).min(1.0) * 0.25;
         }
 
-        // Slab pressure component (0..0.05)
+        // Slab pressure component (0..0.05) — only contributes when correlated
+        // with actual network backlog (CQ stalls or IB errors). Slab latency
+        // drifts naturally due to kernel allocator behavior and produces false
+        // degraded classifications when used as a standalone signal.
         let slab_latency = metrics.slab_metrics.avg_latency_ns();
-        if slab_latency > 1000 {
+        let has_network_backlog = metrics.cq_jitter.stall_count > 0
+            || d.total_soft_error_delta() > 0
+            || d.total_hard_error_delta() > 0;
+        if slab_latency > 1000 && has_network_backlog {
             score += ((slab_latency as f64 - 1000.0) / 10000.0).min(1.0) * 0.05;
         }
 
