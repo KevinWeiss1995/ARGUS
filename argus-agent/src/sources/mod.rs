@@ -6,8 +6,12 @@ pub mod ebpf_parse;
 pub mod hwcounters;
 #[cfg(target_os = "linux")]
 pub mod kallsyms;
+#[cfg(target_os = "linux")]
+pub mod kernel_compat;
 pub mod mock;
 pub mod process_resolver;
+#[cfg(target_os = "linux")]
+pub mod procfs;
 pub mod replay;
 #[cfg(target_os = "linux")]
 pub mod tracepoint_format;
