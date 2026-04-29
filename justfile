@@ -139,10 +139,39 @@ audit:
     cargo deny check advisories
 
 # ---------------------------------------------------------------------------
-# Deployment
+# Packaging
 # ---------------------------------------------------------------------------
 
-# Build and install argusd as a systemd service (requires sudo)
+# Build RPM package locally (requires rpmbuild, rpmdevtools)
+rpm version="0.0.0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    cargo xtask build-ebpf --release || echo "WARNING: eBPF build skipped"
+    rpmdev-setuptree
+    VER="{{version}}"
+    mkdir -p "argus-${VER}"
+    git archive HEAD | tar -x -C "argus-${VER}"
+    # Copy pre-built artifacts into the source tree
+    mkdir -p "argus-${VER}/target/release"
+    cp target/release/argus-agent "argus-${VER}/target/release/"
+    if [ -f argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf ]; then
+        mkdir -p "argus-${VER}/argus-ebpf/target/bpfel-unknown-none/release"
+        cp argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf \
+           "argus-${VER}/argus-ebpf/target/bpfel-unknown-none/release/"
+    fi
+    tar czf "$HOME/rpmbuild/SOURCES/argus-${VER}.tar.gz" "argus-${VER}"
+    rm -rf "argus-${VER}"
+    rpmbuild -ba deploy/argus.spec --define "_version ${VER}"
+    @echo ""
+    @echo "RPMs built:"
+    @find ~/rpmbuild/RPMS -name '*.rpm' -ls
+
+# ---------------------------------------------------------------------------
+# Deployment (dev workflow)
+# ---------------------------------------------------------------------------
+
+# Build and install argusd as a systemd service (requires sudo, dev only)
 install:
     sudo scripts/install.sh
 
