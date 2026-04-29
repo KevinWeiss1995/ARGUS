@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# ARGUS install script — builds and installs argusd as a systemd service.
+# ARGUS developer install script — builds from source and installs locally.
+#
+# ============================================================================
+#   FOR PRODUCTION DEPLOYMENTS: Use the RPM package instead.
+#   See deploy/argus.spec or download pre-built RPMs from GitHub Releases.
+#   This script is for development and testing only.
+# ============================================================================
 #
 # Usage:
 #   sudo ./scripts/install.sh            # full build + install
 #   sudo ./scripts/install.sh --no-build # install pre-built binaries only
+#   sudo ./scripts/install.sh --no-ebpf  # skip eBPF build (Tier 2 only)
 #
-# The script will:
-#   1. Detect the invoking user's Rust toolchain (handles sudo PATH correctly)
-#   2. Install missing prerequisites (nightly, rust-src, bpf-linker)
-#   3. Build as the invoking user (not root — cargo hates that)
-#   4. Install binaries, config, and systemd unit as root
-#
-# Installed paths:
+# Installed paths (dev layout — differs from RPM FHS paths):
 #   /usr/local/bin/argusd                  — agent binary
 #   /usr/local/lib/argus/argus-ebpf       — eBPF object
 #   /etc/argus/argusd.conf                 — env configuration (preserved on upgrade)
@@ -71,12 +72,22 @@ require_root() {
 
 require_root
 
+warn "======================================================================"
+warn "  This is the DEVELOPER install script (builds from source)."
+warn "  For production clusters, use the RPM package instead:"
+warn "    dnf install argus-*.rpm"
+warn "======================================================================"
+echo ""
+
 if [[ ! -f "$REPO_ROOT/Cargo.toml" ]]; then
     die "Run this script from the ARGUS repo root (or via scripts/install.sh)"
 fi
 
+HAS_SYSTEMD=true
 if ! systemctl --version &>/dev/null; then
-    die "systemd not found — this installer requires a systemd-based Linux system"
+    HAS_SYSTEMD=false
+    warn "systemd not found — systemd unit will not be installed"
+    warn "You can run argusd directly: argusd --mode live --ebpf-path /usr/local/lib/argus/argus-ebpf"
 fi
 
 # --- System build dependencies ---
@@ -262,7 +273,10 @@ if [[ -f "$INSTALL_CONF" ]]; then
     warn "New defaults are in $REPO_ROOT/deploy/argusd.conf for reference"
 else
     info "Installing default config to $INSTALL_CONF"
-    install -m 0644 "$REPO_ROOT/deploy/argusd.conf" "$INSTALL_CONF"
+    # Patch eBPF path from FHS (/usr/lib) to dev layout (/usr/local/lib)
+    sed 's|/usr/lib/argus|/usr/local/lib/argus|g' \
+        "$REPO_ROOT/deploy/argusd.conf" > "$INSTALL_CONF"
+    chmod 0644 "$INSTALL_CONF"
     ok "$INSTALL_CONF"
 fi
 
@@ -280,11 +294,18 @@ mkdir -p /var/lib/argus /var/run/argus
 ok "Runtime directories (/var/lib/argus, /var/run/argus)"
 
 # --- Install systemd unit ---
-
-info "Installing systemd unit to $INSTALL_UNIT"
-install -m 0644 "$REPO_ROOT/deploy/argusd.service" "$INSTALL_UNIT"
-systemctl daemon-reload
-ok "$INSTALL_UNIT (daemon-reload done)"
+if [[ "$HAS_SYSTEMD" == true ]]; then
+    # The canonical argusd.service uses FHS paths (/usr/bin). For dev installs
+    # we patch the path to /usr/local/bin so it matches where we actually installed.
+    info "Installing systemd unit to $INSTALL_UNIT"
+    sed 's|/usr/bin/argusd|/usr/local/bin/argusd|g' \
+        "$REPO_ROOT/deploy/argusd.service" > "$INSTALL_UNIT"
+    chmod 0644 "$INSTALL_UNIT"
+    systemctl daemon-reload
+    ok "$INSTALL_UNIT (daemon-reload done)"
+else
+    warn "Skipping systemd unit installation (no systemd)"
+fi
 
 # --- Done ---
 
@@ -324,9 +345,13 @@ else
     echo "                     Fallback: procfs/sysfs collection (eBPF unavailable)"
 fi
 echo ""
-echo "  Enable on boot:   systemctl enable argusd"
-echo "  Start now:         systemctl start argusd"
-echo "  View logs:         journalctl -u argusd -f"
+if [[ "$HAS_SYSTEMD" == true ]]; then
+    echo "  Enable on boot:   systemctl enable argusd"
+    echo "  Start now:         systemctl start argusd"
+    echo "  View logs:         journalctl -u argusd -f"
+else
+    echo "  Run directly:      argusd --mode live --ebpf-path $INSTALL_EBPF"
+fi
 echo "  Check metrics:     curl localhost:9100/metrics"
 echo ""
 echo "  Config files:"
