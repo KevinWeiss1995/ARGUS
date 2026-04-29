@@ -31,9 +31,16 @@ static OFFSETS: Array<u32> = Array::with_max_entries(8, 0);
 static IRQ_COUNTS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
 /// Per-CPU slab allocation statistics.
-/// Layout: [alloc_count, free_count, total_bytes_req, total_bytes_alloc]
+/// Layout: [alloc_count, free_count, total_bytes_req, total_bytes_alloc,
+///          total_latency_ns, max_latency_ns]
 #[map]
-static SLAB_STATS: PerCpuArray<[u64; 4]> = PerCpuArray::with_max_entries(1, 0);
+static SLAB_STATS: PerCpuArray<[u64; 6]> = PerCpuArray::with_max_entries(1, 0);
+
+/// Scratch space for slab kprobe entry→return latency correlation.
+/// Key = pid_tgid (identifies the thread calling kmem_cache_alloc).
+/// Value = ktime_ns at function entry.
+#[map]
+static SLAB_ALLOC_SCRATCH: LruHashMap<u64, u64> = LruHashMap::with_max_entries(256, 0);
 
 /// Per-CPU NAPI poll statistics.
 /// Layout: [poll_count, total_work, total_budget]
