@@ -39,7 +39,7 @@ spec:
           args:
             - "--mode=live"
             - "--ebpf-path=/usr/local/lib/argus/argus-ebpf"
-            - "--metrics-addr=0.0.0.0:9100"
+            - "--metrics-addr=[::]:9100"
             - "--log-level=info"
           securityContext:
             privileged: true
