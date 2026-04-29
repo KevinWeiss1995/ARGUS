@@ -2,11 +2,11 @@
 
 **Adaptive RDMA Guard & Utilization Sentinel**
 
-ARGUS is a lightweight, node-local telemetry agent that uses eBPF to detect InfiniBand link degradation before applications are affected. It monitors kernel-level signals — interrupt distribution, slab allocation latency, NAPI saturation, and CQ completion jitter — alongside IB hardware counters, then runs them through a capability-driven detection engine that adapts to available hardware, drivers, and kernel versions at runtime. Each node is classified as **Healthy**, **Degraded**, or **Critical** via a hardened state machine with confidence-weighted signal fusion, anti-flapping smoothing, and asymmetric hysteresis. When integrated with a workload scheduler (e.g., SLURM), ARGUS can automatically drain unhealthy nodes and resume them once they recover.
+ARGUS is a lightweight, node-local telemetry agent that uses eBPF to detect InfiniBand link degradation before applications are affected. It monitors kernel-level signals (interrupt distribution, slab allocation latency, NAPI saturation, and CQ completion jitter) alongside IB hardware counters, then runs them through a capability-driven detection engine that adapts to available hardware, drivers, and kernel versions at runtime. Each node is classified as **Healthy**, **Degraded**, or **Critical** via a hardened state machine with confidence-weighted signal fusion, anti-flapping smoothing, and asymmetric hysteresis. When integrated with a workload scheduler (e.g., SLURM, Kubernetes), ARGUS can automatically drain unhealthy nodes and resume them once they recover.
 
 Metrics are exposed as a standard Prometheus endpoint. If you already run Grafana, jump to [Integrate with existing Prometheus + Grafana](#option-b-integrate-with-existing-prometheus--grafana).
 
-*ARGUS is under active development. We'd love your help — email kjweiss1995@gmail.com if this project interests you.*
+*ARGUS is under active development. We'd love your help - email kjweiss1995@gmail.com if this project interests you.*
 
 ## What it monitors
 
