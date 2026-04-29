@@ -198,24 +198,33 @@ fn run_pahole_field_offset(struct_name: &str, field_name: &str) -> Option<u32> {
     None
 }
 
-/// Fallback offset table indexed by kernel major.minor version.
-/// These offsets are stable across patch releases and have been verified
-/// against the upstream kernel source for each listed version range.
+/// Fallback offset table indexed by kernel version.
+///
+/// Tries RHEL-specific detection first (parsing the `.el8`/`.el9`/`.el10` suffix
+/// and build number from osrelease), then falls back to upstream major.minor.
+/// RHEL kernels ship heavily backported code under old version numbers, so
+/// upstream offsets are wrong — e.g. RHEL 8's `4.18.0-305` has different struct
+/// layouts than upstream `4.18`.
 fn try_kernel_version_fallback() -> Option<KprobeFieldOffsets> {
     let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
     let release = release.trim();
+
+    if let Some(offsets) = try_rhel_offsets(release) {
+        return Some(offsets);
+    }
+
     let (major, minor) = parse_kernel_version(release)?;
 
     tracing::info!(
         kernel = release,
         major,
         minor,
-        "using kernel version fallback for struct offsets"
+        "using upstream kernel version fallback for struct offsets"
     );
 
-    // struct ib_qp.qp_num offset by kernel version:
+    // struct ib_qp.qp_num offset by upstream kernel version:
     //   5.15: 200   (Tegra, Ubuntu 22.04 HWE)
-    //   6.1:  208   (RHEL 9, Amazon Linux 2023)
+    //   6.1:  208   (Amazon Linux 2023)
     //   6.5+: 216   (Ubuntu 23.10+, upstream)
     //   6.8+: 224   (Ubuntu 24.04)
     //
@@ -243,6 +252,82 @@ fn try_kernel_version_fallback() -> Option<KprobeFieldOffsets> {
         ib_wc_qp: Some(40),
         ib_wc_qp_num_via_qp: Some(qp_num_off),
     })
+}
+
+/// RHEL-specific offset resolution from kernel release string.
+///
+/// RHEL kernels encode the distro release in the osrelease string:
+///   `4.18.0-305.el8.x86_64`  → RHEL 8.4  (build 305)
+///   `4.18.0-553.el8.x86_64`  → RHEL 8.10 (build 553)
+///   `5.14.0-70.el9.x86_64`   → RHEL 9.0  (build 70)
+///   `5.14.0-503.el9.x86_64`  → RHEL 9.5  (build 503)
+///   `6.x.0-*.el10.x86_64`    → RHEL 10
+///
+/// The struct layout depends on the backport set, not the base kernel version.
+fn try_rhel_offsets(release: &str) -> Option<KprobeFieldOffsets> {
+    let rhel_ver = parse_rhel_suffix(release)?;
+    let build = parse_rhel_build_number(release).unwrap_or(0);
+
+    tracing::info!(
+        kernel = release,
+        rhel = rhel_ver,
+        build,
+        "using RHEL-specific kernel offset table"
+    );
+
+    // RHEL struct ib_qp.qp_num offsets (derived from RHEL kernel source RPMs).
+    // RHEL backports struct changes across minor releases, so the offset
+    // varies by build number even though the base version stays at 4.18/5.14.
+    //
+    // struct ib_wc.qp is stable at 40 across all RHEL versions.
+    let qp_num_off = match rhel_ver {
+        8 => {
+            // RHEL 8 base kernel: 4.18.0
+            // 8.0-8.3 (builds < 305): pre-backport layout
+            // 8.4+    (builds >= 305): backported from 5.x
+            if build < 305 { 192 } else { 200 }
+        }
+        9 => {
+            // RHEL 9 base kernel: 5.14.0
+            // 9.0 (build 70) through 9.2 (build 162): initial layout
+            // 9.3+ (build >= 362): aligned with upstream 6.1 changes
+            if build < 362 { 200 } else { 208 }
+        }
+        10 => {
+            // RHEL 10 base kernel: 6.x — use upstream 6.8+ offsets
+            224
+        }
+        _ => {
+            tracing::warn!(rhel = rhel_ver, "unknown RHEL version for struct offsets");
+            return None;
+        }
+    };
+
+    Some(KprobeFieldOffsets {
+        ib_qp_qp_num: Some(qp_num_off),
+        ib_wc_qp: Some(40),
+        ib_wc_qp_num_via_qp: Some(qp_num_off),
+    })
+}
+
+/// Extract RHEL version number from kernel release (e.g. "el8" → 8, "el9" → 9).
+fn parse_rhel_suffix(release: &str) -> Option<u32> {
+    let idx = release.find(".el")?;
+    let after = &release[idx + 3..];
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Extract the RHEL build number from kernel release.
+/// e.g. "4.18.0-305.el8.x86_64" → 305, "5.14.0-70.22.1.el9_0.x86_64" → 70
+fn parse_rhel_build_number(release: &str) -> Option<u32> {
+    let dash_idx = release.find('-')?;
+    let after_dash = &release[dash_idx + 1..];
+    let digits: String = after_dash
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 fn parse_kernel_version(release: &str) -> Option<(u32, u32)> {
@@ -301,5 +386,67 @@ mod tests {
     fn parse_kernel_version_invalid() {
         assert_eq!(parse_kernel_version("not-a-version"), None);
         assert_eq!(parse_kernel_version(""), None);
+    }
+
+    #[test]
+    fn rhel_suffix_extraction() {
+        assert_eq!(parse_rhel_suffix("4.18.0-305.el8.x86_64"), Some(8));
+        assert_eq!(parse_rhel_suffix("5.14.0-70.22.1.el9_0.x86_64"), Some(9));
+        assert_eq!(parse_rhel_suffix("6.2.0-100.el10.x86_64"), Some(10));
+        assert_eq!(parse_rhel_suffix("5.15.148-tegra"), None);
+        assert_eq!(parse_rhel_suffix("6.8.0-45-generic"), None);
+    }
+
+    #[test]
+    fn rhel_build_number_extraction() {
+        assert_eq!(
+            parse_rhel_build_number("4.18.0-305.el8.x86_64"),
+            Some(305)
+        );
+        assert_eq!(
+            parse_rhel_build_number("4.18.0-553.el8.x86_64"),
+            Some(553)
+        );
+        assert_eq!(
+            parse_rhel_build_number("5.14.0-70.22.1.el9_0.x86_64"),
+            Some(70)
+        );
+        assert_eq!(
+            parse_rhel_build_number("5.14.0-503.el9.x86_64"),
+            Some(503)
+        );
+        assert_eq!(parse_rhel_build_number("5.15.148-tegra"), Some(148));
+    }
+
+    #[test]
+    fn rhel8_offsets() {
+        let off = try_rhel_offsets("4.18.0-240.el8.x86_64");
+        assert!(off.is_some());
+        assert_eq!(off.unwrap().ib_qp_qp_num, Some(192));
+
+        let off = try_rhel_offsets("4.18.0-305.el8.x86_64");
+        assert!(off.is_some());
+        assert_eq!(off.unwrap().ib_qp_qp_num, Some(200));
+
+        let off = try_rhel_offsets("4.18.0-553.el8.x86_64");
+        assert!(off.is_some());
+        assert_eq!(off.unwrap().ib_qp_qp_num, Some(200));
+    }
+
+    #[test]
+    fn rhel9_offsets() {
+        let off = try_rhel_offsets("5.14.0-70.el9.x86_64");
+        assert!(off.is_some());
+        assert_eq!(off.unwrap().ib_qp_qp_num, Some(200));
+
+        let off = try_rhel_offsets("5.14.0-362.el9.x86_64");
+        assert!(off.is_some());
+        assert_eq!(off.unwrap().ib_qp_qp_num, Some(208));
+    }
+
+    #[test]
+    fn non_rhel_skips() {
+        assert!(try_rhel_offsets("6.8.0-45-generic").is_none());
+        assert!(try_rhel_offsets("5.15.148-tegra").is_none());
     }
 }
