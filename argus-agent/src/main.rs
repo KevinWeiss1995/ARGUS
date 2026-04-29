@@ -237,26 +237,59 @@ fn run_live_mode(
     >,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    let ebpf_path = config
-        .ebpf_path
-        .as_ref()
-        .context("--ebpf-path <path> is required in live mode")?;
+    let kernel_caps = argus_agent::sources::kernel_compat::KernelCapabilities::detect();
+    kernel_caps.log_summary();
+    let tier = kernel_caps.determine_tier();
+    tracing::info!(%tier, "operating tier determined");
 
-    if !ebpf_path.exists() {
-        bail!(
-            "eBPF artifact not found: {}\nBuild it with: just build-ebpf",
-            ebpf_path.display()
-        );
+    let mut ebpf_source: Option<argus_agent::sources::ebpf::EbpfEventSource> = None;
+    let mut procfs_source: Option<argus_agent::sources::procfs::ProcfsCollector> = None;
+
+    if matches!(tier, argus_agent::sources::kernel_compat::OperatingTier::Tier1) {
+        if let Some(ref ebpf_path) = config.ebpf_path {
+            if ebpf_path.exists() {
+                if let Some(ref expected_hash) = config.ebpf_hash {
+                    verify_ebpf_hash(ebpf_path, expected_hash)?;
+                }
+                match argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path) {
+                    Ok(src) => {
+                        tracing::info!("eBPF probes loaded successfully");
+                        ebpf_source = Some(src);
+                    }
+                    Err(e) => {
+                        tracing::warn!("eBPF load failed, falling back to procfs/sysfs: {e}");
+                        procfs_source = Some(argus_agent::sources::procfs::ProcfsCollector::new());
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    path = %ebpf_path.display(),
+                    "eBPF artifact not found, falling back to procfs/sysfs"
+                );
+                procfs_source = Some(argus_agent::sources::procfs::ProcfsCollector::new());
+            }
+        } else {
+            tracing::warn!("no --ebpf-path specified, falling back to procfs/sysfs");
+            procfs_source = Some(argus_agent::sources::procfs::ProcfsCollector::new());
+        }
+    } else {
+        tracing::info!("Tier 2 mode: eBPF unavailable, using procfs/sysfs collection");
+        procfs_source = Some(argus_agent::sources::procfs::ProcfsCollector::new());
     }
 
-    if let Some(ref expected_hash) = config.ebpf_hash {
-        verify_ebpf_hash(ebpf_path, expected_hash)?;
+    if ebpf_source.is_some() {
+        dash_state.source_name = "ebpf/live".into();
+    } else {
+        dash_state.source_name = "procfs/sysfs".into();
     }
 
-    let mut ebpf_source = argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path)
-        .map_err(|e| anyhow::anyhow!("failed to load eBPF probes: {e}"))?;
-
-    dash_state.source_name = "ebpf/live".into();
+    if let Ok(exp) = prom_exporter.lock() {
+        let tier_val = match tier {
+            argus_agent::sources::kernel_compat::OperatingTier::Tier1 => 1,
+            argus_agent::sources::kernel_compat::OperatingTier::Tier2 => 2,
+        };
+        exp.set_operating_tier(tier_val);
+    }
 
     argus_agent::security::drop_privileges();
     if config.seccomp {
@@ -282,8 +315,14 @@ fn run_live_mode(
     let mut window_start = std::time::Instant::now();
     let mut event_count = 0u64;
 
-    // Take an initial BPF snapshot to establish baselines (deltas will be zero).
-    let _ = ebpf_source.read_bpf_snapshot();
+    // Take an initial snapshot to establish baselines (deltas will be zero).
+    if let Some(ref mut ebpf) = ebpf_source {
+        let _ = ebpf.read_bpf_snapshot();
+    }
+    if let Some(ref mut pfs) = procfs_source {
+        let _ = pfs.read_snapshot();
+    }
+    let mut zero_window_count: u32 = 0;
 
     loop {
         if *shutdown_rx.borrow() {
@@ -298,12 +337,40 @@ fn run_live_mode(
         }
 
         if window_start.elapsed() >= window_duration {
-            let snap = ebpf_source.read_bpf_snapshot();
-            event_count += snap.total_irq_count
-                + snap.slab_alloc_count
-                + snap.slab_free_count
-                + snap.napi_poll_count;
-            pipeline.ingest_bpf_snapshot(&snap);
+            let mut window_events = 0u64;
+
+            if let Some(ref mut ebpf) = ebpf_source {
+                let snap = ebpf.read_bpf_snapshot();
+                window_events += snap.total_irq_count
+                    + snap.slab_alloc_count
+                    + snap.slab_free_count
+                    + snap.napi_poll_count;
+                pipeline.ingest_bpf_snapshot(&snap);
+
+                if window_events == 0 {
+                    zero_window_count += 1;
+                    if zero_window_count == 3 {
+                        tracing::warn!(
+                            "all eBPF counters have been zero for 3 consecutive windows — \
+                             probes may not be firing"
+                        );
+                    }
+                } else {
+                    zero_window_count = 0;
+                }
+            } else if let Some(ref mut pfs) = procfs_source {
+                let snap = pfs.read_snapshot();
+                window_events += snap.total_irq_count + snap.total_softnet_processed;
+                pipeline.ingest_procfs_snapshot(&snap);
+            }
+
+            event_count += window_events;
+
+            if ebpf_source.is_some() {
+                if let Ok(exp) = prom_exporter.lock() {
+                    exp.set_ebpf_probes_firing(window_events > 0);
+                }
+            }
 
             for hw_event in hw_reader.read_all() {
                 pipeline.ingest(&hw_event);
@@ -311,7 +378,10 @@ fn run_live_mode(
 
             let alerts = pipeline.evaluate();
             if !alerts.is_empty() {
-                let qp_owners = ebpf_source.read_qp_owners();
+                let qp_owners = ebpf_source
+                    .as_ref()
+                    .map(|e| e.read_qp_owners())
+                    .unwrap_or_default();
                 let blast = process_resolver.resolve_blast_radius(&qp_owners);
                 if !blast.is_empty() {
                     tracing::info!(affected = blast.summary(), "blast radius resolved");
