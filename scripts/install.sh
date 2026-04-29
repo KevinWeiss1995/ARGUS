@@ -35,13 +35,16 @@ INSTALL_TOML="$INSTALL_CONF_DIR/argusd.toml"
 INSTALL_UNIT="/etc/systemd/system/argusd.service"
 
 NO_BUILD=false
+NO_EBPF=false
 
 for arg in "$@"; do
     case "$arg" in
         --no-build) NO_BUILD=true ;;
+        --no-ebpf)  NO_EBPF=true ;;
         --help|-h)
-            echo "Usage: sudo $0 [--no-build]"
+            echo "Usage: sudo $0 [--no-build] [--no-ebpf]"
             echo "  --no-build   Skip compilation, install pre-built binaries"
+            echo "  --no-ebpf    Skip eBPF build (Tier 2 procfs/sysfs mode only)"
             exit 0
             ;;
         *)
@@ -106,14 +109,14 @@ install_system_deps() {
         fi
     elif command -v dnf &>/dev/null; then
         if ! rpm -q gcc &>/dev/null 2>&1; then
-            info "Installing gcc and development tools..."
-            dnf install -y gcc make pkg-config openssl-devel
+            info "Installing gcc and development tools (RHEL/dnf)..."
+            dnf install -y gcc make pkgconf-pkg-config openssl-devel elfutils-libelf-devel
             ok "System build dependencies installed"
         fi
     elif command -v yum &>/dev/null; then
         if ! rpm -q gcc &>/dev/null 2>&1; then
-            info "Installing gcc and development tools..."
-            yum install -y gcc make pkg-config openssl-devel
+            info "Installing gcc and development tools (yum)..."
+            yum install -y gcc make pkgconf-pkg-config openssl-devel elfutils-libelf-devel
             ok "System build dependencies installed"
         fi
     elif command -v pacman &>/dev/null; then
@@ -195,17 +198,21 @@ if [[ "$NO_BUILD" == false ]]; then
         as_build_user rustup component add rust-src --toolchain nightly
     fi
 
-    if ! command -v bpf-linker &>/dev/null; then
-        info "Installing bpf-linker (this may take a few minutes)..."
-        as_build_user cargo install bpf-linker
-    fi
-
     info "Building agent (release)..."
     cd "$REPO_ROOT"
     as_build_user cargo build --release
 
-    info "Building eBPF programs (release)..."
-    as_build_user cargo xtask build-ebpf --release
+    if [[ "$NO_EBPF" == false ]]; then
+        if ! command -v bpf-linker &>/dev/null; then
+            info "Installing bpf-linker (this may take a few minutes)..."
+            as_build_user cargo install bpf-linker
+        fi
+
+        info "Building eBPF programs (release)..."
+        as_build_user cargo xtask build-ebpf --release
+    else
+        warn "Skipping eBPF build (--no-ebpf). Agent will run in Tier 2 (procfs/sysfs) mode."
+    fi
 
     ok "Build complete"
 fi
@@ -217,7 +224,11 @@ if [[ ! -f "$AGENT_BIN" ]]; then
 fi
 
 if [[ ! -f "$EBPF_BIN" ]]; then
-    die "eBPF binary not found at $EBPF_BIN — run without --no-build first"
+    if [[ "$NO_EBPF" == true ]]; then
+        warn "eBPF binary not found (--no-ebpf mode). Agent will use procfs/sysfs fallback."
+    else
+        die "eBPF binary not found at $EBPF_BIN — run without --no-build first (or use --no-ebpf)"
+    fi
 fi
 
 # --- Install binaries ---
@@ -226,10 +237,14 @@ info "Installing argusd to $INSTALL_BIN"
 install -m 0755 "$AGENT_BIN" "$INSTALL_BIN"
 ok "$INSTALL_BIN"
 
-info "Installing eBPF object to $INSTALL_EBPF"
-mkdir -p "$INSTALL_EBPF_DIR"
-install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
-ok "$INSTALL_EBPF"
+if [[ -f "$EBPF_BIN" ]]; then
+    info "Installing eBPF object to $INSTALL_EBPF"
+    mkdir -p "$INSTALL_EBPF_DIR"
+    install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
+    ok "$INSTALL_EBPF"
+else
+    warn "eBPF object not available — skipping (Tier 2 mode)"
+fi
 
 info "Installing CLI tools to /usr/local/bin"
 for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
@@ -273,10 +288,41 @@ ok "$INSTALL_UNIT (daemon-reload done)"
 
 # --- Done ---
 
+# --- Detect and report operating tier ---
+
+detect_tier() {
+    if [[ ! -f "$INSTALL_EBPF" ]]; then
+        echo "Tier 2"
+        return
+    fi
+    if [[ -f /sys/kernel/security/lockdown ]]; then
+        local mode
+        mode=$(cat /sys/kernel/security/lockdown 2>/dev/null || echo "")
+        if [[ "$mode" == *"[confidentiality]"* ]]; then
+            echo "Tier 2"
+            return
+        fi
+    fi
+    if [[ -d /sys/kernel/tracing ]] || [[ -d /sys/kernel/debug/tracing ]]; then
+        echo "Tier 1"
+    else
+        echo "Tier 2"
+    fi
+}
+
+DETECTED_TIER=$(detect_tier)
+
 echo ""
 echo "============================================"
 echo "  ARGUS installed successfully"
 echo "============================================"
+echo ""
+echo "  Detected tier:    $DETECTED_TIER (eBPF=${DETECTED_TIER##Tier })"
+if [[ "$DETECTED_TIER" == "Tier 1" ]]; then
+    echo "                     Full eBPF: tracepoints + kprobes + kretprobes"
+else
+    echo "                     Fallback: procfs/sysfs collection (eBPF unavailable)"
+fi
 echo ""
 echo "  Enable on boot:   systemctl enable argusd"
 echo "  Start now:         systemctl start argusd"
