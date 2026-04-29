@@ -3,6 +3,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod actions;
+pub mod capabilities;
 pub mod config;
 pub mod detection;
 pub mod pipeline;

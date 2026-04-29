@@ -1,4 +1,4 @@
-use argus_common::{AggregatedMetrics, Alert, AlertKind, HealthState};
+use argus_common::{AggregatedMetrics, Alert, AlertKind, Capability, HealthState};
 
 /// A detection rule evaluates aggregated metrics and optionally produces an alert.
 ///
@@ -12,6 +12,14 @@ pub trait DetectionRule: Send + Sync {
     /// Override for rules that maintain internal state across windows.
     fn evaluate_mut(&mut self, metrics: &AggregatedMetrics) -> Option<Alert> {
         self.evaluate(metrics)
+    }
+
+    /// Capabilities this rule consults. Used by the fusion layer to scale
+    /// the rule's severity contribution by data-quality coverage. An empty
+    /// slice means the rule operates on host-level signals (IRQ, slab, NAPI)
+    /// that have no dependency on RDMA capability availability.
+    fn capabilities_consulted(&self) -> &[Capability] {
+        &[]
     }
 }
 
@@ -111,6 +119,10 @@ impl Default for RdmaLatencySpikeRule {
 impl DetectionRule for RdmaLatencySpikeRule {
     fn name(&self) -> &str {
         "rdma_latency_spike"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::CompletionLatency];
+        C
     }
 
     fn evaluate(&self, metrics: &AggregatedMetrics) -> Option<Alert> {
@@ -247,6 +259,10 @@ fn format_error_parts(d: &argus_common::IbCounterDeltas) -> String {
 impl DetectionRule for RdmaLinkDegradationRule {
     fn name(&self) -> &str {
         "rdma_link_degradation"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::LinkErrors, Capability::RetransmitSignal];
+        C
     }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
@@ -519,6 +535,10 @@ impl DetectionRule for RisingErrorTrendRule {
     fn name(&self) -> &str {
         "rising_error_trend"
     }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::LinkErrors];
+        C
+    }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
         None
@@ -578,6 +598,10 @@ impl Default for LatencyDriftRule {
 impl DetectionRule for LatencyDriftRule {
     fn name(&self) -> &str {
         "latency_drift"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::CompletionLatency];
+        C
     }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
@@ -645,6 +669,10 @@ impl Default for ThroughputDropRule {
 impl DetectionRule for ThroughputDropRule {
     fn name(&self) -> &str {
         "throughput_drop"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::Throughput];
+        C
     }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
@@ -721,6 +749,10 @@ impl Default for CqJitterRule {
 impl DetectionRule for CqJitterRule {
     fn name(&self) -> &str {
         "cq_jitter_stall"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::CompletionLatency];
+        C
     }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {
@@ -875,6 +907,10 @@ impl Default for CongestionSpreadRule {
 impl DetectionRule for CongestionSpreadRule {
     fn name(&self) -> &str {
         "congestion_spread"
+    }
+    fn capabilities_consulted(&self) -> &[Capability] {
+        const C: &[Capability] = &[Capability::PfcPause, Capability::CreditStall];
+        C
     }
 
     fn evaluate(&self, _metrics: &AggregatedMetrics) -> Option<Alert> {

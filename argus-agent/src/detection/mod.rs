@@ -1,7 +1,10 @@
+pub mod burst;
+pub mod fusion;
 pub mod rolling_stats;
 pub mod rules;
+pub mod timescale;
 
-use argus_common::{AggregatedMetrics, Alert, HealthState};
+use argus_common::{AggregatedMetrics, Alert, CoverageReport, HealthState, Sample};
 use rules::{
     CongestionSpreadRule, CqJitterRule, DetectionRule, InterruptAffinitySkewRule, LatencyDriftRule,
     NapiSaturationRule, PcieBottleneckRule, RdmaLatencySpikeRule, RdmaLinkDegradationRule,
@@ -34,12 +37,20 @@ pub struct SmoothedHealthScore {
 impl SmoothedHealthScore {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_params(0.3, 0.85)
+    }
+
+    /// Construct with custom EWMA alpha and peak decay.
+    /// Used by the multi-timescale evaluator to spawn fast/slow tracks
+    /// with different time constants.
+    #[must_use]
+    pub fn with_params(alpha: f64, peak_decay: f64) -> Self {
         Self {
             ewma: 0.0,
             peak_hold: 0.0,
             prev_raw: 0.0,
-            alpha: 0.3,
-            peak_decay: 0.85,
+            alpha: alpha.clamp(0.001, 1.0),
+            peak_decay: peak_decay.clamp(0.0, 0.999),
             window_count: 0,
         }
     }
@@ -335,6 +346,15 @@ pub struct DetectionEngine {
     score: SmoothedHealthScore,
     num_cpus: u32,
     prev_raw_score: f64,
+    last_sample_contribution: f64,
+    /// Parallel timescale tracks. The composite verdict (worst of three)
+    /// is published via `multi_timescale_state()`. The legacy single-track
+    /// `state_machine` remains the authoritative source for the agent's
+    /// scheduler integration today; `multi_timescale` is exposed for
+    /// telemetry and future consumers.
+    multi_timescale: timescale::MultiTimescaleEvaluator,
+    /// Token-bucket burst-vs-sustained classifier.
+    burst_classifier: burst::BurstClassifier,
 }
 
 impl DetectionEngine {
@@ -373,11 +393,35 @@ impl DetectionEngine {
                 Box::new(CongestionSpreadRule::default()),
                 Box::new(PcieBottleneckRule::default()),
             ],
-            state_machine: HealthStateMachine::new(sm_config),
+            state_machine: HealthStateMachine::new(sm_config.clone()),
             score: SmoothedHealthScore::new(),
             num_cpus: config.num_cpus,
             prev_raw_score: 0.0,
+            last_sample_contribution: 0.0,
+            multi_timescale: timescale::MultiTimescaleEvaluator::new(sm_config),
+            burst_classifier: burst::BurstClassifier::default(),
         }
+    }
+
+    /// Composite state across fast/medium/slow timescales.
+    /// Always equal to or more pessimistic than `current_state()`.
+    #[must_use]
+    pub fn multi_timescale(&self) -> &timescale::MultiTimescaleEvaluator {
+        &self.multi_timescale
+    }
+
+    /// Latest burst classification.
+    #[must_use]
+    pub fn burst_class(&self) -> burst::BurstClass {
+        self.burst_classifier.current()
+    }
+
+    /// Magnitude of the last sample-driven contribution to the raw score.
+    /// Surfaced for observability — a non-zero value means capability
+    /// samples agreed with the rule layer.
+    #[must_use]
+    pub fn last_sample_contribution(&self) -> f64 {
+        self.last_sample_contribution
     }
 
     /// Evaluate all rules against current metrics.
@@ -386,44 +430,94 @@ impl DetectionEngine {
     /// Always returns rule-generated alerts so they're visible to telemetry,
     /// TUI, and scheduler regardless of state transitions.
     pub fn evaluate(&mut self, metrics: &AggregatedMetrics) -> Vec<Alert> {
+        self.evaluate_with_samples(metrics, &[])
+    }
+
+    /// Capability-aware evaluation. Samples produced by capability providers
+    /// flow into the fusion layer alongside legacy rule verdicts.
+    ///
+    /// Without a coverage report the engine still applies a static severity
+    /// floor (back-compat). For the proper confidence-weighted path,
+    /// callers pass coverage via `evaluate_with_coverage`.
+    pub fn evaluate_with_samples(
+        &mut self,
+        metrics: &AggregatedMetrics,
+        samples: &[Sample],
+    ) -> Vec<Alert> {
+        self.evaluate_with_coverage(metrics, samples, None)
+    }
+
+    /// Capability-aware evaluation with optional coverage report for
+    /// confidence-weighted fusion.
+    ///
+    /// Score model:
+    /// ```text
+    /// raw = compute_effective_raw(metrics)
+    /// raw += sample_contribution(samples)         // bounded [0, 0.5]
+    /// raw = max(raw, severity_floor * coverage_w) // coverage-scaled boost
+    /// effective = smooth(raw)                     // EWMA + peak-hold
+    /// ```
+    /// where `coverage_w = max(quality_weight) over capabilities consulted by
+    /// the rule that produced `worst_severity`. When all consulted caps are
+    /// High the boost is full strength; when any are Absent the boost is
+    /// zero — i.e., a rule cannot lift the score without underlying signals.
+    pub fn evaluate_with_coverage(
+        &mut self,
+        metrics: &AggregatedMetrics,
+        samples: &[Sample],
+        coverage: Option<&CoverageReport>,
+    ) -> Vec<Alert> {
         let mut new_alerts = Vec::new();
         let mut worst_severity = HealthState::Healthy;
+        let mut worst_severity_cap_weight: f64 = 1.0;
 
         for rule in &mut self.rules {
             if let Some(alert) = rule.evaluate_mut(metrics) {
                 if severity_rank(alert.severity) > severity_rank(worst_severity) {
                     worst_severity = alert.severity;
+                    let consulted = rule.capabilities_consulted();
+                    worst_severity_cap_weight = if consulted.is_empty() {
+                        // Host-signal rule: no fabric coverage dependency.
+                        1.0
+                    } else if let Some(cov) = coverage {
+                        cov.input_weight(consulted)
+                    } else {
+                        1.0
+                    };
                 }
                 new_alerts.push(alert);
             }
         }
 
-        // Compute raw health score with zero-traffic carry-forward
         let mut raw = self.compute_effective_raw(metrics);
 
-        // Rule severity boost: if detection rules fire at a severity level
-        // that the composite score alone can't reach (e.g., RdmaLinkDegradation
-        // fires Critical for sustained packet loss, but soft error weight caps
-        // at 0.25), use the rule verdict as a score floor. This ensures rule
-        // verdicts can't be silently overridden by insufficient score weights.
-        let severity_floor = match worst_severity {
+        let sample_contribution = fusion::sample_score_contribution(samples);
+        raw = (raw + sample_contribution).min(1.0);
+
+        let severity_floor_base = match worst_severity {
             HealthState::Critical => self.state_machine.config.critical_enter,
             HealthState::Degraded | HealthState::Recovering => {
                 self.state_machine.config.degrade_enter
             }
             HealthState::Healthy => 0.0,
         };
+        // Coverage-weighted floor: when fabric signals are missing, the rule
+        // verdict cannot single-handedly drain a node.
+        let severity_floor = severity_floor_base * worst_severity_cap_weight;
         if severity_floor > raw {
             raw = severity_floor;
         }
 
         self.prev_raw_score = raw;
+        self.last_sample_contribution = sample_contribution;
 
-        // Dual-track smoothing
         let effective = self.score.update(raw);
-
-        // Drive state machine
         self.state_machine.evaluate(effective);
+
+        // Multi-timescale evaluator runs in parallel for telemetry / burst
+        // classification. It does not (yet) drive the scheduler.
+        self.multi_timescale.evaluate(raw);
+        self.burst_classifier.observe(raw, &self.multi_timescale);
 
         new_alerts
     }
@@ -546,6 +640,8 @@ impl DetectionEngine {
         self.state_machine.reset();
         self.score.reset();
         self.prev_raw_score = 0.0;
+        self.multi_timescale.reset();
+        self.burst_classifier.reset();
     }
 }
 
@@ -933,6 +1029,59 @@ mod tests {
         let run1 = run();
         let run2 = run();
         assert_eq!(run1, run2, "state machine must be deterministic across runs");
+    }
+
+    #[test]
+    fn coverage_weighted_severity_floor_attenuates_when_caps_absent() {
+        use argus_common::{
+            Capability, CapabilityCoverage, CoverageGrade, CoverageReport, Quality,
+        };
+
+        // Coverage report claims LinkErrors and RetransmitSignal are Absent.
+        let coverage = CoverageReport {
+            grade: CoverageGrade::F,
+            fabric: None,
+            capabilities: vec![
+                CapabilityCoverage {
+                    capability: Capability::LinkErrors,
+                    active_backend: None,
+                    quality: Quality::Absent,
+                    fallback_chain: vec![],
+                },
+                CapabilityCoverage {
+                    capability: Capability::RetransmitSignal,
+                    active_backend: None,
+                    quality: Quality::Absent,
+                    fallback_chain: vec![],
+                },
+            ],
+        };
+
+        let mut engine = DetectionEngine::new();
+        // Bad metrics that would normally trigger RdmaLinkDegradation Critical.
+        let bad = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                rxe_duplicate_request_delta: 30,
+                rxe_seq_error_delta: 15,
+                hw_rcv_pkts_delta: 80,
+                hw_xmit_pkts_delta: 20,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // With Absent coverage, severity floor must be ~0 so the rule cannot
+        // single-handedly drive Critical despite firing.
+        for _ in 0..5 {
+            engine.evaluate_with_coverage(&bad, &[], Some(&coverage));
+        }
+        // Note: rule still fires, but the floor is multiplied by 0 → score
+        // must be below critical_enter just from the raw-score path.
+        let raw = engine.score.raw();
+        let crit_enter = engine.state_machine.config.critical_enter;
+        assert!(
+            raw < crit_enter,
+            "Absent coverage should attenuate severity floor; raw={raw} critical_enter={crit_enter}"
+        );
     }
 
     #[test]

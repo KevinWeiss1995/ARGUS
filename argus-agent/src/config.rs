@@ -177,9 +177,26 @@ pub struct DetectionSection {
     pub slab_pressure_min_allocs: Option<u64>,
     pub slab_pressure_alloc_rate_threshold: Option<u64>,
     pub state_machine: Option<StateMachineSection>,
+    /// Per-fabric overrides keyed by `FabricKind::name()` —
+    /// "infiniband" | "rocev1" | "rocev2" | "softroce" | "iwarp" | "unknown".
+    /// Loaded after the base detection section, so a profile match overrides
+    /// global thresholds. The chosen profile is determined at startup by
+    /// `FabricEnv::detect()` and logged.
+    pub profile: std::collections::HashMap<String, FabricProfileSection>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+pub struct FabricProfileSection {
+    pub irq_skew_threshold_pct: Option<f64>,
+    pub rdma_spike_factor: Option<f64>,
+    pub rdma_baseline_latency_ns: Option<u64>,
+    pub slab_pressure_min_allocs: Option<u64>,
+    pub slab_pressure_alloc_rate_threshold: Option<u64>,
+    pub state_machine: Option<StateMachineSection>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct StateMachineSection {
     pub degrade_enter: Option<f64>,
@@ -241,6 +258,9 @@ pub struct EffectiveConfig {
     pub detection: DetectionConfig,
     pub actions: crate::actions::ActionConfig,
     pub scheduler: Option<crate::scheduler::SchedulerConfig>,
+    /// Per-fabric override profiles loaded from the TOML config.
+    /// Applied at runtime once `FabricEnv::detect()` reports a fabric kind.
+    pub fabric_profiles: std::collections::HashMap<String, FabricProfileSection>,
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +308,48 @@ pub struct DetectionConfig {
     pub slab_pressure_min_allocs: u64,
     pub slab_pressure_alloc_rate_threshold: u64,
     pub state_machine: Option<crate::detection::StateMachineConfig>,
+}
+
+impl DetectionConfig {
+    /// Apply a fabric profile override on top of the current configuration.
+    /// Any field that's `Some` in the profile overrides the base value.
+    /// Returns a new `DetectionConfig`; the original is left untouched.
+    #[must_use]
+    pub fn with_profile(&self, profile: &FabricProfileSection) -> Self {
+        let mut out = self.clone();
+        if let Some(v) = profile.irq_skew_threshold_pct {
+            out.irq_skew_threshold_pct = v;
+        }
+        if let Some(v) = profile.rdma_spike_factor {
+            out.rdma_spike_factor = v;
+        }
+        if let Some(v) = profile.rdma_baseline_latency_ns {
+            out.rdma_baseline_latency_ns = v;
+        }
+        if let Some(v) = profile.slab_pressure_min_allocs {
+            out.slab_pressure_min_allocs = v;
+        }
+        if let Some(v) = profile.slab_pressure_alloc_rate_threshold {
+            out.slab_pressure_alloc_rate_threshold = v;
+        }
+        if let Some(sm) = &profile.state_machine {
+            let base_sm = out
+                .state_machine
+                .clone()
+                .unwrap_or_default();
+            out.state_machine = Some(crate::detection::StateMachineConfig {
+                degrade_enter: sm.degrade_enter.unwrap_or(base_sm.degrade_enter),
+                degrade_exit: sm.degrade_exit.unwrap_or(base_sm.degrade_exit),
+                critical_enter: sm.critical_enter.unwrap_or(base_sm.critical_enter),
+                critical_exit: sm.critical_exit.unwrap_or(base_sm.critical_exit),
+                enter_windows: sm.enter_windows.unwrap_or(base_sm.enter_windows),
+                exit_windows: sm.exit_windows.unwrap_or(base_sm.exit_windows),
+                recover_windows: sm.recover_windows.unwrap_or(base_sm.recover_windows),
+                max_hold_windows: sm.max_hold_windows.unwrap_or(base_sm.max_hold_windows),
+            });
+        }
+        out
+    }
 }
 
 fn detect_cpus() -> u32 {
@@ -460,6 +522,8 @@ impl Cli {
             state_machine,
         };
 
+        let fabric_profiles = fc.detection.profile.clone();
+
         let actions = crate::actions::ActionConfig {
             webhook_url: self
                 .action_webhook
@@ -540,6 +604,7 @@ impl Cli {
             detection,
             actions,
             scheduler,
+            fabric_profiles,
         })
     }
 
@@ -595,5 +660,66 @@ mod tests {
     fn parse_cpu_range_invalid() {
         assert_eq!(parse_cpu_range(""), None);
         assert_eq!(parse_cpu_range("abc"), None);
+    }
+
+    #[test]
+    fn detection_with_profile_overrides_only_specified_fields() {
+        let base = DetectionConfig::default();
+        let profile = FabricProfileSection {
+            irq_skew_threshold_pct: Some(85.0),
+            rdma_baseline_latency_ns: Some(2000),
+            ..Default::default()
+        };
+        let merged = base.with_profile(&profile);
+        assert_eq!(merged.irq_skew_threshold_pct, 85.0);
+        assert_eq!(merged.rdma_baseline_latency_ns, 2000);
+        // Untouched fields keep their defaults.
+        assert_eq!(merged.rdma_spike_factor, base.rdma_spike_factor);
+        assert_eq!(merged.slab_pressure_min_allocs, base.slab_pressure_min_allocs);
+    }
+
+    #[test]
+    fn detection_with_profile_state_machine_partial_override() {
+        let base = DetectionConfig::default();
+        let profile = FabricProfileSection {
+            state_machine: Some(StateMachineSection {
+                degrade_enter: Some(0.40),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merged = base.with_profile(&profile);
+        let sm = merged.state_machine.expect("state machine should be set");
+        assert_eq!(sm.degrade_enter, 0.40);
+        // Other fields should match defaults.
+        let defaults = crate::detection::StateMachineConfig::default();
+        assert_eq!(sm.degrade_exit, defaults.degrade_exit);
+        assert_eq!(sm.critical_enter, defaults.critical_enter);
+    }
+
+    #[test]
+    fn fabric_profiles_parse_from_toml() {
+        let toml_str = r#"
+[detection]
+irq_skew_threshold_pct = 70.0
+
+[detection.profile.softroce]
+irq_skew_threshold_pct = 80.0
+rdma_spike_factor = 4.0
+
+[detection.profile.softroce.state_machine]
+degrade_enter = 0.35
+
+[detection.profile.infiniband]
+rdma_baseline_latency_ns = 500
+"#;
+        let fc: FileConfig = toml::from_str(toml_str).expect("toml parse");
+        assert!(fc.detection.profile.contains_key("softroce"));
+        assert!(fc.detection.profile.contains_key("infiniband"));
+        let s = &fc.detection.profile["softroce"];
+        assert_eq!(s.irq_skew_threshold_pct, Some(80.0));
+        assert_eq!(s.rdma_spike_factor, Some(4.0));
+        let sm = s.state_machine.as_ref().unwrap();
+        assert_eq!(sm.degrade_enter, Some(0.35));
     }
 }

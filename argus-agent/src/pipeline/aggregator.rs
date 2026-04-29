@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use argus_common::{AggregatedMetrics, ArgusEvent, HardwareCounter};
 
+use crate::capabilities::sketches::DdSketch;
+
 /// Maintains rolling metric aggregations from raw events.
 pub struct Aggregator {
     metrics: AggregatedMetrics,
@@ -9,6 +11,9 @@ pub struct Aggregator {
     /// Previous absolute counter values keyed by (port, counter_discriminant).
     /// Used to compute deltas between windows.
     prev_counters: HashMap<(u32, u8), u64>,
+    /// Per-window completion latency sketch — fed by `CqCompletion` events.
+    /// Provides p50/p95/p99/p999 to the CompletionLatency capability.
+    cq_latency_sketch: DdSketch,
 }
 
 fn counter_discriminant(c: &HardwareCounter) -> u8 {
@@ -64,7 +69,15 @@ impl Aggregator {
             metrics,
             num_cpus,
             prev_counters: HashMap::new(),
+            cq_latency_sketch: DdSketch::new(0.02, 1024),
         }
+    }
+
+    /// Read-only access to the per-window CQ latency sketch. Reset on
+    /// `reset()` so quantiles reflect a single window.
+    #[must_use]
+    pub fn cq_latency_sketch(&self) -> &DdSketch {
+        &self.cq_latency_sketch
     }
 
     pub fn ingest(&mut self, event: &ArgusEvent) {
@@ -113,6 +126,7 @@ impl Aggregator {
                 if e.is_error {
                     self.metrics.rdma_metrics.error_count += 1;
                 }
+                self.cq_latency_sketch.insert(e.latency_ns as f64);
             }
             ArgusEvent::HardwareCounter(e) => {
                 self.ingest_hw_counter(e.port_num, &e.counter);
@@ -207,6 +221,7 @@ impl Aggregator {
     pub fn reset(&mut self) {
         self.metrics = AggregatedMetrics::default();
         self.metrics.interrupt_distribution.per_cpu_counts = vec![0; self.num_cpus as usize];
+        self.cq_latency_sketch.reset();
     }
 }
 
