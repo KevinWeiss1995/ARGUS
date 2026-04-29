@@ -193,6 +193,8 @@ impl Aggregator {
         slab.free_count = snap.slab_free_count;
         slab.total_bytes_req = snap.slab_total_bytes_req;
         slab.total_bytes_alloc = snap.slab_total_bytes_alloc;
+        slab.total_latency_ns = snap.slab_total_latency_ns;
+        slab.max_latency_ns = snap.slab_max_latency_ns;
 
         let net = &mut self.metrics.network_metrics;
         net.napi_polls = snap.napi_poll_count;

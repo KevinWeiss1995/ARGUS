@@ -34,6 +34,8 @@ mod inner {
         pub slab_free_count: u64,
         pub slab_total_bytes_req: u64,
         pub slab_total_bytes_alloc: u64,
+        pub slab_total_latency_ns: u64,
+        pub slab_max_latency_ns: u64,
         pub napi_poll_count: u64,
         pub napi_total_work: u64,
         pub napi_total_budget: u64,
@@ -51,7 +53,7 @@ mod inner {
 
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
-    struct SlabStatsArray([u64; 4]);
+    struct SlabStatsArray([u64; 6]);
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct NapiStatsArray([u64; 3]);
@@ -69,7 +71,7 @@ mod inner {
         cq_jitter_stats_map: Option<PerCpuArray<aya::maps::MapData, CqJitterStatsArray>>,
         qp_owners_map: Option<AyaHashMap<aya::maps::MapData, u32, u32>>,
         prev_irq_per_cpu: Vec<u64>,
-        prev_slab_totals: [u64; 4],
+        prev_slab_totals: [u64; 6],
         prev_napi_totals: [u64; 3],
         prev_cq_totals: [u64; 4],
         read_count: u32,
@@ -111,6 +113,40 @@ mod inner {
                         failures.push(msg);
                     }
                 }
+            }
+
+            // Attach slab latency kprobe/kretprobe on kmem_cache_alloc.
+            // This is a core kernel function — always available.
+            let mut slab_latency_ok = false;
+            match Self::attach_kprobe(&mut ebpf, "kprobe_slab_alloc_entry", "kmem_cache_alloc") {
+                Ok(()) => {
+                    info!("slab latency kprobe attached on kmem_cache_alloc");
+                    attached += 1;
+                    attached_probes.push("kprobe/kmem_cache_alloc".into());
+                    match Self::attach_kretprobe(
+                        &mut ebpf,
+                        "kretprobe_slab_alloc",
+                        "kmem_cache_alloc",
+                    ) {
+                        Ok(()) => {
+                            info!("slab latency kretprobe attached on kmem_cache_alloc");
+                            attached += 1;
+                            attached_probes.push("kretprobe/kmem_cache_alloc".into());
+                            slab_latency_ok = true;
+                        }
+                        Err(e) => {
+                            warn!("slab latency kretprobe failed: {e}");
+                            failures.push(format!("kretprobe/kmem_cache_alloc: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("slab latency kprobe failed: {e}");
+                    failures.push(format!("kprobe/kmem_cache_alloc: {e}"));
+                }
+            }
+            if !slab_latency_ok {
+                info!("slab latency measurement unavailable — only byte accounting active");
             }
 
             // Attach CQ jitter kprobes (optional — graceful degradation)
@@ -246,7 +282,7 @@ mod inner {
                 cq_jitter_stats_map,
                 qp_owners_map,
                 prev_irq_per_cpu: Vec::new(),
-                prev_slab_totals: [0; 4],
+                prev_slab_totals: [0; 6],
                 prev_napi_totals: [0; 3],
                 prev_cq_totals: [0; 4],
                 read_count: 0,
@@ -405,13 +441,26 @@ mod inner {
             }
 
             // --- Slab stats ---
+            // Layout: [alloc_count, free_count, total_bytes_req, total_bytes_alloc,
+            //          total_latency_ns, max_latency_ns]
+            // max_latency_ns (index 5) is a per-CPU max; we take the cross-CPU max
+            // for this window, then zero it so the next window starts fresh.
             match self.slab_stats_map.get(&0, 0) {
                 Ok(percpu_vals) => {
-                    let mut totals = [0u64; 4];
+                    let mut totals = [0u64; 6];
+                    let mut rearmed: Vec<SlabStatsArray> =
+                        Vec::with_capacity(percpu_vals.len());
                     for val in percpu_vals.iter() {
                         for (i, t) in totals.iter_mut().enumerate() {
-                            *t += val.0[i];
+                            if i == 5 {
+                                *t = (*t).max(val.0[i]);
+                            } else {
+                                *t += val.0[i];
+                            }
                         }
+                        let mut zeroed = *val;
+                        zeroed.0[5] = 0;
+                        rearmed.push(zeroed);
                     }
                     if diagnostic {
                         info!(read = self.read_count, ?totals, "SLAB_STATS summed totals");
@@ -422,7 +471,20 @@ mod inner {
                     snap.slab_free_count = totals[1].saturating_sub(prev[1]);
                     snap.slab_total_bytes_req = totals[2].saturating_sub(prev[2]);
                     snap.slab_total_bytes_alloc = totals[3].saturating_sub(prev[3]);
-                    self.prev_slab_totals = totals;
+                    snap.slab_total_latency_ns = totals[4].saturating_sub(prev[4]);
+                    snap.slab_max_latency_ns = totals[5];
+                    self.prev_slab_totals = [totals[0], totals[1], totals[2], totals[3], totals[4], 0];
+
+                    match PerCpuValues::try_from(rearmed) {
+                        Ok(values) => {
+                            if let Err(e) = self.slab_stats_map.set(0, values, 0) {
+                                warn!("SLAB_STATS max rearm failed: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("SLAB_STATS PerCpuValues build failed: {e}");
+                        }
+                    }
                 }
                 Err(e) => {
                     warn!("SLAB_STATS map read failed: {e}");
