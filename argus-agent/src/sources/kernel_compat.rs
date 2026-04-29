@@ -86,7 +86,7 @@ impl KernelCapabilities {
         }
     }
 
-    fn log_summary(&self) {
+    pub fn log_summary(&self) {
         let tier = self.determine_tier();
         info!(
             kernel = %self.kernel_release,
