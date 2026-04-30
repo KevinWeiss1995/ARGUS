@@ -1,9 +1,13 @@
 # Kubernetes DaemonSet for ARGUS.
 #
 # Deploys argusd to every node in the cluster. Requires:
-#   - Privileged container (for eBPF, /sys, /proc access)
+#   - Root with explicit capabilities (eBPF, /sys, /proc access)
 #   - Host PID and network namespace
 #   - The ARGUS container image (build with: docker build -t argus:latest .)
+#
+# NOTE: privileged:false with explicit caps. SYS_ADMIN is needed on RHEL 8
+# kernels (4.18) where CAP_BPF does not exist. On RHEL 9+ (5.14+) you can
+# remove SYS_ADMIN and keep only BPF + PERFMON + NET_ADMIN.
 #
 # For Prometheus Operator users, a ServiceMonitor is included at the bottom.
 
@@ -42,7 +46,11 @@ spec:
             - "--metrics-addr=0.0.0.0:9100"
             - "--log-level=info"
           securityContext:
-            privileged: true
+            privileged: false
+            capabilities:
+              add: [SYS_ADMIN, BPF, PERFMON, NET_ADMIN]
+              drop: [ALL]
+            allowPrivilegeEscalation: false
           ports:
             - name: metrics
               containerPort: 9100
