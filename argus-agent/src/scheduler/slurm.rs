@@ -1,12 +1,22 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{NodeStateReport, ObservedNodeState, SchedulerBackend, SchedulerError};
 
 const ARGUS_REASON_PREFIX: &str = "ARGUS:";
+const SCONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn is_valid_node_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 253
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
 
 pub struct SlurmBackend {
     scontrol_path: PathBuf,
@@ -20,10 +30,15 @@ impl SlurmBackend {
     }
 
     fn run_scontrol(&self, args: &[&str]) -> Result<String, SchedulerError> {
-        let output = Command::new(&self.scontrol_path)
+        let mut child = Command::new(&self.scontrol_path)
             .args(args)
+            .env_clear()
             .env("SLURM_TIME_FORMAT", "standard")
-            .output()
+            .env("PATH", "/usr/bin:/usr/local/bin")
+            .env("HOME", "/var/lib/argus")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     SchedulerError::Unreachable(format!(
@@ -34,6 +49,21 @@ impl SlurmBackend {
                     SchedulerError::CommandFailed(format!("scontrol exec error: {e}"))
                 }
             })?;
+
+        let output = match wait_with_timeout(&mut child, SCONTROL_TIMEOUT) {
+            Ok(Some(o)) => o,
+            Ok(None) => {
+                warn!("scontrol timed out after {}s, killing", SCONTROL_TIMEOUT.as_secs());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(SchedulerError::CommandFailed(
+                    format!("scontrol timed out after {}s", SCONTROL_TIMEOUT.as_secs()),
+                ));
+            }
+            Err(e) => {
+                return Err(SchedulerError::CommandFailed(format!("scontrol wait error: {e}")));
+            }
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -67,6 +97,11 @@ impl SchedulerBackend for SlurmBackend {
     }
 
     fn get_node_state(&self, node: &str) -> Result<NodeStateReport, SchedulerError> {
+        if !is_valid_node_name(node) {
+            return Err(SchedulerError::CommandFailed(format!(
+                "invalid node name: {node:?}"
+            )));
+        }
         let output = self.run_scontrol(&["show", "node", node, "-o"])?;
 
         let state_raw = extract_field(&output, "State=").ok_or_else(|| {
@@ -102,6 +137,11 @@ impl SchedulerBackend for SlurmBackend {
     }
 
     fn drain_node(&self, node: &str, reason: &str) -> Result<(), SchedulerError> {
+        if !is_valid_node_name(node) {
+            return Err(SchedulerError::CommandFailed(format!(
+                "invalid node name: {node:?}"
+            )));
+        }
         let full_reason = if reason.starts_with(ARGUS_REASON_PREFIX) {
             reason.to_string()
         } else {
@@ -117,6 +157,11 @@ impl SchedulerBackend for SlurmBackend {
     }
 
     fn resume_node(&self, node: &str) -> Result<(), SchedulerError> {
+        if !is_valid_node_name(node) {
+            return Err(SchedulerError::CommandFailed(format!(
+                "invalid node name: {node:?}"
+            )));
+        }
         self.run_scontrol(&["update", &format!("NodeName={node}"), "State=RESUME"])?;
         Ok(())
     }
@@ -133,6 +178,39 @@ fn extract_field(output: &str, field: &str) -> Option<String> {
         None
     } else {
         Some(value)
+    }
+}
+
+/// Wait for a child process with a timeout. Returns None if timed out.
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    let start = std::time::Instant::now();
+    let poll_interval = Duration::from_millis(50);
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let stdout = child.stdout.take().map_or_else(Vec::new, |mut r| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                    buf
+                });
+                let stderr = child.stderr.take().map_or_else(Vec::new, |mut r| {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                    buf
+                });
+                return Ok(Some(std::process::Output { status, stdout, stderr }));
+            }
+            None => {
+                if start.elapsed() >= timeout {
+                    return Ok(None);
+                }
+                std::thread::sleep(poll_interval);
+            }
+        }
     }
 }
 
@@ -283,6 +361,17 @@ mod tests {
         let line = "NodeName=node07 State=IDLE Reason=(null)";
         let reason = extract_field(line, "Reason=");
         assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn valid_node_names() {
+        assert!(is_valid_node_name("node07"));
+        assert!(is_valid_node_name("gpu-rack01.cluster"));
+        assert!(is_valid_node_name("my_node-01.example"));
+        assert!(!is_valid_node_name(""));
+        assert!(!is_valid_node_name("node;rm -rf /"));
+        assert!(!is_valid_node_name("node name"));
+        assert!(!is_valid_node_name("$(whoami)"));
     }
 
     #[test]
