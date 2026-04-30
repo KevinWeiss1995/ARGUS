@@ -2,7 +2,8 @@ pub mod noop;
 pub mod slurm;
 pub mod types;
 
-use std::fs::File;
+use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -127,8 +128,10 @@ pub struct SchedulerConfig {
     pub reconcile_interval: Duration,
     pub contested_cooldown: Duration,
     pub max_consecutive_failures: u32,
+    pub max_drains_per_hour: u32,
     pub state_file: PathBuf,
     pub lock_file: PathBuf,
+    pub audit_log_path: PathBuf,
 }
 
 impl Default for SchedulerConfig {
@@ -141,8 +144,82 @@ impl Default for SchedulerConfig {
             reconcile_interval: Duration::from_secs(10),
             contested_cooldown: Duration::from_secs(300),
             max_consecutive_failures: 5,
+            max_drains_per_hour: 3,
             state_file: PathBuf::from("/var/lib/argus/scheduler-state.json"),
             lock_file: PathBuf::from("/var/run/argus/scheduler.lock"),
+            audit_log_path: PathBuf::from("/var/lib/argus/scheduler-audit.jsonl"),
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Drain rate limiter
+// ───────────────────────────────────────────────────────────────────────────
+
+struct DrainRateLimiter {
+    timestamps: VecDeque<Instant>,
+    max_per_hour: u32,
+    pub rejections: u64,
+}
+
+impl DrainRateLimiter {
+    fn new(max_per_hour: u32) -> Self {
+        Self {
+            timestamps: VecDeque::new(),
+            max_per_hour,
+            rejections: 0,
+        }
+    }
+
+    fn try_drain(&mut self) -> bool {
+        if self.max_per_hour == 0 {
+            return true;
+        }
+        let cutoff = Duration::from_secs(3600);
+        self.timestamps.retain(|t| t.elapsed() < cutoff);
+        if self.timestamps.len() as u32 >= self.max_per_hour {
+            self.rejections += 1;
+            return false;
+        }
+        self.timestamps.push_back(Instant::now());
+        true
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Scheduler audit log (append-only JSONL)
+// ───────────────────────────────────────────────────────────────────────────
+
+struct AuditLogger {
+    path: PathBuf,
+    node_name: String,
+}
+
+impl AuditLogger {
+    fn new(path: PathBuf, node_name: String) -> Self {
+        Self { path, node_name }
+    }
+
+    fn log_event(&self, action: &str, reason: &str, health: &str, result: &str) {
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let entry = serde_json::json!({
+            "ts": ts,
+            "action": action,
+            "node": self.node_name,
+            "reason": reason,
+            "health": health,
+            "result": result,
+        });
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match OpenOptions::new().create(true).append(true).open(&self.path) {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", entry);
+            }
+            Err(e) => {
+                warn!(path = %self.path.display(), "audit log write failed: {e}");
+            }
         }
     }
 }
@@ -214,6 +291,8 @@ pub struct Reconciler {
     last_reconcile: Instant,
     last_observed: ObservedNodeState,
     backoff: Backoff,
+    rate_limiter: DrainRateLimiter,
+    audit_logger: AuditLogger,
     persisted: PersistedSchedulerState,
     event_ring: SchedulerEventRing,
     jitter_offset: Duration,
@@ -244,11 +323,17 @@ impl Reconciler {
         };
 
         let policy = SchedulingPolicy::new(config.drain_on_degraded);
+        let rate_limiter = DrainRateLimiter::new(config.max_drains_per_hour);
+        let audit_logger = AuditLogger::new(
+            config.audit_log_path.clone(),
+            node_name.clone(),
+        );
 
         info!(
             backend = backend.name(),
             node = %node_name,
             jitter_ms = jitter_offset.as_millis(),
+            max_drains_per_hour = config.max_drains_per_hour,
             persisted_desired = ?desired,
             "scheduler reconciler initialized"
         );
@@ -263,6 +348,8 @@ impl Reconciler {
             last_reconcile: Instant::now(),
             last_observed: ObservedNodeState::Unknown,
             backoff: Backoff::new(5),
+            rate_limiter,
+            audit_logger,
             persisted,
             event_ring: SchedulerEventRing::default(),
             jitter_offset,
@@ -407,7 +494,7 @@ impl Reconciler {
             // Need to drain
             (DesiredNodeState::Draining, _) => {
                 let reason = format!("ARGUS: health={health}");
-                self.execute_drain(&reason, &mut events);
+                self.execute_drain(&reason, health, &mut events);
             }
         }
 
@@ -415,9 +502,21 @@ impl Reconciler {
         events
     }
 
-    fn execute_drain(&mut self, reason: &str, events: &mut Vec<SchedulerActionEvent>) {
+    fn execute_drain(&mut self, reason: &str, health: HealthState, events: &mut Vec<SchedulerActionEvent>) {
+        if !self.rate_limiter.try_drain() {
+            warn!(
+                max_per_hour = self.config.max_drains_per_hour,
+                rejections = self.rate_limiter.rejections,
+                "drain rejected: rate limit exceeded"
+            );
+            self.audit_logger.log_event("drain", reason, &health.to_string(), "rejected:rate_limit");
+            events.push(SchedulerActionEvent::skipped("drain rate limit exceeded"));
+            return;
+        }
+
         if self.config.dry_run {
             info!(reason, "[DRY RUN] would drain node");
+            self.audit_logger.log_event("drain", reason, &health.to_string(), "dry_run");
             events.push(SchedulerActionEvent::drained(&format!("[dry-run] {reason}")));
             return;
         }
@@ -431,6 +530,7 @@ impl Reconciler {
                     reason,
                     "scheduler.action=drain_node"
                 );
+                self.audit_logger.log_event("drain", reason, &health.to_string(), "ok");
                 events.push(event);
                 self.persisted.last_drain_reason = Some(reason.to_string());
                 self.persisted.last_drain_epoch_ms = Some(epoch_ms());
@@ -443,6 +543,7 @@ impl Reconciler {
                     error = %e,
                     "scheduler drain failed"
                 );
+                self.audit_logger.log_event("drain", reason, &health.to_string(), &format!("error:{e}"));
                 events.push(SchedulerActionEvent::error("drain_node", &e));
             }
         }
@@ -451,6 +552,7 @@ impl Reconciler {
     fn execute_resume(&mut self, events: &mut Vec<SchedulerActionEvent>) {
         if self.config.dry_run {
             info!("[DRY RUN] would resume node");
+            self.audit_logger.log_event("resume", "", "Healthy", "dry_run");
             events.push(SchedulerActionEvent::resumed());
             return;
         }
@@ -460,6 +562,7 @@ impl Reconciler {
                 self.last_drain_time = None;
                 let event = SchedulerActionEvent::resumed();
                 info!(node = %self.node_name, "scheduler.action=resume_node");
+                self.audit_logger.log_event("resume", "", "Healthy", "ok");
                 events.push(event);
                 self.persisted.last_drain_actor = None;
                 self.persisted.last_drain_reason = None;
@@ -471,6 +574,7 @@ impl Reconciler {
                     error = %e,
                     "scheduler resume failed"
                 );
+                self.audit_logger.log_event("resume", "", "", &format!("error:{e}"));
                 events.push(SchedulerActionEvent::error("resume_node", &e));
             }
         }
@@ -581,6 +685,10 @@ impl Reconciler {
 
     pub fn is_dry_run(&self) -> bool {
         self.config.dry_run
+    }
+
+    pub fn drain_rejections(&self) -> u64 {
+        self.rate_limiter.rejections
     }
 }
 
