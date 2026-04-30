@@ -16,7 +16,7 @@ pub struct PrometheusExporter {
 struct ArgusPrometheusMetrics {
     health_state: Gauge,
     health_score: Gauge,
-    event_count: Counter,
+    event_count: Gauge,
     alert_count: Family<Vec<(String, String)>, Counter>,
     state_transitions: Family<Vec<(String, String)>, Counter>,
     irq_total: Family<Vec<(String, String)>, Counter>,
@@ -82,7 +82,7 @@ impl PrometheusExporter {
         let health_state = Gauge::default();
         registry.register(
             "argus_health_state",
-            "Node health state (0=healthy, 1=degraded, 2=critical)",
+            "Node health state (0=healthy, 1=degraded, 2=critical, 3=recovering)",
             health_state.clone(),
         );
 
@@ -93,7 +93,7 @@ impl PrometheusExporter {
             health_score.clone(),
         );
 
-        let event_count = Counter::default();
+        let event_count = Gauge::default();
         registry.register(
             "argus_events",
             "Total events processed",
@@ -551,10 +551,8 @@ impl PrometheusExporter {
             self.prev_health = health;
         }
 
-        // Events
-        if event_count > 0 {
-            self.metrics.event_count.inc_by(event_count);
-        }
+        // Events (cumulative total — set, don't increment)
+        self.metrics.event_count.set(event_count as i64);
 
         // Slab
         if metrics.slab_metrics.alloc_count > 0 {
@@ -1358,7 +1356,7 @@ mod tests {
         exporter.update(&metrics, HealthState::Healthy, 200);
 
         let output = exporter.encode().expect("encoding should not fail");
-        assert!(output.contains("argus_events_total"));
+        assert!(output.contains("argus_events"));
         assert!(output.contains("argus_slab_alloc_total"));
         assert!(output.contains("argus_irq_total"));
         assert!(output.contains("argus_cq_completions_total"));

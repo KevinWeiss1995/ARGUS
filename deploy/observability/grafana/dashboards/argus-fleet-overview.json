@@ -12,7 +12,7 @@
   "panels": [
     {
       "id": 1, "type": "stat", "title": "Nodes Healthy",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -32,7 +32,7 @@
     },
     {
       "id": 2, "type": "stat", "title": "Nodes Degraded",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 3, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -52,7 +52,7 @@
     },
     {
       "id": 3, "type": "stat", "title": "Nodes Critical",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 7, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -71,8 +71,28 @@
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
     },
     {
+      "id": 16, "type": "stat", "title": "Nodes Recovering",
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
+        "editorMode": "code",
+        "expr": "count(argus_health_state{instance=~\"$node\"} == 3) or vector(0)",
+        "refId": "A", "instant": true, "range": false
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "orange", "mode": "fixed" },
+          "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] },
+          "unit": "none", "noValue": "0"
+        }, "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
       "id": 4, "type": "gauge", "title": "Worst Health Score",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -98,7 +118,7 @@
     },
     {
       "id": 5, "type": "stat", "title": "Total Alerts (15m)",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -122,19 +142,19 @@
     },
     {
       "id": 15, "type": "stat", "title": "Events Processed",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "sum(argus_events_total{instance=~\"$node\"}) or vector(0)",
+        "expr": "sum(argus_events{instance=~\"$node\"}) or vector(0)",
         "refId": "A", "instant": true, "range": false
       }],
       "fieldConfig": {
         "defaults": {
           "color": { "fixedColor": "blue", "mode": "fixed" },
           "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
-          "unit": "short", "noValue": "0"
+          "unit": "none", "noValue": "0"
         }, "overrides": []
       },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
@@ -159,12 +179,14 @@
           "mappings": [{ "type": "value", "options": {
             "0": { "color": "green", "index": 0, "text": "Healthy" },
             "1": { "color": "yellow", "index": 1, "text": "Degraded" },
-            "2": { "color": "red", "index": 2, "text": "Critical" }
+            "2": { "color": "red", "index": 2, "text": "Critical" },
+            "3": { "color": "orange", "index": 3, "text": "Recovering" }
           }}],
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null },
             { "color": "yellow", "value": 1 },
-            { "color": "red", "value": 2 }
+            { "color": "red", "value": 2 },
+            { "color": "orange", "value": 3 }
           ]},
           "unit": "none"
         }, "overrides": []
@@ -344,7 +366,8 @@
             { "id": "mappings", "value": [{ "type": "value", "options": {
               "0": { "color": "green", "index": 0, "text": "Healthy" },
               "1": { "color": "yellow", "index": 1, "text": "Degraded" },
-              "2": { "color": "red", "index": 2, "text": "Critical" }
+              "2": { "color": "red", "index": 2, "text": "Critical" },
+              "3": { "color": "orange", "index": 3, "text": "Recovering" }
             }}]},
             { "id": "custom.cellOptions", "value": { "type": "color-background" } }
           ]},

@@ -22,10 +22,11 @@
           "mappings": [{ "type": "value", "options": {
             "0": { "color": "green", "text": "Healthy" },
             "1": { "color": "yellow", "text": "Degraded" },
-            "2": { "color": "red", "text": "Critical" }
+            "2": { "color": "red", "text": "Critical" },
+            "3": { "color": "orange", "text": "Recovering" }
           }}],
           "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }
+            { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }, { "color": "orange", "value": 3 }
           ]}
         }, "overrides": []
       },
@@ -82,7 +83,7 @@
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
         "editorMode": "code",
-        "expr": "argus_events_total{instance=\"$node\"} or vector(0)",
+        "expr": "argus_events{instance=\"$node\"} or vector(0)",
         "refId": "A", "instant": true, "range": false
       }],
       "fieldConfig": {
