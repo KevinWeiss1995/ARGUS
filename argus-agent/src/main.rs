@@ -44,6 +44,10 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx.send(true);
     });
 
+    if config.read_only {
+        tracing::info!("read-only mode: all scheduler and action operations disabled");
+    }
+
     let num_cpus = config.num_cpus;
     tracing::info!(num_cpus, "CPU count resolved");
 
@@ -249,8 +253,14 @@ fn run_live_mode(
         );
     }
 
-    if let Some(ref expected_hash) = config.ebpf_hash {
+    let ebpf_hash = config
+        .ebpf_hash
+        .clone()
+        .or_else(|| load_ebpf_hash_file());
+    if let Some(ref expected_hash) = ebpf_hash {
         verify_ebpf_hash(ebpf_path, expected_hash)?;
+    } else {
+        tracing::info!("no eBPF hash file or --ebpf-hash; skipping integrity check");
     }
 
     let mut ebpf_source = argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path)
@@ -399,6 +409,7 @@ fn run_live_mode(
                                 &sched_events,
                                 drain_dur,
                                 reconciler.is_dry_run(),
+                                reconciler.drain_rejections(),
                             );
                         }
                         reconciler.push_events(&sched_events);
@@ -561,6 +572,7 @@ async fn run_event_mode(
                                 &sched_events,
                                 drain_dur,
                                 reconciler.is_dry_run(),
+                                reconciler.drain_rejections(),
                             );
                         }
                         reconciler.push_events(&sched_events);
@@ -727,6 +739,26 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         ctrl_c.await.ok();
+    }
+}
+
+/// Load expected eBPF hash from the well-known path written by RPM %post.
+/// Returns None if the file doesn't exist (dev workflow: no hash = no check).
+#[cfg(target_os = "linux")]
+fn load_ebpf_hash_file() -> Option<String> {
+    let hash_path = std::path::Path::new("/etc/argus/ebpf.sha256");
+    match std::fs::read_to_string(hash_path) {
+        Ok(contents) => {
+            let hash = contents.split_whitespace().next()?.trim().to_string();
+            if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                tracing::info!("loaded eBPF hash from {}", hash_path.display());
+                Some(hash)
+            } else {
+                tracing::warn!("malformed eBPF hash file: {}", hash_path.display());
+                None
+            }
+        }
+        Err(_) => None,
     }
 }
 
