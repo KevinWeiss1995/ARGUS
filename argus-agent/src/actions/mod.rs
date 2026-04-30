@@ -209,6 +209,8 @@ impl ActionHandler for WebhookAction {
                 "5",
                 &self.url,
             ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/usr/local/bin")
             .output()
             .map_err(|e| format!("curl failed: {e}"))?;
 
