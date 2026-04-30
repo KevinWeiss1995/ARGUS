@@ -32,7 +32,7 @@
     },
     {
       "id": 2, "type": "stat", "title": "Nodes Degraded",
-      "gridPos": { "h": 4, "w": 4, "x": 3, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -52,7 +52,7 @@
     },
     {
       "id": 3, "type": "stat", "title": "Nodes Critical",
-      "gridPos": { "h": 4, "w": 3, "x": 7, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -72,7 +72,7 @@
     },
     {
       "id": 16, "type": "stat", "title": "Nodes Recovering",
-      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 0 },
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -92,7 +92,7 @@
     },
     {
       "id": 4, "type": "gauge", "title": "Worst Health Score",
-      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -118,7 +118,7 @@
     },
     {
       "id": 5, "type": "stat", "title": "Total Alerts (15m)",
-      "gridPos": { "h": 4, "w": 3, "x": 18, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -142,7 +142,7 @@
     },
     {
       "id": 15, "type": "stat", "title": "Events Processed",
-      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
       "targets": [{
         "datasource": { "type": "prometheus", "uid": "DS_PROMETHEUS" },
@@ -154,7 +154,7 @@
         "defaults": {
           "color": { "fixedColor": "blue", "mode": "fixed" },
           "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
-          "unit": "none", "noValue": "0"
+          "unit": "short", "noValue": "0"
         }, "overrides": []
       },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto",
