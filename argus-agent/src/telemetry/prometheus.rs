@@ -60,6 +60,7 @@ struct ArgusPrometheusMetrics {
     scheduler_errors_total: Family<Vec<(String, String)>, Counter>,
     scheduler_last_action_ts: Gauge,
     scheduler_drain_duration_secs: Gauge,
+    scheduler_drain_rejected: Counter,
     // Capability framework
     capability_coverage: Family<Vec<(String, String)>, Gauge>,
     capability_grade: Gauge,
@@ -386,6 +387,13 @@ impl PrometheusExporter {
             scheduler_drain_duration_secs.clone(),
         );
 
+        let scheduler_drain_rejected = Counter::default();
+        registry.register(
+            "argus_scheduler_drain_rejected_total",
+            "Drain operations rejected by rate limiter",
+            scheduler_drain_rejected.clone(),
+        );
+
         let capability_coverage = Family::<Vec<(String, String)>, Gauge>::default();
         registry.register(
             "argus_capability_coverage",
@@ -498,6 +506,7 @@ impl PrometheusExporter {
             scheduler_errors_total,
             scheduler_last_action_ts,
             scheduler_drain_duration_secs,
+            scheduler_drain_rejected,
             capability_coverage,
             capability_grade,
             sample_contribution_millis,
@@ -713,6 +722,7 @@ impl PrometheusExporter {
         events: &[crate::scheduler::SchedulerActionEvent],
         drain_duration_secs: f64,
         dry_run: bool,
+        drain_rejections: u64,
     ) {
         use crate::scheduler::{DesiredNodeState, ObservedNodeState, SchedulerEventKind};
 
@@ -735,6 +745,13 @@ impl PrometheusExporter {
         self.metrics
             .scheduler_drain_duration_secs
             .set(drain_duration_secs as i64);
+
+        let current_rejections = self.metrics.scheduler_drain_rejected.get();
+        if drain_rejections > current_rejections {
+            self.metrics
+                .scheduler_drain_rejected
+                .inc_by(drain_rejections - current_rejections);
+        }
 
         let mode = if dry_run { "dry_run" } else { "live" };
 
