@@ -119,6 +119,11 @@ pub struct Cli {
     /// Minimum seconds at Healthy before auto-resuming a drained node.
     #[arg(long)]
     pub resume_cooldown: Option<u64>,
+
+    /// Read-only mode: disable all scheduler, webhook, and port-disable actions.
+    /// ARGUS will monitor and report via metrics/TUI but take no automated action.
+    #[arg(long)]
+    pub read_only: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +232,10 @@ pub struct SchedulerSection {
     pub reconcile_interval_secs: Option<u64>,
     pub contested_cooldown_secs: Option<u64>,
     pub max_consecutive_failures: Option<u32>,
+    pub max_drains_per_hour: Option<u32>,
     pub state_file: Option<PathBuf>,
     pub lock_file: Option<PathBuf>,
+    pub audit_log_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +262,7 @@ pub struct EffectiveConfig {
     pub tls_key: Option<PathBuf>,
     pub auth_token: Option<String>,
     pub seccomp: bool,
+    pub read_only: bool,
     pub detection: DetectionConfig,
     pub actions: crate::actions::ActionConfig,
     pub scheduler: Option<crate::scheduler::SchedulerConfig>,
@@ -524,17 +532,26 @@ impl Cli {
 
         let fabric_profiles = fc.detection.profile.clone();
 
+        let read_only = self.read_only;
+
         let actions = crate::actions::ActionConfig {
-            webhook_url: self
-                .action_webhook
-                .or_else(|| fc.actions.webhook_url.clone()),
-            port_disable: self.action_port_disable || fc.actions.port_disable.unwrap_or(false),
-            dry_run: self.action_dry_run || fc.actions.dry_run.unwrap_or(false),
+            webhook_url: if read_only {
+                None
+            } else {
+                self.action_webhook
+                    .or_else(|| fc.actions.webhook_url.clone())
+            },
+            port_disable: !read_only
+                && (self.action_port_disable || fc.actions.port_disable.unwrap_or(false)),
+            dry_run: read_only || self.action_dry_run || fc.actions.dry_run.unwrap_or(false),
         };
 
-        let scheduler_backend = self
-            .scheduler
-            .or_else(|| fc.scheduler.backend.clone());
+        let scheduler_backend = if read_only {
+            None
+        } else {
+            self.scheduler
+                .or_else(|| fc.scheduler.backend.clone())
+        };
         let scheduler = scheduler_backend.map(|backend| {
             use std::time::Duration;
             let defaults = crate::scheduler::SchedulerConfig::default();
@@ -561,6 +578,10 @@ impl Cli {
                     .scheduler
                     .max_consecutive_failures
                     .unwrap_or(defaults.max_consecutive_failures),
+                max_drains_per_hour: fc
+                    .scheduler
+                    .max_drains_per_hour
+                    .unwrap_or(defaults.max_drains_per_hour),
                 state_file: fc
                     .scheduler
                     .state_file
@@ -571,6 +592,11 @@ impl Cli {
                     .lock_file
                     .clone()
                     .unwrap_or(defaults.lock_file),
+                audit_log_path: fc
+                    .scheduler
+                    .audit_log_path
+                    .clone()
+                    .unwrap_or(defaults.audit_log_path),
             }
         });
 
@@ -601,6 +627,7 @@ impl Cli {
             tls_key,
             auth_token,
             seccomp: self.seccomp,
+            read_only,
             detection,
             actions,
             scheduler,
