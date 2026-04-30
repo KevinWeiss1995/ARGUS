@@ -417,7 +417,12 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
         .iter()
         .rev()
         .map(|alert| {
-            let ts_secs = alert.timestamp_ns as f64 / 1_000_000_000.0;
+            let ts_display = {
+                let secs = (alert.timestamp_ns / 1_000_000_000) as i64;
+                chrono::DateTime::from_timestamp(secs, 0)
+                    .map(|utc| utc.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+                    .unwrap_or_else(|| "??:??:??".to_string())
+            };
             let severity_style = match alert.severity {
                 HealthState::Healthy => Style::default().fg(Color::Green),
                 HealthState::Degraded | HealthState::Recovering => Style::default().fg(Color::Yellow),
@@ -426,7 +431,7 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
 
             Line::from(vec![
                 Span::styled(
-                    format!("  {ts_secs:>10.3}s "),
+                    format!("  {ts_display:>8} "),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
