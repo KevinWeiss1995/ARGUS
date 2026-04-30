@@ -17,15 +17,21 @@ Nice=19
 IOSchedulingClass=idle
 MemoryMax=256M
 
-# Security hardening — root is required for eBPF + sysfs, but we lock
-# down everything else.
+# Security hardening — root is required for eBPF load, tracefs, kallsyms,
+# and /proc/pid reads. security.rs drops all caps except CAP_BPF after init.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYSLOG CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
-ProtectHome=read-only
+ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/sys /var/lib/argus /var/run/argus
+ReadWritePaths=/var/lib/argus /var/run/argus /sys/class/infiniband
+ReadOnlyPaths=/sys/kernel /proc
 PrivateTmp=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 
 # Logging to journald (agent emits JSON when --tui is absent)
 StandardOutput=journal
