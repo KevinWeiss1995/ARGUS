@@ -613,7 +613,20 @@ impl DetectionRule for LatencyDriftRule {
         let z = self.stats.z_score(latency);
         self.stats.push(latency);
 
-        if self.stats.is_warmed_up() && z.abs() >= self.z_threshold {
+        // Sub-microsecond slab latency is always noise — skip.
+        if latency < 1000.0 {
+            return None;
+        }
+
+        // Only alert when there's a correlated network signal. Slab latency
+        // drift in isolation (no IB errors, no RDMA backlog, no CQ stalls) is
+        // kernel noise, not a network problem.
+        let has_network_signal = metrics.ib_counter_deltas.total_error_delta() > 0
+            || metrics.ib_counter_deltas.total_soft_error_delta() > 0
+            || metrics.rdma_metrics.error_count > 0
+            || metrics.cq_jitter.stall_count > 0;
+
+        if self.stats.is_warmed_up() && z.abs() >= self.z_threshold && has_network_signal {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::LatencyDrift {
@@ -622,11 +635,9 @@ impl DetectionRule for LatencyDriftRule {
                     current_value: latency,
                     ewma: self.stats.mean(),
                 },
-                severity: if z.abs() >= self.z_threshold * 2.0 {
-                    HealthState::Critical
-                } else {
-                    HealthState::Degraded
-                },
+                // Slab latency alone caps at DEGRADED — it's a supporting
+                // signal, never the sole driver of Critical.
+                severity: HealthState::Degraded,
                 message: format!(
                     "Slab latency drift: {latency:.0}ns (z={z:.1}, baseline={:.0}ns)",
                     self.stats.mean()
