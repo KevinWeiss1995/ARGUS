@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# ARGUS install script — builds and installs argusd as a systemd service.
+# ARGUS developer install script — builds from source and installs locally.
+#
+# ============================================================================
+#   FOR PRODUCTION DEPLOYMENTS: Use the RPM package instead.
+#   See deploy/argus.spec or download pre-built RPMs from GitHub Releases.
+#   This script is for development and testing only.
+# ============================================================================
 #
 # Usage:
 #   sudo ./scripts/install.sh            # full build + install
 #   sudo ./scripts/install.sh --no-build # install pre-built binaries only
+#   sudo ./scripts/install.sh --no-ebpf  # skip eBPF build (Tier 2 only)
 #
-# The script will:
-#   1. Detect the invoking user's Rust toolchain (handles sudo PATH correctly)
-#   2. Install missing prerequisites (nightly, rust-src, bpf-linker)
-#   3. Build as the invoking user (not root — cargo hates that)
-#   4. Install binaries, config, and systemd unit as root
-#
-# Installed paths:
+# Installed paths (dev layout — differs from RPM FHS paths):
 #   /usr/local/bin/argusd                  — agent binary
 #   /usr/local/lib/argus/argus-ebpf       — eBPF object
 #   /etc/argus/argusd.conf                 — env configuration (preserved on upgrade)
@@ -35,13 +36,16 @@ INSTALL_TOML="$INSTALL_CONF_DIR/argusd.toml"
 INSTALL_UNIT="/etc/systemd/system/argusd.service"
 
 NO_BUILD=false
+NO_EBPF=false
 
 for arg in "$@"; do
     case "$arg" in
         --no-build) NO_BUILD=true ;;
+        --no-ebpf)  NO_EBPF=true ;;
         --help|-h)
-            echo "Usage: sudo $0 [--no-build]"
+            echo "Usage: sudo $0 [--no-build] [--no-ebpf]"
             echo "  --no-build   Skip compilation, install pre-built binaries"
+            echo "  --no-ebpf    Skip eBPF build (Tier 2 procfs/sysfs mode only)"
             exit 0
             ;;
         *)
@@ -68,12 +72,22 @@ require_root() {
 
 require_root
 
+warn "======================================================================"
+warn "  This is the DEVELOPER install script (builds from source)."
+warn "  For production clusters, use the RPM package instead:"
+warn "    dnf install argus-*.rpm"
+warn "======================================================================"
+echo ""
+
 if [[ ! -f "$REPO_ROOT/Cargo.toml" ]]; then
     die "Run this script from the ARGUS repo root (or via scripts/install.sh)"
 fi
 
+HAS_SYSTEMD=true
 if ! systemctl --version &>/dev/null; then
-    die "systemd not found — this installer requires a systemd-based Linux system"
+    HAS_SYSTEMD=false
+    warn "systemd not found — systemd unit will not be installed"
+    warn "You can run argusd directly: argusd --mode live --ebpf-path /usr/local/lib/argus/argus-ebpf"
 fi
 
 # --- System build dependencies ---
@@ -106,14 +120,14 @@ install_system_deps() {
         fi
     elif command -v dnf &>/dev/null; then
         if ! rpm -q gcc &>/dev/null 2>&1; then
-            info "Installing gcc and development tools..."
-            dnf install -y gcc make pkg-config openssl-devel
+            info "Installing gcc and development tools (RHEL/dnf)..."
+            dnf install -y gcc make pkgconf-pkg-config openssl-devel elfutils-libelf-devel
             ok "System build dependencies installed"
         fi
     elif command -v yum &>/dev/null; then
         if ! rpm -q gcc &>/dev/null 2>&1; then
-            info "Installing gcc and development tools..."
-            yum install -y gcc make pkg-config openssl-devel
+            info "Installing gcc and development tools (yum)..."
+            yum install -y gcc make pkgconf-pkg-config openssl-devel elfutils-libelf-devel
             ok "System build dependencies installed"
         fi
     elif command -v pacman &>/dev/null; then
@@ -135,7 +149,7 @@ install_system_deps
 # sudo strips PATH, so cargo/rustup in ~/.cargo/bin become invisible.
 # We recover them via SUDO_USER.
 
-BUILD_USER="${SUDO_USER:-$USER}"
+BUILD_USER="${SUDO_USER:-${USER:-root}}"
 BUILD_HOME=$(eval echo "~$BUILD_USER")
 
 resolve_cargo_env() {
@@ -195,17 +209,21 @@ if [[ "$NO_BUILD" == false ]]; then
         as_build_user rustup component add rust-src --toolchain nightly
     fi
 
-    if ! command -v bpf-linker &>/dev/null; then
-        info "Installing bpf-linker (this may take a few minutes)..."
-        as_build_user cargo install bpf-linker
-    fi
-
     info "Building agent (release)..."
     cd "$REPO_ROOT"
     as_build_user cargo build --release
 
-    info "Building eBPF programs (release)..."
-    as_build_user cargo xtask build-ebpf --release
+    if [[ "$NO_EBPF" == false ]]; then
+        if ! command -v bpf-linker &>/dev/null; then
+            info "Installing bpf-linker (this may take a few minutes)..."
+            as_build_user cargo install bpf-linker
+        fi
+
+        info "Building eBPF programs (release)..."
+        as_build_user cargo xtask build-ebpf --release
+    else
+        warn "Skipping eBPF build (--no-ebpf). Agent will run in Tier 2 (procfs/sysfs) mode."
+    fi
 
     ok "Build complete"
 fi
@@ -217,7 +235,11 @@ if [[ ! -f "$AGENT_BIN" ]]; then
 fi
 
 if [[ ! -f "$EBPF_BIN" ]]; then
-    die "eBPF binary not found at $EBPF_BIN — run without --no-build first"
+    if [[ "$NO_EBPF" == true ]]; then
+        warn "eBPF binary not found (--no-ebpf mode). Agent will use procfs/sysfs fallback."
+    else
+        die "eBPF binary not found at $EBPF_BIN — run without --no-build first (or use --no-ebpf)"
+    fi
 fi
 
 # --- Install binaries ---
@@ -226,10 +248,14 @@ info "Installing argusd to $INSTALL_BIN"
 install -m 0755 "$AGENT_BIN" "$INSTALL_BIN"
 ok "$INSTALL_BIN"
 
-info "Installing eBPF object to $INSTALL_EBPF"
-mkdir -p "$INSTALL_EBPF_DIR"
-install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
-ok "$INSTALL_EBPF"
+if [[ -f "$EBPF_BIN" ]]; then
+    info "Installing eBPF object to $INSTALL_EBPF"
+    mkdir -p "$INSTALL_EBPF_DIR"
+    install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
+    ok "$INSTALL_EBPF"
+else
+    warn "eBPF object not available — skipping (Tier 2 mode)"
+fi
 
 info "Installing CLI tools to /usr/local/bin"
 for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
@@ -247,7 +273,10 @@ if [[ -f "$INSTALL_CONF" ]]; then
     warn "New defaults are in $REPO_ROOT/deploy/argusd.conf for reference"
 else
     info "Installing default config to $INSTALL_CONF"
-    install -m 0644 "$REPO_ROOT/deploy/argusd.conf" "$INSTALL_CONF"
+    # Patch eBPF path from FHS (/usr/lib) to dev layout (/usr/local/lib)
+    sed 's|/usr/lib/argus|/usr/local/lib/argus|g' \
+        "$REPO_ROOT/deploy/argusd.conf" > "$INSTALL_CONF"
+    chmod 0644 "$INSTALL_CONF"
     ok "$INSTALL_CONF"
 fi
 
@@ -265,22 +294,64 @@ mkdir -p /var/lib/argus /var/run/argus
 ok "Runtime directories (/var/lib/argus, /var/run/argus)"
 
 # --- Install systemd unit ---
-
-info "Installing systemd unit to $INSTALL_UNIT"
-install -m 0644 "$REPO_ROOT/deploy/argusd.service" "$INSTALL_UNIT"
-systemctl daemon-reload
-ok "$INSTALL_UNIT (daemon-reload done)"
+if [[ "$HAS_SYSTEMD" == true ]]; then
+    # The canonical argusd.service uses FHS paths (/usr/bin). For dev installs
+    # we patch the path to /usr/local/bin so it matches where we actually installed.
+    info "Installing systemd unit to $INSTALL_UNIT"
+    sed 's|/usr/bin/argusd|/usr/local/bin/argusd|g' \
+        "$REPO_ROOT/deploy/argusd.service" > "$INSTALL_UNIT"
+    chmod 0644 "$INSTALL_UNIT"
+    systemctl daemon-reload
+    ok "$INSTALL_UNIT (daemon-reload done)"
+else
+    warn "Skipping systemd unit installation (no systemd)"
+fi
 
 # --- Done ---
+
+# --- Detect and report operating tier ---
+
+detect_tier() {
+    if [[ ! -f "$INSTALL_EBPF" ]]; then
+        echo "Tier 2"
+        return
+    fi
+    if [[ -f /sys/kernel/security/lockdown ]]; then
+        local mode
+        mode=$(cat /sys/kernel/security/lockdown 2>/dev/null || echo "")
+        if [[ "$mode" == *"[confidentiality]"* ]]; then
+            echo "Tier 2"
+            return
+        fi
+    fi
+    if [[ -d /sys/kernel/tracing ]] || [[ -d /sys/kernel/debug/tracing ]]; then
+        echo "Tier 1"
+    else
+        echo "Tier 2"
+    fi
+}
+
+DETECTED_TIER=$(detect_tier)
 
 echo ""
 echo "============================================"
 echo "  ARGUS installed successfully"
 echo "============================================"
 echo ""
-echo "  Enable on boot:   systemctl enable argusd"
-echo "  Start now:         systemctl start argusd"
-echo "  View logs:         journalctl -u argusd -f"
+echo "  Detected tier:    $DETECTED_TIER (eBPF=${DETECTED_TIER##Tier })"
+if [[ "$DETECTED_TIER" == "Tier 1" ]]; then
+    echo "                     Full eBPF: tracepoints + kprobes + kretprobes"
+else
+    echo "                     Fallback: procfs/sysfs collection (eBPF unavailable)"
+fi
+echo ""
+if [[ "$HAS_SYSTEMD" == true ]]; then
+    echo "  Enable on boot:   systemctl enable argusd"
+    echo "  Start now:         systemctl start argusd"
+    echo "  View logs:         journalctl -u argusd -f"
+else
+    echo "  Run directly:      argusd --mode live --ebpf-path $INSTALL_EBPF"
+fi
 echo "  Check metrics:     curl localhost:9100/metrics"
 echo ""
 echo "  Config files:"

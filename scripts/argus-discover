@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# argus-discover — Scan a subnet for ARGUS nodes and generate Prometheus targets.
+# argus-discover — Scan for ARGUS nodes and generate Prometheus targets.
 #
 # Usage:
 #   argus-discover --subnet 10.0.0.0/24
 #   argus-discover --subnet 10.0.0.0/24 --port 9100 --output /etc/prometheus/argus-targets.json
 #   argus-discover --subnet 10.0.0.0/24 --label cluster=gpu-rack-1
 #   argus-discover --subnet 192.168.5.0/24 --timeout 2 --dry-run
+#   argus-discover --hostfile hosts.txt --port 9100
+#   argus-discover --hosts node1,node2,fd00::1,[fd00::2]:9200
+#   argus-discover --subnet fd00::/120 --port 9100
 #
-# The script probes each IP on the ARGUS metrics port (default 9100) looking for
-# a valid /health endpoint. Discovered nodes are written as a Prometheus
+# Source modes:
+#   --subnet CIDR          IPv4 or small IPv6 prefix (/120+, max 256 hosts)
+#   --hostfile FILE        One hostname/IP per line
+#   --hosts H1,H2,...      Comma-separated hostnames/IPs
+#
+# The script probes each host on the ARGUS metrics port (default 9100) looking
+# for a valid /health endpoint. Discovered nodes are written as a Prometheus
 # file_sd_configs JSON file that Prometheus hot-reloads automatically.
 #
 # Requirements: bash 4+, curl (or nc as fallback)
@@ -22,20 +30,53 @@ DRY_RUN=false
 START_STACK=false
 LABELS=()
 SUBNET=""
+HOSTFILE=""
+HOSTS=""
+
+# Format host for curl — wrap IPv6 addresses in brackets
+curl_host() {
+    local h="$1"
+    if [[ "$h" == *:* && "$h" != \[* ]]; then
+        echo "[$h]"
+    else
+        echo "$h"
+    fi
+}
+
+# Format a host:port as a Prometheus target — brackets for IPv6
+format_target() {
+    local h="$1" p="$2"
+    if [[ "$h" == *:* ]]; then
+        echo "[${h}]:${p}"
+    else
+        echo "${h}:${p}"
+    fi
+}
 
 usage() {
     cat <<EOF
-Usage: argus-discover --subnet CIDR [OPTIONS]
+Usage: argus-discover [SOURCE] [OPTIONS]
+
+Source (at least one required):
+  --subnet CIDR         IPv4 subnet (e.g. 10.0.0.0/24) or small IPv6 prefix
+                        (max /120 = 256 hosts). For larger IPv6 ranges use --hostfile.
+  --hostfile FILE       File with one hostname or IP per line
+  --hosts H1,H2,...     Comma-separated list of hostnames or IPs
 
 Options:
-  --subnet CIDR       Subnet to scan (e.g. 10.0.0.0/24, 192.168.1.0/24)
-  --port PORT         ARGUS metrics port (default: 9100)
-  --output FILE       Write targets JSON here (default: stdout)
-  --label KEY=VALUE   Add label to all discovered targets (repeatable)
-  --timeout SECS      Connection timeout per host (default: 2)
-  --dry-run           Print discovered hosts but don't write file
-  --start             Discover nodes then start the Grafana + Prometheus stack
-  -h, --help          Show this help
+  --port PORT           ARGUS metrics port (default: 9100)
+  --output FILE         Write targets JSON here (default: stdout)
+  --label KEY=VALUE     Add label to all discovered targets (repeatable)
+  --timeout SECS        Connection timeout per host (default: 2)
+  --dry-run             Print discovered hosts but don't write file
+  --start               Discover nodes then start the Grafana + Prometheus stack
+  -h, --help            Show this help
+
+Examples:
+  argus-discover --subnet 10.0.0.0/24
+  argus-discover --hostfile /etc/argus/hosts.txt --port 9100
+  argus-discover --hosts 10.0.0.1,10.0.0.2,fd00::1 --label env=prod
+  argus-discover --subnet fd00:abcd::/120 --output targets.json
 EOF
     exit 0
 }
@@ -43,6 +84,8 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --subnet)   SUBNET="$2"; shift 2 ;;
+        --hostfile) HOSTFILE="$2"; shift 2 ;;
+        --hosts)    HOSTS="$2"; shift 2 ;;
         --port)     PORT="$2"; shift 2 ;;
         --output)   OUTPUT="$2"; shift 2 ;;
         --label)    LABELS+=("$2"); shift 2 ;;
@@ -54,10 +97,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$SUBNET" ]]; then
-    echo "Error: --subnet is required" >&2
+if [[ -z "$SUBNET" && -z "$HOSTFILE" && -z "$HOSTS" ]]; then
+    echo "Error: at least one of --subnet, --hostfile, or --hosts is required" >&2
     usage
 fi
+
+# ── IPv4 CIDR expansion ──────────────────────────────────────────────
 
 cidr_to_ips() {
     local cidr="$1"
@@ -81,26 +126,98 @@ cidr_to_ips() {
     done
 }
 
-probe_host() {
-    local ip="$1"
-    if curl -sf --connect-timeout "$TIMEOUT" --max-time "$((TIMEOUT + 1))" \
-        "http://${ip}:${PORT}/health" >/dev/null 2>&1; then
-        echo "$ip"
+# ── IPv6 small-prefix expansion ──────────────────────────────────────
+# Only supports /120 or smaller (256 hosts max). Uses python3 for
+# 128-bit arithmetic since bash can't handle it.
+
+ipv6_prefix_to_ips() {
+    local prefix="$1"
+    local mask="${prefix#*/}"
+
+    if (( mask < 120 )); then
+        echo "Error: IPv6 prefix /${mask} is too large to enumerate (max /120 = 256 hosts)." >&2
+        echo "Use --hostfile with a list of known hosts instead." >&2
+        exit 1
     fi
+
+    if ! command -v python3 &>/dev/null; then
+        echo "Error: python3 is required for IPv6 prefix expansion" >&2
+        exit 1
+    fi
+
+    python3 -c "
+import ipaddress, sys
+net = ipaddress.ip_network('${prefix}', strict=False)
+for host in net.hosts():
+    print(str(host))
+"
 }
 
-echo "Scanning ${SUBNET} on port ${PORT}..." >&2
+# ── Collect all candidate IPs/hostnames ──────────────────────────────
+
+CANDIDATES=()
+
+if [[ -n "$SUBNET" ]]; then
+    if [[ "$SUBNET" == *:* ]]; then
+        echo "Expanding IPv6 prefix ${SUBNET}..." >&2
+        mapfile -t v6_hosts < <(ipv6_prefix_to_ips "$SUBNET")
+        CANDIDATES+=("${v6_hosts[@]}")
+    else
+        mapfile -t v4_hosts < <(cidr_to_ips "$SUBNET")
+        CANDIDATES+=("${v4_hosts[@]}")
+    fi
+fi
+
+if [[ -n "$HOSTFILE" ]]; then
+    if [[ ! -f "$HOSTFILE" ]]; then
+        echo "Error: hostfile not found: ${HOSTFILE}" >&2
+        exit 1
+    fi
+    while IFS= read -r line; do
+        line="${line%%#*}"        # strip comments
+        line="${line// /}"        # strip whitespace
+        [[ -z "$line" ]] && continue
+        CANDIDATES+=("$line")
+    done < "$HOSTFILE"
+fi
+
+if [[ -n "$HOSTS" ]]; then
+    IFS=',' read -ra host_list <<< "$HOSTS"
+    for h in "${host_list[@]}"; do
+        h="${h// /}"
+        [[ -z "$h" ]] && continue
+        CANDIDATES+=("$h")
+    done
+fi
+
+TOTAL=${#CANDIDATES[@]}
+if [[ $TOTAL -eq 0 ]]; then
+    echo "No hosts to scan." >&2
+    exit 0
+fi
+
+echo "Scanning ${TOTAL} host(s) on port ${PORT}..." >&2
+
+# ── Probe hosts ──────────────────────────────────────────────────────
+
+probe_host() {
+    local host="$1"
+    local curl_target
+    curl_target="$(curl_host "$host")"
+    if curl -sf --connect-timeout "$TIMEOUT" --max-time "$((TIMEOUT + 1))" \
+        "http://${curl_target}:${PORT}/health" >/dev/null 2>&1; then
+        echo "$host"
+    fi
+}
 
 RESULT_FILE=$(mktemp)
 trap 'rm -f "$RESULT_FILE"' EXIT
 
-IPS=( $(cidr_to_ips "$SUBNET") )
-TOTAL=${#IPS[@]}
 ACTIVE=0
 MAX_PARALLEL=128
 
-for ip in "${IPS[@]}"; do
-    ( probe_host "$ip" >> "$RESULT_FILE" ) &
+for host in "${CANDIDATES[@]}"; do
+    ( probe_host "$host" >> "$RESULT_FILE" ) &
     ACTIVE=$((ACTIVE + 1))
     if (( ACTIVE >= MAX_PARALLEL )); then
         wait -n 2>/dev/null || wait
@@ -119,18 +236,19 @@ if [[ ${#DISCOVERED[@]} -eq 0 ]]; then
 fi
 
 if $DRY_RUN; then
-    for ip in "${DISCOVERED[@]}"; do
-        echo "  $ip:$PORT"
+    for host in "${DISCOVERED[@]}"; do
+        format_target "$host" "$PORT"
     done
     exit 0
 fi
 
-# Build targets JSON (Prometheus file_sd_configs format)
+# ── Build targets JSON (Prometheus file_sd_configs format) ───────────
+
 build_json() {
     local targets=""
-    for ip in "${DISCOVERED[@]}"; do
+    for host in "${DISCOVERED[@]}"; do
         [[ -n "$targets" ]] && targets+=","
-        targets+="\"${ip}:${PORT}\""
+        targets+="\"$(format_target "$host" "$PORT")\""
     done
 
     local labels_json="\"job\":\"argus\""
@@ -153,7 +271,6 @@ ENDJSON
 JSON=$(build_json)
 
 if $START_STACK; then
-    # Locate the observability stack: check CWD (repo root), then common paths
     for candidate in \
         "$PWD/deploy/observability" \
         "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy/observability" \

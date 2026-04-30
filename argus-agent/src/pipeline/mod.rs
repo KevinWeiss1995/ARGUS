@@ -68,6 +68,12 @@ impl Pipeline {
         self.aggregator.ingest_bpf_snapshot(snap);
     }
 
+    /// Ingest a procfs snapshot (Tier 2 fallback when eBPF is unavailable).
+    #[cfg(target_os = "linux")]
+    pub fn ingest_procfs_snapshot(&mut self, snap: &crate::sources::procfs::ProcfsSnapshot) {
+        self.aggregator.ingest_procfs_snapshot(snap);
+    }
+
     /// Run detection rules against current aggregated metrics.
     /// Call once per window tick, not per event. Capability providers run
     /// **before** detection so rules see fresh `Sample`s in the same window.

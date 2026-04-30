@@ -7,9 +7,23 @@ use std::path::PathBuf;
 // CLI (raw parsed arguments — Options used for mergeable fields)
 // ---------------------------------------------------------------------------
 
+fn build_version() -> &'static str {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    const HASH: &str = env!("ARGUS_BUILD_HASH");
+    const DATE: &str = env!("ARGUS_BUILD_DATE");
+
+    if HASH.is_empty() {
+        VERSION
+    } else {
+        // Leak is fine — called once at startup, lives for process lifetime
+        Box::leak(format!("{VERSION} ({HASH}, built {DATE})").into_boxed_str())
+    }
+}
+
 #[derive(Parser, Debug)]
-#[command(name = "argus-agent")]
+#[command(name = "argusd")]
 #[command(about = "ARGUS - Adaptive RDMA Guard & Utilization Sentinel")]
+#[command(version = build_version())]
 pub struct Cli {
     /// Path to TOML config file [default: /etc/argus/argusd.toml if it exists]
     #[arg(long)]

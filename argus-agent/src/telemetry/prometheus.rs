@@ -71,6 +71,8 @@ struct ArgusPrometheusMetrics {
     timescale_state: Family<Vec<(String, String)>, Gauge>,
     timescale_score_millis: Family<Vec<(String, String)>, Gauge>,
     burst_classification: Family<Vec<(String, String)>, Gauge>,
+    operating_tier: Gauge,
+    ebpf_probes_firing: Gauge,
 }
 
 impl PrometheusExporter {
@@ -453,6 +455,20 @@ impl PrometheusExporter {
             burst_classification.clone(),
         );
 
+        let operating_tier = Gauge::default();
+        registry.register(
+            "argus_operating_tier",
+            "Operating tier (1=full eBPF, 2=procfs/sysfs fallback)",
+            operating_tier.clone(),
+        );
+
+        let ebpf_probes_firing = Gauge::default();
+        registry.register(
+            "argus_ebpf_probes_firing",
+            "Whether eBPF probes produced data in the last window (1=yes, 0=no)",
+            ebpf_probes_firing.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -508,6 +524,8 @@ impl PrometheusExporter {
             timescale_state,
             timescale_score_millis,
             burst_classification,
+            operating_tier,
+            ebpf_probes_firing,
         };
 
         Self {
@@ -830,6 +848,16 @@ impl PrometheusExporter {
                 .get_or_create(&vec![("class".to_string(), (*class).to_string())])
                 .set(if *active { 1 } else { 0 });
         }
+    }
+
+    /// Set the operating tier (1=Tier1/eBPF, 2=Tier2/procfs).
+    pub fn set_operating_tier(&self, tier: i64) {
+        self.metrics.operating_tier.set(tier);
+    }
+
+    /// Set whether eBPF probes produced non-zero data in the last window.
+    pub fn set_ebpf_probes_firing(&self, firing: bool) {
+        self.metrics.ebpf_probes_firing.set(if firing { 1 } else { 0 });
     }
 
     /// Update the CQ latency percentile gauges from a `CompletionLatency`

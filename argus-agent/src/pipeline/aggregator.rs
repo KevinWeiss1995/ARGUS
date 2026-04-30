@@ -208,6 +208,29 @@ impl Aggregator {
         cq.stall_count = snap.cq_stall_count;
     }
 
+    /// Ingest a procfs snapshot (Tier 2 fallback when eBPF is unavailable).
+    /// Maps /proc/interrupts, /proc/slabinfo, and /proc/net/softnet_stat data
+    /// into the same AggregatedMetrics fields that the BPF snapshot populates.
+    #[cfg(target_os = "linux")]
+    pub fn ingest_procfs_snapshot(&mut self, snap: &crate::sources::procfs::ProcfsSnapshot) {
+        let dist = &mut self.metrics.interrupt_distribution;
+        for (i, &delta) in snap.per_cpu_irq_deltas.iter().enumerate() {
+            if i < dist.per_cpu_counts.len() {
+                dist.per_cpu_counts[i] = delta;
+            }
+        }
+        dist.total_count = snap.total_irq_count;
+
+        let slab = &mut self.metrics.slab_metrics;
+        slab.alloc_count = snap.slab_active_objects;
+        slab.free_count = snap.slab_total_objects.saturating_sub(snap.slab_active_objects);
+
+        let net = &mut self.metrics.network_metrics;
+        net.napi_polls = snap.total_softnet_processed;
+        net.napi_total_work = snap.total_time_squeeze;
+        net.napi_total_budget = snap.total_softnet_processed;
+    }
+
     #[must_use]
     pub fn current_metrics(&self) -> &AggregatedMetrics {
         &self.metrics

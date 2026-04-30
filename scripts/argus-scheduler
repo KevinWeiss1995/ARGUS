@@ -17,6 +17,16 @@ PORT="${ARGUS_PORT:-9100}"
 HOST="${ARGUS_HOST:-localhost}"
 SCHEME="http"
 
+# Format host for curl — wrap IPv6 addresses in brackets
+curl_host() {
+    local h="$1"
+    if [[ "$h" == *:* && "$h" != \[* ]]; then
+        echo "[$h]"
+    else
+        echo "$h"
+    fi
+}
+
 die()  { echo -e "\033[1;31mERR\033[0m $*" >&2; exit 1; }
 ok()   { echo -e "\033[1;32m OK\033[0m $*"; }
 info() { echo -e "\033[1;34m==>\033[0m $*"; }
@@ -204,7 +214,7 @@ cmd_disable() {
 
 cmd_status() {
     local metrics
-    if ! metrics=$(curl -sf --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/metrics" 2>/dev/null); then
+    if ! metrics=$(curl -sf --connect-timeout 3 --max-time 5 "${SCHEME}://$(curl_host "$HOST"):${PORT}/metrics" 2>/dev/null); then
         die "Cannot reach ARGUS at ${HOST}:${PORT}"
     fi
 
@@ -276,7 +286,7 @@ cmd_status() {
 
 cmd_hold() {
     local resp
-    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/scheduler/hold" 2>/dev/null); then
+    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://$(curl_host "$HOST"):${PORT}/scheduler/hold" 2>/dev/null); then
         die "Cannot reach ARGUS at ${HOST}:${PORT} (is scheduler enabled?)"
     fi
     ok "Operator hold set — ARGUS will not resume this node"
@@ -285,7 +295,7 @@ cmd_hold() {
 
 cmd_release() {
     local resp
-    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://${HOST}:${PORT}/scheduler/release" 2>/dev/null); then
+    if ! resp=$(curl -sf -X POST --connect-timeout 3 --max-time 5 "${SCHEME}://$(curl_host "$HOST"):${PORT}/scheduler/release" 2>/dev/null); then
         die "Cannot reach ARGUS at ${HOST}:${PORT} (is scheduler enabled?)"
     fi
     ok "Operator hold released — ARGUS will manage this node normally"

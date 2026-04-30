@@ -11,7 +11,7 @@ log_level = "info"
 window_secs = 3
 
 [metrics]
-addr = "0.0.0.0:9100"
+addr = "[::]:9100"
 
 # No TLS or auth — the bundled stack runs on the same host.
 # [tls]
