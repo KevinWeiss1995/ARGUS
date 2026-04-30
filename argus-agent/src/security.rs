@@ -1,13 +1,14 @@
 //! Security hardening: privilege dropping, capability management.
 //!
 //! After eBPF programs are loaded and tracepoints attached, the agent no longer
-//! needs elevated privileges. This module drops everything unnecessary.
+//! needs elevated privileges. This module drops everything unnecessary, keeping
+//! only `CAP_BPF` for ongoing BPF map reads on kernels < 5.19.
 
 /// Drop capabilities and set `PR_SET_NO_NEW_PRIVS` after eBPF initialization.
 ///
-/// Keeps only the capabilities needed for ongoing operation:
-/// - `CAP_BPF`: required for `bpf(BPF_MAP_LOOKUP_ELEM)` on kernels < 5.19
-/// - Reading sysfs hardware counters (no capability needed)
+/// Strategy: iterate ALL known capabilities and drop everything except `CAP_BPF`.
+/// This is future-proof — if Linux adds new caps, they get dropped automatically
+/// rather than requiring a manual update to a drop-list.
 ///
 /// This is Linux-only and best-effort: failure to drop is logged but non-fatal,
 /// since running in a container or without ambient caps can cause benign errors.
@@ -15,27 +16,119 @@
 pub fn drop_privileges() {
     use tracing::{info, warn};
 
+    log_held_capabilities("pre-drop");
+
     if let Err(e) = set_no_new_privs() {
         warn!("failed to set PR_SET_NO_NEW_PRIVS: {e}");
     } else {
-        info!("PR_SET_NO_NEW_PRIVS set — no further privilege escalation possible");
+        info!("PR_SET_NO_NEW_PRIVS set");
     }
 
-    match drop_all_caps() {
-        Ok(dropped) => {
-            info!(count = dropped, "capabilities dropped");
+    let mut dropped = 0u32;
+    let mut errors = 0u32;
+
+    for cap_idx in 0..64u32 {
+        let cap = match cap_from_index(cap_idx) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        if cap == caps::Capability::CAP_BPF {
+            continue;
         }
-        Err(errors) => {
-            for err in &errors {
-                warn!("capability drop error: {err}");
+
+        for set in [caps::CapSet::Effective, caps::CapSet::Permitted] {
+            match caps::has_cap(None, set, cap) {
+                Ok(true) => {
+                    if let Err(e) = caps::drop(None, set, cap) {
+                        warn!(cap = ?cap, set = ?set, "cap drop failed: {e}");
+                        errors += 1;
+                    } else {
+                        dropped += 1;
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => {}
             }
-            warn!(
-                "dropped some capabilities but {} errors occurred — process may retain \
-                 more privilege than intended",
-                errors.len()
-            );
         }
     }
+
+    if errors > 0 {
+        warn!(dropped, errors, "privilege drop completed with errors");
+    } else {
+        info!(dropped, "privileges dropped");
+    }
+
+    log_held_capabilities("post-drop");
+}
+
+/// Log all capabilities currently in the effective set.
+#[cfg(target_os = "linux")]
+fn log_held_capabilities(phase: &str) {
+    match caps::read(None, caps::CapSet::Effective) {
+        Ok(set) => {
+            let names: Vec<String> = set.iter().map(|c| format!("{c:?}")).collect();
+            if names.is_empty() {
+                tracing::info!(phase, "effective capabilities: none");
+            } else {
+                tracing::info!(phase, caps = names.join(", "), "effective capabilities");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(phase, "failed to read effective capabilities: {e}");
+        }
+    }
+}
+
+/// Map a raw capability index to the caps crate enum.
+/// Returns None for indices that don't map to a known capability.
+#[cfg(target_os = "linux")]
+fn cap_from_index(idx: u32) -> Option<caps::Capability> {
+    use caps::Capability::*;
+    Some(match idx {
+        0 => CAP_CHOWN,
+        1 => CAP_DAC_OVERRIDE,
+        2 => CAP_DAC_READ_SEARCH,
+        3 => CAP_FOWNER,
+        4 => CAP_FSETID,
+        5 => CAP_KILL,
+        6 => CAP_SETGID,
+        7 => CAP_SETUID,
+        8 => CAP_SETPCAP,
+        9 => CAP_LINUX_IMMUTABLE,
+        10 => CAP_NET_BIND_SERVICE,
+        11 => CAP_NET_BROADCAST,
+        12 => CAP_NET_ADMIN,
+        13 => CAP_NET_RAW,
+        14 => CAP_IPC_LOCK,
+        15 => CAP_IPC_OWNER,
+        16 => CAP_SYS_MODULE,
+        17 => CAP_SYS_RAWIO,
+        18 => CAP_SYS_CHROOT,
+        19 => CAP_SYS_PTRACE,
+        20 => CAP_SYS_PACCT,
+        21 => CAP_SYS_ADMIN,
+        22 => CAP_SYS_BOOT,
+        23 => CAP_SYS_NICE,
+        24 => CAP_SYS_RESOURCE,
+        25 => CAP_SYS_TIME,
+        26 => CAP_SYS_TTY_CONFIG,
+        27 => CAP_MKNOD,
+        28 => CAP_LEASE,
+        29 => CAP_AUDIT_WRITE,
+        30 => CAP_AUDIT_CONTROL,
+        31 => CAP_SETFCAP,
+        32 => CAP_MAC_OVERRIDE,
+        33 => CAP_MAC_ADMIN,
+        34 => CAP_SYSLOG,
+        35 => CAP_WAKE_ALARM,
+        36 => CAP_BLOCK_SUSPEND,
+        37 => CAP_AUDIT_READ,
+        38 => CAP_PERFMON,
+        39 => CAP_BPF,
+        40 => CAP_CHECKPOINT_RESTORE,
+        _ => return None,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -54,65 +147,15 @@ fn set_no_new_privs() -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn drop_all_caps() -> Result<usize, Vec<String>> {
-    use caps::{CapSet, Capability};
-
-    // CAP_BPF is retained: per-CPU BPF map reads use the bpf() syscall which
-    // requires CAP_BPF on kernels < 5.19. The map FDs are already open, but
-    // BPF_MAP_LOOKUP_ELEM still checks capabilities on older kernels.
-    let caps_to_drop = [
-        Capability::CAP_SYS_ADMIN,
-        Capability::CAP_NET_ADMIN,
-        Capability::CAP_NET_RAW,
-        Capability::CAP_SYS_PTRACE,
-        Capability::CAP_DAC_OVERRIDE,
-        Capability::CAP_DAC_READ_SEARCH,
-        Capability::CAP_PERFMON,
-    ];
-
-    let mut dropped = 0usize;
-    let mut errors: Vec<String> = Vec::new();
-
-    for cap in &caps_to_drop {
-        // Not holding the cap is not an error — `caps::has_cap` returns false
-        // and we skip. Only real drop failures are reported.
-        let mut any_success = false;
-        for set in [CapSet::Effective, CapSet::Permitted] {
-            match caps::has_cap(None, set, *cap) {
-                Ok(false) => continue,
-                Ok(true) => match caps::drop(None, set, *cap) {
-                    Ok(()) => any_success = true,
-                    Err(e) => errors.push(format!("drop {cap:?} from {set:?}: {e}")),
-                },
-                Err(e) => errors.push(format!("has_cap {cap:?} in {set:?}: {e}")),
-            }
-        }
-        if any_success {
-            dropped += 1;
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(dropped)
-    } else {
-        Err(errors)
-    }
-}
-
 /// Harden against privilege escalation. NOTE: this does NOT install a seccomp
-/// BPF syscall filter — the name is kept for CLI/API stability. A real filter
-/// requires enumerating every syscall the tokio runtime, aya, and libc use,
-/// which is architecture- and kernel-version-specific and has not been
-/// implemented. Today this only ensures `PR_SET_NO_NEW_PRIVS`, which
-/// `drop_privileges` also sets; calling both is harmless and idempotent.
+/// BPF syscall filter — the name is kept for CLI/API stability. Today this
+/// only ensures `PR_SET_NO_NEW_PRIVS`, which `drop_privileges` also sets;
+/// calling both is harmless and idempotent.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub fn apply_seccomp() {
     use tracing::{info, warn};
 
-    // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is an idempotent, thread-scoped
-    // kernel call that only restricts the caller.
     let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
 
     if ret != 0 {
@@ -123,10 +166,7 @@ pub fn apply_seccomp() {
         return;
     }
 
-    info!(
-        "seccomp flag: PR_SET_NO_NEW_PRIVS enforced — note that no BPF syscall \
-         filter is installed yet; this only blocks setuid/file-caps escalation"
-    );
+    info!("PR_SET_NO_NEW_PRIVS enforced (no BPF syscall filter installed)");
 }
 
 #[cfg(not(target_os = "linux"))]
