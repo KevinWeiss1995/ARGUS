@@ -72,6 +72,12 @@ static QP_OWNERS: LruHashMap<u32, u32> = LruHashMap::with_max_entries(4096, 0);
 #[map]
 static CQ_POLL_SCRATCH: LruHashMap<u64, u64> = LruHashMap::with_max_entries(256, 0);
 
+/// Per-CPU LRU miss counter. Incremented when a lookup on an LRU map
+/// (WR_TIMESTAMPS, SLAB_ALLOC_SCRATCH) returns None where a hit was expected.
+/// Layout: [cq_lru_misses, slab_lru_misses]
+#[map]
+static LRU_MISSES: PerCpuArray<[u64; 2]> = PerCpuArray::with_max_entries(1, 0);
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
