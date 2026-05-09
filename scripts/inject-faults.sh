@@ -100,6 +100,8 @@ iptables_setup_chain() {
 iptables_drop() {
     local pct="$1"
     iptables_setup_chain
+    # Flush existing rules in our chain first to ensure idempotency
+    iptables -F "$IPTABLES_CHAIN" 2>/dev/null || true
     # statistic module: --every N drops 1-in-N packets
     # Convert percentage to 1/N: 0.5% -> 1/200, 5% -> 1/20
     local every
@@ -121,17 +123,34 @@ iptables_clear() {
 # Slab pressure (kernel-agnostic — just needs a process that allocates)
 # ---------------------------------------------------------------------------
 
+BG_PIDS=()
+
+cleanup_bg() {
+    if [[ ${#BG_PIDS[@]} -gt 0 ]]; then
+        info "Cleaning up background processes..."
+        for pid in "${BG_PIDS[@]}"; do
+            kill "$pid" 2>/dev/null || true
+        done
+    fi
+}
+
 slab_pressure() {
+    trap cleanup_bg EXIT INT TERM
     if command -v stress-ng &>/dev/null; then
         info "Using stress-ng for slab/memory pressure"
         stress-ng --vm 2 --vm-bytes 256M --vm-method all --timeout 30s &
+        BG_PIDS+=($!)
         info "stress-ng running for 30s (PID: $!)"
+        info "Ctrl-C to stop early"
+        wait "${BG_PIDS[@]}" 2>/dev/null || true
     elif command -v dd &>/dev/null; then
         info "stress-ng not found — falling back to dd-based memory pressure"
-        for i in 1 2; do
+        for _ in 1 2; do
             dd if=/dev/urandom of=/dev/null bs=1M count=256 2>/dev/null &
+            BG_PIDS+=($!)
         done
         info "dd workers running (will self-terminate). For better results: apt install stress-ng"
+        wait "${BG_PIDS[@]}" 2>/dev/null || true
     else
         die "No tool available for memory pressure injection"
     fi
