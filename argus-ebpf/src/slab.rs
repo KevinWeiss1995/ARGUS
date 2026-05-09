@@ -4,7 +4,7 @@ use aya_ebpf::{
     programs::{ProbeContext, RetProbeContext, TracePointContext},
 };
 
-use super::{OFFSETS, SLAB_ALLOC_SCRATCH, SLAB_STATS};
+use super::{LRU_MISSES, OFFSETS, SLAB_ALLOC_SCRATCH, SLAB_STATS};
 
 // ---------------------------------------------------------------------------
 // Tracepoint: kmem/kmem_cache_alloc — byte accounting (lightweight)
@@ -107,7 +107,13 @@ fn try_kretprobe_slab_alloc(_ctx: &RetProbeContext) -> Result<u32, i64> {
 
     let entry_ts = match unsafe { SLAB_ALLOC_SCRATCH.get(&pid_tgid) } {
         Some(&ts) => ts,
-        None => return Ok(0),
+        None => {
+            // LRU miss — entry timestamp was evicted under scratch map pressure.
+            if let Some(misses) = LRU_MISSES.get_ptr_mut(0) {
+                unsafe { (*misses)[1] += 1; }
+            }
+            return Ok(0);
+        }
     };
 
     let _ = SLAB_ALLOC_SCRATCH.remove(&pid_tgid);
