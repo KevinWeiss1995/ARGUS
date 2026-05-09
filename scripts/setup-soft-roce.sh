@@ -147,7 +147,7 @@ else
 
     echo ""
     echo "Available RDMA modules in this kernel:"
-    find "/lib/modules/$(uname -r)" -name '*rdma*' -o -name '*rxe*' -o -name '*ib_*' 2>/dev/null | head -20 || echo "  (none found)"
+    find "/lib/modules/$(uname -r)" \( -name '*rdma*' -o -name '*rxe*' -o -name '*ib_*' \) 2>/dev/null | head -20 || echo "  (none found)"
     
     echo ""
     echo "=== Remediation ==="
