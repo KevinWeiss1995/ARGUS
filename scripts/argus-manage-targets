@@ -48,7 +48,7 @@ Commands:
   verify                  Probe all targets and report status
 
 Options:
-  --file PATH             Targets file (default: $DEFAULT_TARGETS)
+  --file PATH             Targets file (default: deploy/observability/argus-targets.json)
   -h, --help              Show this help
 
 Environment:
@@ -224,7 +224,7 @@ verify_targets() {
     fi
     echo "Verifying ARGUS targets..."
     local ok=0 fail=0
-    echo "$targets" | while read -r t; do
+    while read -r t; do
         local host="${t%:*}"
         local port="${t#*:}"
         if curl -sf --connect-timeout 3 --max-time 4 "http://${host}:${port}/health" >/dev/null 2>&1; then
@@ -234,7 +234,12 @@ verify_targets() {
             echo "  ✗ ${t} — not responding"
             fail=$((fail + 1))
         fi
-    done
+    done <<< "$targets"
+    echo ""
+    echo "${ok} OK, ${fail} failed out of $((ok + fail)) target(s)."
+    if [[ "$fail" -gt 0 ]]; then
+        exit 1
+    fi
 }
 
 # Parse global options
