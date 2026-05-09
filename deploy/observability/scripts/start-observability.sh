@@ -51,7 +51,7 @@ fi
 
 cd "$STACK_DIR"
 echo "Starting ARGUS observability stack..."
-docker compose up -d
+docker compose up -d --force-recreate
 
 echo ""
 echo "Services:"
