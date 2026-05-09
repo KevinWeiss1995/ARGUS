@@ -44,6 +44,9 @@ mod inner {
         pub cq_total_latency_ns: u64,
         pub cq_max_latency_ns: u64,
         pub cq_stall_count: u64,
+        // LRU eviction counters
+        pub cq_lru_misses: u64,
+        pub slab_lru_misses: u64,
     }
 
     // SAFETY: [u64; 4] and [u64; 3] are plain arrays of Pod types, trivially safe.
@@ -60,6 +63,10 @@ mod inner {
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct CqJitterStatsArray([u64; 4]);
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct LruMissesArray([u64; 2]);
+    unsafe impl Pod for LruMissesArray {}
 
     pub struct EbpfEventSource {
         #[allow(dead_code)]
@@ -69,17 +76,57 @@ mod inner {
         slab_stats_map: PerCpuArray<aya::maps::MapData, SlabStatsArray>,
         napi_stats_map: PerCpuArray<aya::maps::MapData, NapiStatsArray>,
         cq_jitter_stats_map: Option<PerCpuArray<aya::maps::MapData, CqJitterStatsArray>>,
+        lru_misses_map: Option<PerCpuArray<aya::maps::MapData, LruMissesArray>>,
         qp_owners_map: Option<AyaHashMap<aya::maps::MapData, u32, u32>>,
         prev_irq_per_cpu: Vec<u64>,
         prev_slab_totals: [u64; 6],
         prev_napi_totals: [u64; 3],
         prev_cq_totals: [u64; 4],
+        prev_lru_misses: [u64; 2],
         read_count: u32,
+    }
+
+    /// Parse kernel version from /proc/sys/kernel/osrelease and return (major, minor).
+    fn check_kernel_version() -> Result<(u32, u32), EventSourceError> {
+        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .map_err(|e| EventSourceError::Other(format!("cannot read kernel version: {e}")))?;
+        let release = release.trim();
+        let parts: Vec<&str> = release.split('.').collect();
+        let major: u32 = parts.first()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let minor: u32 = parts.get(1)
+            .and_then(|s| s.split('-').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        info!(
+            component = "ebpf",
+            kernel_version = release,
+            "detected kernel {major}.{minor}"
+        );
+
+        if major < 4 || (major == 4 && minor < 18) {
+            return Err(EventSourceError::Other(format!(
+                "kernel {release} is too old for eBPF CO-RE (minimum 4.18 required)"
+            )));
+        }
+        if major < 5 || (major == 5 && minor < 8) {
+            warn!(
+                component = "ebpf",
+                kernel_version = release,
+                "kernel < 5.8 — some eBPF features (ring buffer, BTF) may be unavailable"
+            );
+        }
+
+        Ok((major, minor))
     }
 
     impl EbpfEventSource {
         /// Load the eBPF program and attach tracepoints + kprobes.
         pub fn new(ebpf_path: &Path) -> Result<Self, EventSourceError> {
+            check_kernel_version()?;
+
             let mut ebpf = EbpfLoader::new()
                 .load_file(ebpf_path)
                 .map_err(|e| EventSourceError::Other(format!("failed to load eBPF: {e}")))?;
@@ -153,8 +200,12 @@ mod inner {
             let kprobe_targets = kallsyms::discover_kprobe_targets();
             let mut cq_kprobes_attached = false;
             if kprobe_targets.is_available() {
-                let submit_fn = kprobe_targets.wr_submit.as_deref().unwrap();
-                let poll_fn = kprobe_targets.cq_poll.as_deref().unwrap();
+                let Some(submit_fn) = kprobe_targets.wr_submit.as_deref() else {
+                    anyhow::bail!("kprobe_targets.is_available() returned true but wr_submit is None");
+                };
+                let Some(poll_fn) = kprobe_targets.cq_poll.as_deref() else {
+                    anyhow::bail!("kprobe_targets.is_available() returned true but cq_poll is None");
+                };
 
                 match Self::attach_kprobe(&mut ebpf, "kprobe_wr_submit", submit_fn) {
                     Ok(()) => {
@@ -211,12 +262,13 @@ mod inner {
 
             if !failures.is_empty() {
                 info!(
+                    component = "ebpf",
                     attached,
                     skipped = failures.len(),
                     "eBPF probes partially attached"
                 );
             } else {
-                info!(attached, "all eBPF probes attached");
+                info!(component = "ebpf", attached, "all eBPF probes attached");
             }
 
             let irq_map = ebpf
@@ -273,6 +325,17 @@ mod inner {
                 None
             };
 
+            let lru_misses_map = ebpf.take_map("LRU_MISSES").and_then(|m| {
+                let arr: Result<PerCpuArray<_, LruMissesArray>, _> = m.try_into();
+                match arr {
+                    Ok(a) => Some(a),
+                    Err(e) => {
+                        warn!("LRU_MISSES map error (non-fatal): {e}");
+                        None
+                    }
+                }
+            });
+
             Ok(Self {
                 ebpf,
                 attached_probes,
@@ -280,11 +343,13 @@ mod inner {
                 slab_stats_map,
                 napi_stats_map,
                 cq_jitter_stats_map,
+                lru_misses_map,
                 qp_owners_map,
                 prev_irq_per_cpu: Vec::new(),
                 prev_slab_totals: [0; 6],
                 prev_napi_totals: [0; 3],
                 prev_cq_totals: [0; 4],
+                prev_lru_misses: [0; 2],
                 read_count: 0,
             })
         }
@@ -566,6 +631,27 @@ mod inner {
                     }
                     Err(e) => {
                         warn!("CQ_JITTER_STATS map read failed: {e}");
+                    }
+                }
+            }
+
+            // --- LRU miss counters (optional) ---
+            if let Some(ref map) = self.lru_misses_map {
+                match map.get(&0, 0) {
+                    Ok(percpu_vals) => {
+                        let mut totals = [0u64; 2];
+                        for val in percpu_vals.iter() {
+                            for (i, t) in totals.iter_mut().enumerate() {
+                                *t += val.0[i];
+                            }
+                        }
+                        let prev = &self.prev_lru_misses;
+                        snap.cq_lru_misses = totals[0].saturating_sub(prev[0]);
+                        snap.slab_lru_misses = totals[1].saturating_sub(prev[1]);
+                        self.prev_lru_misses = totals;
+                    }
+                    Err(e) => {
+                        warn!("LRU_MISSES map read failed: {e}");
                     }
                 }
             }
