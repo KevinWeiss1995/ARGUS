@@ -31,12 +31,18 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    install_panic_hook();
+
     if let Some(ref path) = config.tls_cert {
         tracing::info!(?path, "TLS enabled for metrics endpoint");
     }
     if config.auth_token.is_some() {
         tracing::info!("bearer token auth enabled for metrics endpoint");
     }
+
+    // Singleton enforcement: advisory flock on PID file.
+    // The _pid_guard must live for the duration of main() — dropping it releases the lock.
+    let _pid_guard = acquire_pid_lock()?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -150,10 +156,11 @@ async fn main() -> Result<()> {
             _ => None,
         };
         let auth_token = config.auth_token.clone();
+        let metrics_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             if let Err(e) =
                 argus_agent::telemetry::prometheus::serve_metrics(
-                    exp, hs, ss, rc, cov, addr, tls_cfg, auth_token,
+                    exp, hs, ss, rc, cov, addr, tls_cfg, auth_token, metrics_shutdown,
                 )
                 .await
             {
@@ -375,6 +382,7 @@ fn run_live_mode(
                         dev_type,
                     );
                 }
+                exp.update_lru_evictions(snap.cq_lru_misses, snap.slab_lru_misses);
             }
             if let Ok(mut hs) = health_snapshot.lock() {
                 hs.state = dash_state.health;
@@ -627,10 +635,9 @@ async fn run_event_mode(
             }
             Err(e) => {
                 if let Some(ref mut dash) = dashboard {
-                    dash.shutdown()?;
+                    let _ = dash.shutdown();
                 }
-                eprintln!("Event source error: {e}");
-                break;
+                return Err(anyhow::anyhow!("event source error: {e}"));
             }
         }
     }
@@ -723,16 +730,61 @@ async fn run_attach_tui(addr: &str) -> Result<()> {
     Ok(())
 }
 
+/// Install a panic hook that restores the terminal (if in raw mode) and
+/// emits structured logging before the process aborts.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Attempt terminal restoration so the user's shell isn't left in raw mode.
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stderr(),
+            crossterm::terminal::LeaveAlternateScreen
+        );
+
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".into());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic>".into()
+        };
+
+        tracing::error!(
+            component = "agent",
+            panic.location = %location,
+            panic.payload = %payload,
+            "ARGUS agent panicked — aborting"
+        );
+
+        default_hook(info);
+    }));
+}
+
 async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
 
     #[cfg(unix)]
     {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-        tokio::select! {
-            _ = ctrl_c => {},
-            _ = sigterm.recv() => {},
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = ctrl_c => {},
+                    _ = sigterm.recv() => {},
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "agent",
+                    error = %e,
+                    "SIGTERM handler unavailable, falling back to ctrl-c only"
+                );
+                ctrl_c.await.ok();
+            }
         }
     }
 
@@ -740,6 +792,52 @@ async fn shutdown_signal() {
     {
         ctrl_c.await.ok();
     }
+}
+
+/// Acquire an advisory lock on a PID file to prevent multiple agent instances.
+/// Returns a guard that holds the lock file open; dropping it releases the lock.
+fn acquire_pid_lock() -> Result<std::fs::File> {
+    use std::io::Write;
+
+    let pid_dir = std::path::Path::new("/var/run/argus");
+    if !pid_dir.exists() {
+        std::fs::create_dir_all(pid_dir)
+            .context("failed to create /var/run/argus for PID file")?;
+    }
+    let pid_path = pid_dir.join("argusd.pid");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&pid_path)
+        .with_context(|| format!("failed to open PID file: {}", pid_path.display()))?;
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = file.as_raw_fd();
+        // SAFETY: flock is a POSIX advisory lock on a valid fd we own.
+        #[allow(unsafe_code)]
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            bail!(
+                "another argusd instance is already running (could not lock {})",
+                pid_path.display()
+            );
+        }
+    }
+
+    write!(file, "{}", std::process::id())
+        .with_context(|| format!("failed to write PID to {}", pid_path.display()))?;
+    file.sync_all()?;
+
+    tracing::info!(
+        pid = std::process::id(),
+        path = %pid_path.display(),
+        component = "agent",
+        "PID file lock acquired"
+    );
+    Ok(file)
 }
 
 /// Load expected eBPF hash from the well-known path written by RPM %post.
