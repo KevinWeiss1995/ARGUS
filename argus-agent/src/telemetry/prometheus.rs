@@ -72,6 +72,7 @@ struct ArgusPrometheusMetrics {
     timescale_state: Family<Vec<(String, String)>, Gauge>,
     timescale_score_millis: Family<Vec<(String, String)>, Gauge>,
     burst_classification: Family<Vec<(String, String)>, Gauge>,
+    ebpf_lru_evictions: Family<Vec<(String, String)>, Counter>,
 }
 
 impl PrometheusExporter {
@@ -461,6 +462,13 @@ impl PrometheusExporter {
             burst_classification.clone(),
         );
 
+        let ebpf_lru_evictions = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "argus_ebpf_lru_evictions",
+            "eBPF LRU map miss count (correlations lost due to map pressure)",
+            ebpf_lru_evictions.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -517,12 +525,29 @@ impl PrometheusExporter {
             timescale_state,
             timescale_score_millis,
             burst_classification,
+            ebpf_lru_evictions,
         };
 
         Self {
             registry,
             metrics,
             prev_health: HealthState::Healthy,
+        }
+    }
+
+    /// Record eBPF LRU map miss deltas.
+    pub fn update_lru_evictions(&self, cq_misses: u64, slab_misses: u64) {
+        if cq_misses > 0 {
+            self.metrics
+                .ebpf_lru_evictions
+                .get_or_create(&vec![("map".to_string(), "cq".to_string())])
+                .inc_by(cq_misses);
+        }
+        if slab_misses > 0 {
+            self.metrics
+                .ebpf_lru_evictions
+                .get_or_create(&vec![("map".to_string(), "slab".to_string())])
+                .inc_by(slab_misses);
         }
     }
 
@@ -991,6 +1016,12 @@ pub struct TlsConfig {
 /// When `tls` is `Some`, the server uses TLS (HTTPS). When `auth_token` is
 /// `Some`, every request must include a matching `Authorization: Bearer <token>`
 /// header or receive a 401.
+/// Maximum concurrent connections to the metrics server.
+const MAX_METRICS_CONNECTIONS: usize = 128;
+
+/// Per-connection idle timeout.
+const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub async fn serve_metrics(
     exporter: SharedExporter,
     health: SharedHealthState,
@@ -1000,51 +1031,138 @@ pub async fn serve_metrics(
     addr: std::net::SocketAddr,
     tls: Option<TlsConfig>,
     auth_token: Option<String>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpListener;
 
-    let tls_acceptor = if let Some(ref tls_cfg) = tls {
-        Some(build_tls_acceptor(tls_cfg)?)
-    } else {
-        None
-    };
+    let tls_acceptor: Option<Arc<std::sync::RwLock<tokio_rustls::TlsAcceptor>>> =
+        if let Some(ref tls_cfg) = tls {
+            Some(Arc::new(std::sync::RwLock::new(build_tls_acceptor(tls_cfg)?)))
+        } else {
+            None
+        };
+
+    // SIGHUP handler for TLS certificate reload
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .ok();
+    #[cfg(not(unix))]
+    let mut sighup: Option<futures_core::Never> = None;
 
     let listener = TcpListener::bind(addr).await?;
     let scheme = if tls.is_some() { "https" } else { "http" };
-    tracing::info!(%addr, %scheme, "metrics/health server listening");
+    tracing::info!(%addr, %scheme, component = "metrics", "metrics/health server listening");
 
     let auth_token: Option<Arc<str>> = auth_token.map(|t| Arc::from(t.as_str()));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_METRICS_CONNECTIONS));
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let exporter = exporter.clone();
-        let health = health.clone();
-        let status = status.clone();
-        let reconciler = reconciler.clone();
-        let coverage = coverage.clone();
-        let auth = auth_token.clone();
+        // Build a future that resolves on SIGHUP (or never if unavailable).
+        let sighup_fut = async {
+            #[cfg(unix)]
+            if let Some(ref mut sig) = sighup {
+                sig.recv().await;
+                return;
+            }
+            std::future::pending::<()>().await;
+            #[cfg(not(unix))]
+            { std::future::pending::<()>().await; }
+        };
 
-        if let Some(ref acceptor) = tls_acceptor {
-            let acceptor = acceptor.clone();
-            tokio::spawn(async move {
-                let tls_stream = match acceptor.accept(stream).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::debug!("TLS handshake failed: {e}");
-                        return;
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, _) = result?;
+                let exporter = exporter.clone();
+                let health = health.clone();
+                let status = status.clone();
+                let reconciler = reconciler.clone();
+                let coverage = coverage.clone();
+                let auth = auth_token.clone();
+                let sem = semaphore.clone();
+
+                let permit = match sem.try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!(component = "metrics", "connection rejected: max connections reached");
+                        drop(stream);
+                        continue;
                     }
                 };
-                let io = TokioIo::new(tls_stream);
-                serve_connection(io, exporter, health, status, reconciler, coverage, auth).await;
-            });
-        } else {
-            let io = TokioIo::new(stream);
-            tokio::spawn(async move {
-                serve_connection(io, exporter, health, status, reconciler, coverage, auth).await;
-            });
+
+                if let Some(ref tls_lock) = tls_acceptor {
+                    let acceptor = tls_lock.read()
+                        .map(|g| g.clone())
+                        .unwrap_or_else(|p| p.into_inner().clone());
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let tls_stream = match tokio::time::timeout(
+                            CONNECTION_TIMEOUT,
+                            acceptor.accept(stream),
+                        ).await {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                tracing::debug!(component = "metrics", "TLS handshake failed: {e}");
+                                return;
+                            }
+                            Err(_) => {
+                                tracing::debug!(component = "metrics", "TLS handshake timed out");
+                                return;
+                            }
+                        };
+                        let io = TokioIo::new(tls_stream);
+                        let _ = tokio::time::timeout(
+                            CONNECTION_TIMEOUT,
+                            serve_connection(io, exporter, health, status, reconciler, coverage, auth),
+                        ).await;
+                    });
+                } else {
+                    let io = TokioIo::new(stream);
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let _ = tokio::time::timeout(
+                            CONNECTION_TIMEOUT,
+                            serve_connection(io, exporter, health, status, reconciler, coverage, auth),
+                        ).await;
+                    });
+                }
+            }
+            _ = sighup_fut => {
+                if let Some(ref tls_cfg) = tls {
+                    match build_tls_acceptor(tls_cfg) {
+                        Ok(new_acceptor) => {
+                            if let Some(ref lock) = tls_acceptor {
+                                if let Ok(mut guard) = lock.write() {
+                                    *guard = new_acceptor;
+                                }
+                            }
+                            tracing::info!(
+                                component = "metrics",
+                                "TLS certificates reloaded via SIGHUP"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                component = "metrics",
+                                error = %e,
+                                "TLS certificate reload failed — keeping existing certificates"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::debug!(component = "metrics", "SIGHUP received but TLS not configured");
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    tracing::info!(component = "metrics", "metrics server shutting down");
+                    break;
+                }
+            }
         }
     }
+
+    Ok(())
 }
 
 async fn serve_connection<I>(
@@ -1107,28 +1225,48 @@ async fn serve_connection<I>(
                     )
                 }
                 "/health" => {
-                    let snap = health.lock().map(|h| h.clone()).unwrap_or_default();
-                    let body = format!(
-                        r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
-                        snap.state,
-                        snap.uptime_secs,
-                        snap.events_processed,
-                        snap.last_window_ts,
-                    );
-                    Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", "application/json")
-                        .body(Full::new(Bytes::from(body)))
-                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    match health.lock() {
+                        Ok(snap) => {
+                            let body = format!(
+                                r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
+                                snap.state,
+                                snap.uptime_secs,
+                                snap.events_processed,
+                                snap.last_window_ts,
+                            );
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                        Err(_) => {
+                            Ok(Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(r#"{"error":"health lock poisoned"}"#)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                    }
                 }
                 "/status" => {
-                    let snap = status.lock().map(|s| s.clone()).unwrap_or_default();
-                    let body = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into());
-                    Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", "application/json")
-                        .body(Full::new(Bytes::from(body)))
-                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                    match status.lock() {
+                        Ok(snap) => {
+                            let body = serde_json::to_string(&*snap).unwrap_or_else(|_| "{}".into());
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                        Err(_) => {
+                            Ok(Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(r#"{"error":"status lock poisoned"}"#)))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
+                        }
+                    }
                 }
                 "/coverage" => {
                     if let Some(ref cov) = coverage {
@@ -1240,10 +1378,12 @@ fn build_tls_acceptor(cfg: &TlsConfig) -> anyhow::Result<tokio_rustls::TlsAccept
         .map_err(|e| anyhow::anyhow!("failed to parse TLS private key: {e}"))?
         .ok_or_else(|| anyhow::anyhow!("no private key found in {}", cfg.key_path.display()))?;
 
-    let server_config = ServerConfig::builder()
+    let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .map_err(|e| anyhow::anyhow!("TLS server config error: {e}"))?;
+
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(
         server_config,
