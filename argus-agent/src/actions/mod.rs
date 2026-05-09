@@ -105,6 +105,7 @@ impl ActionEngine {
         for handler in &self.handlers {
             let result = if self.dry_run {
                 info!(
+                    component = "actions",
                     handler = handler.name(),
                     alert = alert.kind_name(),
                     "[DRY RUN] would execute action"
@@ -191,35 +192,27 @@ impl ActionHandler for WebhookAction {
             "timestamp_ns": alert.timestamp_ns,
         });
 
-        // Use a blocking HTTP client to avoid async in the action path.
-        // In production, this would use reqwest or ureq.
-        // For now, we shell out to curl for simplicity and zero extra deps.
         let json_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
-        let output = std::process::Command::new("curl")
-            .args([
-                "-s",
-                "-X",
-                "POST",
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                &json_str,
-                "--max-time",
-                "5",
-                &self.url,
-            ])
-            .env_clear()
-            .env("PATH", "/usr/bin:/usr/local/bin")
-            .output()
-            .map_err(|e| format!("curl failed: {e}"))?;
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(5)))
+                .build(),
+        );
+        let response = agent
+            .post(&self.url)
+            .header("Content-Type", "application/json")
+            .send(json_str.as_bytes())
+            .map_err(|e| format!("webhook POST failed: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("webhook POST failed: {stderr}"));
+        if response.status().as_u16() >= 400 {
+            return Err(format!(
+                "webhook POST returned HTTP {}",
+                response.status()
+            ));
         }
 
-        info!(url = %self.url, "webhook delivered");
+        info!(component = "actions", url = %self.url, "webhook delivered");
         Ok(())
     }
 }
