@@ -2,7 +2,7 @@ use aya_ebpf::helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_re
 use aya_ebpf::macros::{kprobe, kretprobe};
 use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 
-use super::{CQ_JITTER_STATS, CQ_POLL_SCRATCH, OFFSETS, QP_OWNERS, WR_TIMESTAMPS};
+use super::{CQ_JITTER_STATS, CQ_POLL_SCRATCH, LRU_MISSES, OFFSETS, QP_OWNERS, WR_TIMESTAMPS};
 
 /// OFFSETS map indices — must match tracepoint_format.rs constants.
 const OFF_IB_QP_QP_NUM: u32 = 5;
@@ -189,6 +189,12 @@ fn try_kretprobe_cq_poll(ctx: &RetProbeContext) -> Result<u32, i64> {
                         (*stats)[3] += 1;
                     }
                 }
+            }
+        } else {
+            // LRU miss — the submit timestamp was evicted under pressure.
+            // Layout: [cq_lru_misses, slab_lru_misses]
+            if let Some(misses) = LRU_MISSES.get_ptr_mut(0) {
+                unsafe { (*misses)[0] += 1; }
             }
         }
 
