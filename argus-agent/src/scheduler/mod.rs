@@ -330,6 +330,7 @@ impl Reconciler {
         );
 
         info!(
+            component = "scheduler",
             backend = backend.name(),
             node = %node_name,
             jitter_ms = jitter_offset.as_millis(),
@@ -526,6 +527,7 @@ impl Reconciler {
                 self.last_drain_time = Some(Instant::now());
                 let event = SchedulerActionEvent::drained(reason);
                 info!(
+                    component = "scheduler",
                     node = %self.node_name,
                     reason,
                     "scheduler.action=drain_node"
@@ -561,7 +563,7 @@ impl Reconciler {
             Ok(()) => {
                 self.last_drain_time = None;
                 let event = SchedulerActionEvent::resumed();
-                info!(node = %self.node_name, "scheduler.action=resume_node");
+                info!(component = "scheduler", node = %self.node_name, "scheduler.action=resume_node");
                 self.audit_logger.log_event("resume", "", "Healthy", "ok");
                 events.push(event);
                 self.persisted.last_drain_actor = None;
