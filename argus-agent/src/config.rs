@@ -418,6 +418,36 @@ impl Default for DetectionConfig {
     }
 }
 
+impl DetectionConfig {
+    /// Validate all detection thresholds are within sane ranges.
+    /// Called during config resolution to catch misconfigurations at startup
+    /// rather than producing silent misbehavior at runtime.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.num_cpus == 0 {
+            bail!("num_cpus must be >= 1, got 0");
+        }
+        if !(1.0..=100.0).contains(&self.irq_skew_threshold_pct) {
+            bail!(
+                "irq_skew_threshold_pct must be in 1.0..=100.0, got {}",
+                self.irq_skew_threshold_pct
+            );
+        }
+        if self.rdma_spike_factor < 1.0 {
+            bail!(
+                "rdma_spike_factor must be >= 1.0, got {}",
+                self.rdma_spike_factor
+            );
+        }
+        if self.rdma_baseline_latency_ns == 0 {
+            bail!("rdma_baseline_latency_ns must be >= 1, got 0 (would cause division by infinity)");
+        }
+        if let Some(ref sm) = self.state_machine {
+            sm.validate_config()?;
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Config resolution: CLI + TOML → EffectiveConfig
 // ---------------------------------------------------------------------------
@@ -448,6 +478,9 @@ impl Cli {
             .unwrap_or_else(|| "info".into());
 
         let window_secs = self.window_secs.or(fc.agent.window_secs).unwrap_or(3);
+        if window_secs == 0 || window_secs > 300 {
+            bail!("window_secs must be in 1..=300, got {window_secs}");
+        }
 
         let num_cpus = self
             .num_cpus
@@ -529,6 +562,8 @@ impl Cli {
                 .unwrap_or(defaults.slab_pressure_alloc_rate_threshold),
             state_machine,
         };
+
+        detection.validate().context("invalid detection configuration")?;
 
         let fabric_profiles = fc.detection.profile.clone();
 
@@ -722,6 +757,65 @@ mod tests {
         let defaults = crate::detection::StateMachineConfig::default();
         assert_eq!(sm.degrade_exit, defaults.degrade_exit);
         assert_eq!(sm.critical_enter, defaults.critical_enter);
+    }
+
+    #[test]
+    fn detection_config_validate_rejects_zero_window_secs() {
+        // window_secs validated in resolve(); test DetectionConfig::validate() fields here
+        let mut dc = DetectionConfig::default();
+        dc.num_cpus = 0;
+        assert!(dc.validate().is_err());
+    }
+
+    #[test]
+    fn detection_config_validate_rejects_zero_baseline_latency() {
+        let mut dc = DetectionConfig::default();
+        dc.rdma_baseline_latency_ns = 0;
+        let err = dc.validate().unwrap_err();
+        assert!(err.to_string().contains("rdma_baseline_latency_ns"));
+    }
+
+    #[test]
+    fn detection_config_validate_rejects_low_spike_factor() {
+        let mut dc = DetectionConfig::default();
+        dc.rdma_spike_factor = 0.5;
+        let err = dc.validate().unwrap_err();
+        assert!(err.to_string().contains("rdma_spike_factor"));
+    }
+
+    #[test]
+    fn detection_config_validate_rejects_bad_irq_threshold() {
+        let mut dc = DetectionConfig::default();
+        dc.irq_skew_threshold_pct = -1.0;
+        assert!(dc.validate().is_err());
+        dc.irq_skew_threshold_pct = 101.0;
+        assert!(dc.validate().is_err());
+    }
+
+    #[test]
+    fn detection_config_validate_accepts_defaults() {
+        let dc = DetectionConfig::default();
+        dc.validate().expect("defaults should be valid");
+    }
+
+    #[test]
+    fn state_machine_validate_rejects_inverted_thresholds() {
+        let sm = crate::detection::StateMachineConfig {
+            degrade_enter: 0.05,
+            degrade_exit: 0.10,
+            ..Default::default()
+        };
+        let err = sm.validate_config().unwrap_err();
+        assert!(err.to_string().contains("degrade_enter"));
+    }
+
+    #[test]
+    fn state_machine_validate_rejects_zero_windows() {
+        let sm = crate::detection::StateMachineConfig {
+            enter_windows: 0,
+            ..Default::default()
+        };
+        assert!(sm.validate_config().is_err());
     }
 
     #[test]
