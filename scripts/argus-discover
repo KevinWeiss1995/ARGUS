@@ -152,17 +152,18 @@ ENDJSON
 
 JSON=$(build_json)
 
+# Locate the observability stack directory (needed for --start and default output)
+for candidate in \
+    "$PWD/deploy/observability" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy/observability" \
+; do
+    if [[ -f "$candidate/docker-compose.yml" ]]; then
+        STACK_DIR="$candidate"
+        break
+    fi
+done
+
 if $START_STACK; then
-    # Locate the observability stack: check CWD (repo root), then common paths
-    for candidate in \
-        "$PWD/deploy/observability" \
-        "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy/observability" \
-    ; do
-        if [[ -f "$candidate/docker-compose.yml" ]]; then
-            STACK_DIR="$candidate"
-            break
-        fi
-    done
     if [[ -z "${STACK_DIR:-}" ]]; then
         echo "Error: cannot find deploy/observability/docker-compose.yml." >&2
         echo "Run this from the ARGUS repo root, or use --output and start the stack manually." >&2
@@ -179,5 +180,14 @@ elif [[ -n "$OUTPUT" ]]; then
     echo "$JSON" > "$OUTPUT"
     echo "Wrote ${OUTPUT}" >&2
 else
-    echo "$JSON"
+    # No explicit --output: write to the default targets file if the stack
+    # directory exists, so Prometheus picks up changes automatically.
+    if [[ -n "${STACK_DIR:-}" ]]; then
+        TARGETS_FILE="$STACK_DIR/argus-targets.json"
+        echo "$JSON" > "$TARGETS_FILE"
+        echo "Wrote ${TARGETS_FILE}" >&2
+        echo "Prometheus will reload targets within 30 seconds." >&2
+    else
+        echo "$JSON"
+    fi
 fi
