@@ -58,6 +58,16 @@ impl SmoothedHealthScore {
     /// Feed a raw score, get the effective (stabilized) score.
     /// Deterministic: same sequence of inputs always produces same outputs.
     pub fn update(&mut self, raw: f64) -> f64 {
+        if !raw.is_finite() {
+            tracing::error!(
+                prev_raw = self.prev_raw,
+                raw = %raw,
+                component = "detection",
+                "non-finite raw score rejected — returning previous effective score"
+            );
+            return self.effective();
+        }
+
         self.window_count += 1;
         self.prev_raw = raw;
 
@@ -140,34 +150,51 @@ impl Default for StateMachineConfig {
 }
 
 impl StateMachineConfig {
+    /// Fallible validation for use during config resolution. Returns a
+    /// precise error message instead of panicking.
+    pub fn validate_config(&self) -> anyhow::Result<()> {
+        use anyhow::bail;
+        if self.degrade_enter <= self.degrade_exit {
+            bail!(
+                "state_machine: degrade_enter ({}) must exceed degrade_exit ({})",
+                self.degrade_enter, self.degrade_exit
+            );
+        }
+        if self.critical_enter <= self.critical_exit {
+            bail!(
+                "state_machine: critical_enter ({}) must exceed critical_exit ({})",
+                self.critical_enter, self.critical_exit
+            );
+        }
+        if self.critical_enter <= self.degrade_enter {
+            bail!(
+                "state_machine: critical_enter ({}) must exceed degrade_enter ({})",
+                self.critical_enter, self.degrade_enter
+            );
+        }
+        if self.critical_exit < self.degrade_enter {
+            bail!(
+                "state_machine: critical_exit ({}) must be >= degrade_enter ({})",
+                self.critical_exit, self.degrade_enter
+            );
+        }
+        if self.enter_windows == 0 {
+            bail!("state_machine: enter_windows must be > 0");
+        }
+        if self.exit_windows == 0 {
+            bail!("state_machine: exit_windows must be > 0");
+        }
+        if self.recover_windows == 0 {
+            bail!("state_machine: recover_windows must be > 0");
+        }
+        Ok(())
+    }
+
+    /// Panicking validation — kept for backward compatibility with existing
+    /// call sites that construct configs programmatically (not from user input).
     pub fn validate(&self) {
-        assert!(
-            self.degrade_enter > self.degrade_exit,
-            "degrade_enter ({}) must exceed degrade_exit ({})",
-            self.degrade_enter,
-            self.degrade_exit
-        );
-        assert!(
-            self.critical_enter > self.critical_exit,
-            "critical_enter ({}) must exceed critical_exit ({})",
-            self.critical_enter,
-            self.critical_exit
-        );
-        assert!(
-            self.critical_enter > self.degrade_enter,
-            "critical_enter ({}) must exceed degrade_enter ({})",
-            self.critical_enter,
-            self.degrade_enter
-        );
-        assert!(
-            self.critical_exit >= self.degrade_enter,
-            "critical_exit ({}) must be >= degrade_enter ({})",
-            self.critical_exit,
-            self.degrade_enter
-        );
-        assert!(self.enter_windows > 0, "enter_windows must be > 0");
-        assert!(self.exit_windows > 0, "exit_windows must be > 0");
-        assert!(self.recover_windows > 0, "recover_windows must be > 0");
+        self.validate_config()
+            .expect("StateMachineConfig validation failed");
     }
 }
 
@@ -276,18 +303,63 @@ impl HealthStateMachine {
 
         // Stuck-state watchdog: after max_hold_windows in the same state
         // without evidence reinforcing entry, allow stability_evidence to
-        // accumulate at half rate on borderline scores.
+        // accumulate at half rate on borderline scores. This prevents indefinite
+        // hold when peak-hold keeps the score just above the exit threshold.
         if self.windows_in_state >= self.config.max_hold_windows
             && self.current != HealthState::Healthy
         {
             tracing::warn!(
+                component = "detection",
                 state = %self.current,
                 windows = self.windows_in_state,
                 seq = self.window_seq,
+                stability_evidence = self.stability_evidence,
                 "stuck-state watchdog: node held in {} for {} windows",
                 self.current,
                 self.windows_in_state,
             );
+
+            let exit_threshold = match self.current {
+                HealthState::Critical => self.config.critical_exit,
+                HealthState::Degraded => self.config.degrade_exit,
+                HealthState::Recovering => self.config.critical_exit,
+                HealthState::Healthy => unreachable!(),
+            };
+            let enter_threshold = match self.current {
+                HealthState::Critical => self.config.critical_enter,
+                HealthState::Degraded => self.config.degrade_enter,
+                HealthState::Recovering => self.config.critical_enter,
+                HealthState::Healthy => unreachable!(),
+            };
+
+            // Score is borderline: above exit but below (re-)entry threshold.
+            // Accumulate stability evidence at half rate (every other window).
+            if effective >= exit_threshold && effective < enter_threshold
+                && self.windows_in_state % 2 == 0
+            {
+                self.stability_evidence += 1;
+
+                let target_evidence = match self.current {
+                    HealthState::Recovering => self.config.recover_windows,
+                    _ => self.config.exit_windows,
+                };
+
+                if self.stability_evidence >= target_evidence {
+                    let next = match self.current {
+                        HealthState::Critical => HealthState::Recovering,
+                        HealthState::Degraded => HealthState::Healthy,
+                        HealthState::Recovering => HealthState::Degraded,
+                        HealthState::Healthy => unreachable!(),
+                    };
+                    tracing::info!(
+                        component = "detection",
+                        from = %self.current,
+                        to = %next,
+                        "stuck-state watchdog forcing transition via half-rate recovery"
+                    );
+                    self.transition(next);
+                }
+            }
         }
 
         if self.current != previous {
@@ -299,6 +371,7 @@ impl HealthStateMachine {
 
     fn transition(&mut self, new_state: HealthState) {
         tracing::info!(
+            component = "detection",
             from = %self.current,
             to = %new_state,
             seq = self.window_seq,
@@ -1100,5 +1173,35 @@ mod tests {
             "peak should decay to ~{expected:.3}, got {:.3}",
             s.peak_hold()
         );
+    }
+
+    #[test]
+    fn nan_input_does_not_corrupt_score() {
+        let mut s = SmoothedHealthScore::new();
+        s.update(0.3);
+        let before = s.effective();
+        let result = s.update(f64::NAN);
+        assert!(result.is_finite(), "NaN must not propagate");
+        assert_eq!(result, before, "score must be unchanged after NaN");
+    }
+
+    #[test]
+    fn infinity_input_does_not_corrupt_score() {
+        let mut s = SmoothedHealthScore::new();
+        s.update(0.3);
+        let before = s.effective();
+        let result = s.update(f64::INFINITY);
+        assert!(result.is_finite(), "Inf must not propagate");
+        assert_eq!(result, before, "score must be unchanged after Inf");
+    }
+
+    #[test]
+    fn neg_infinity_input_does_not_corrupt_score() {
+        let mut s = SmoothedHealthScore::new();
+        s.update(0.3);
+        let before = s.effective();
+        let result = s.update(f64::NEG_INFINITY);
+        assert!(result.is_finite(), "NEG_INFINITY must not propagate");
+        assert_eq!(result, before, "score must be unchanged after NEG_INFINITY");
     }
 }
