@@ -201,10 +201,14 @@ mod inner {
             let mut cq_kprobes_attached = false;
             if kprobe_targets.is_available() {
                 let Some(submit_fn) = kprobe_targets.wr_submit.as_deref() else {
-                    anyhow::bail!("kprobe_targets.is_available() returned true but wr_submit is None");
+                    return Err(EventSourceError::Other(
+                        "kprobe_targets.is_available() returned true but wr_submit is None".into(),
+                    ));
                 };
                 let Some(poll_fn) = kprobe_targets.cq_poll.as_deref() else {
-                    anyhow::bail!("kprobe_targets.is_available() returned true but cq_poll is None");
+                    return Err(EventSourceError::Other(
+                        "kprobe_targets.is_available() returned true but cq_poll is None".into(),
+                    ));
                 };
 
                 match Self::attach_kprobe(&mut ebpf, "kprobe_wr_submit", submit_fn) {
