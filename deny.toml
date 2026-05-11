@@ -18,7 +18,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
+    # webpki-roots uses this data-license for Mozilla root certificates
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 # Allow our own workspace crates without published licenses
@@ -29,6 +30,18 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# Transitive duplicates we cannot resolve without upstream releases.
+# aya pins older hashbrown/thiserror; ratatui pins older unicode-width;
+# ring pins older windows-sys; rand 0.8 vs 0.9 (proptest) pulls two getrandom.
+skip = [
+    { crate = "hashbrown@0.15", reason = "aya-obj requires 0.15, indexmap requires 0.16" },
+    { crate = "thiserror@1", reason = "aya/aya-log require thiserror 1.x" },
+    { crate = "thiserror-impl@1", reason = "derives for thiserror 1.x" },
+    { crate = "unicode-width@0.1", reason = "unicode-truncate (via ratatui) requires 0.1" },
+    { crate = "windows-sys@0.52", reason = "ring requires 0.52" },
+    { crate = "windows-sys@0.59", reason = "crossterm/console require 0.59" },
+    { crate = "getrandom@0.2", reason = "rand 0.8 + ring use getrandom 0.2" },
+]
 
 [sources]
 unknown-registry = "deny"
