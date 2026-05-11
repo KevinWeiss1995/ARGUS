@@ -1,5 +1,14 @@
 use argus_agent::tui::{render_to_string, DashboardState};
 use argus_common::*;
+use std::sync::Once;
+
+static SET_TZ: Once = Once::new();
+
+fn force_utc() {
+    SET_TZ.call_once(|| {
+        std::env::set_var("TZ", "UTC");
+    });
+}
 
 fn healthy_state() -> DashboardState {
     DashboardState {
@@ -84,6 +93,7 @@ fn degraded_state() -> DashboardState {
 
 #[test]
 fn snapshot_healthy_dashboard() {
+    force_utc();
     let state = healthy_state();
     let rendered = render_to_string(&state, 80, 30);
     insta::assert_snapshot!("healthy_dashboard", rendered);
@@ -91,6 +101,7 @@ fn snapshot_healthy_dashboard() {
 
 #[test]
 fn snapshot_degraded_dashboard() {
+    force_utc();
     let state = degraded_state();
     let rendered = render_to_string(&state, 80, 30);
     insta::assert_snapshot!("degraded_dashboard", rendered);
@@ -98,6 +109,7 @@ fn snapshot_degraded_dashboard() {
 
 #[test]
 fn snapshot_empty_dashboard() {
+    force_utc();
     let state = DashboardState::default();
     let rendered = render_to_string(&state, 80, 30);
     insta::assert_snapshot!("empty_dashboard", rendered);
