@@ -31,7 +31,7 @@ fn run_scenario(scenario_path: &str) {
                 // EWMA + peak-hold and satisfy dwell timers. Each iteration
                 // re-ingests the same event set into a fresh window, then
                 // evaluates. This simulates sustained signal.
-                for _ in 0..6 {
+                for _ in 0..12 {
                     let _ = pipeline.evaluate();
                     pipeline.reset_window();
                     for ev in &scenario.events[..=i] {
