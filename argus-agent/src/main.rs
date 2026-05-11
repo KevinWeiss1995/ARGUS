@@ -17,8 +17,17 @@ use tokio::sync::watch;
 async fn main() -> Result<()> {
     let config = Cli::parse().resolve()?;
 
+    // Pin umask before any file I/O to prevent world-readable runtime files.
+    #[cfg(target_os = "linux")]
+    {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::umask(0o077);
+        }
+    }
+
     if let Some(ref addr) = config.attach {
-        return run_attach_tui(addr).await;
+        return run_attach_tui(addr, config.tls_skip_verify).await;
     }
 
     if !config.tui {
@@ -267,7 +276,10 @@ fn run_live_mode(
     if let Some(ref expected_hash) = ebpf_hash {
         verify_ebpf_hash(ebpf_path, expected_hash)?;
     } else {
-        tracing::info!("no eBPF hash file or --ebpf-hash; skipping integrity check");
+        tracing::warn!(
+            "no eBPF hash configured — integrity verification skipped. \
+             Set ARGUS_EBPF_HASH or install /etc/argus/ebpf.sha256 for production use."
+        );
     }
 
     let mut ebpf_source = argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path)
@@ -657,7 +669,7 @@ async fn run_event_mode(
 
 /// Attach-mode TUI: read-only viewer that connects to a running daemon's /status endpoint.
 /// Does not load eBPF, does not start a pipeline — purely a display client.
-async fn run_attach_tui(addr: &str) -> Result<()> {
+async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
     use argus_agent::telemetry::prometheus::StatusSnapshot;
 
     let addr_with_port = if addr.contains(':') {
@@ -673,7 +685,7 @@ async fn run_attach_tui(addr: &str) -> Result<()> {
     let status_url = format!("{addr}/status");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(tls_skip_verify)
         .build()?;
 
     // Verify connectivity before entering raw mode
@@ -805,10 +817,14 @@ fn acquire_pid_lock() -> Result<std::fs::File> {
             .context("failed to create /var/run/argus for PID file")?;
     }
     let pid_path = pid_dir.join("argusd.pid");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).write(true).truncate(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = opts
         .open(&pid_path)
         .with_context(|| format!("failed to open PID file: {}", pid_path.display()))?;
 
