@@ -85,7 +85,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
-        run: cargo install cargo-deny@0.16.3
+        run: cargo install cargo-deny@0.19.4
       - name: Run cargo-deny
         run: cargo deny check
       - name: Install cargo-audit
