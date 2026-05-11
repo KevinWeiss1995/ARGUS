@@ -25,7 +25,7 @@ expression: rendered
 │ cur: 90.0  av││ cur: 45.0  av││ cur: 3.0  avg││ cur: 800.0  a││ cur: 720.0  a│
 └──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
 ┌ Recent Alerts ───────────────────────────────────────────────────────────────┐
-│  19:00:20 interrupt_affinity_skew  [DEGRADED] Interrupt affinity skew: CPU 0 │
+│  00:00:20 interrupt_affinity_skew  [DEGRADED] Interrupt affinity skew: CPU 0 │
 │                                                                              │
 │                                                                              │
 │                                                                              │
