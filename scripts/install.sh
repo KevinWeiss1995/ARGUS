@@ -12,11 +12,11 @@
 #   4. Install binaries, config, and systemd unit as root
 #
 # Installed paths:
-#   /usr/local/bin/argusd                  — agent binary
-#   /usr/local/lib/argus/argus-ebpf       — eBPF object
+#   /usr/bin/argusd                        — agent binary
+#   /usr/lib/argus/argus-ebpf             — eBPF object
 #   /etc/argus/argusd.conf                 — env configuration (preserved on upgrade)
 #   /etc/argus/argusd.toml                 — TOML config example (preserved on upgrade)
-#   /etc/systemd/system/argusd.service     — systemd unit
+#   /usr/lib/systemd/system/argusd.service — systemd unit
 
 set -euo pipefail
 
@@ -26,13 +26,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENT_BIN="$REPO_ROOT/target/release/argus-agent"
 EBPF_BIN="$REPO_ROOT/argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf"
 
-INSTALL_BIN="/usr/local/bin/argusd"
-INSTALL_EBPF_DIR="/usr/local/lib/argus"
+INSTALL_BIN="/usr/bin/argusd"
+INSTALL_EBPF_DIR="/usr/lib/argus"
 INSTALL_EBPF="$INSTALL_EBPF_DIR/argus-ebpf"
 INSTALL_CONF_DIR="/etc/argus"
 INSTALL_CONF="$INSTALL_CONF_DIR/argusd.conf"
 INSTALL_TOML="$INSTALL_CONF_DIR/argusd.toml"
-INSTALL_UNIT="/etc/systemd/system/argusd.service"
+INSTALL_UNIT="/usr/lib/systemd/system/argusd.service"
 
 NO_BUILD=false
 
@@ -231,11 +231,11 @@ mkdir -p "$INSTALL_EBPF_DIR"
 install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
 ok "$INSTALL_EBPF"
 
-info "Installing CLI tools to /usr/local/bin"
+info "Installing CLI tools to /usr/bin"
 for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
-    install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/local/bin/$tool"
+    install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/bin/$tool"
 done
-ln -sf /usr/local/bin/argusd /usr/local/bin/argus-tui
+ln -sf /usr/bin/argusd /usr/bin/argus-tui
 ok "argus-status, argus-discover, argus-manage-targets, argus-scheduler, argus-tui"
 
 # --- Install config (preserve existing) ---
@@ -247,7 +247,7 @@ if [[ -f "$INSTALL_CONF" ]]; then
     warn "New defaults are in $REPO_ROOT/deploy/argusd.conf for reference"
 else
     info "Installing default config to $INSTALL_CONF"
-    install -m 0644 "$REPO_ROOT/deploy/argusd.conf" "$INSTALL_CONF"
+    install -m 0640 "$REPO_ROOT/deploy/argusd.conf" "$INSTALL_CONF"
     ok "$INSTALL_CONF"
 fi
 
@@ -255,7 +255,7 @@ if [[ -f "$INSTALL_TOML" ]]; then
     warn "TOML config already exists at $INSTALL_TOML — not overwriting"
 else
     info "Installing example TOML config to $INSTALL_TOML"
-    install -m 0644 "$REPO_ROOT/deploy/examples/standalone.toml" "$INSTALL_TOML"
+    install -m 0640 "$REPO_ROOT/deploy/examples/standalone.toml" "$INSTALL_TOML"
     ok "$INSTALL_TOML"
 fi
 
@@ -267,9 +267,16 @@ ok "Runtime directories (/var/lib/argus, /var/run/argus)"
 # --- Install systemd unit ---
 
 info "Installing systemd unit to $INSTALL_UNIT"
+mkdir -p "$(dirname "$INSTALL_UNIT")"
 install -m 0644 "$REPO_ROOT/deploy/argusd.service" "$INSTALL_UNIT"
 systemctl daemon-reload
 ok "$INSTALL_UNIT (daemon-reload done)"
+
+# --- Compute eBPF hash for integrity verification ---
+
+info "Computing eBPF artifact hash"
+sha256sum "$INSTALL_EBPF" | awk '{print $1}' > "$INSTALL_CONF_DIR/ebpf.sha256"
+ok "$INSTALL_CONF_DIR/ebpf.sha256"
 
 # --- Done ---
 
