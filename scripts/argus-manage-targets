@@ -106,7 +106,7 @@ add_target() {
 
     target=$(normalize_target "$target")
 
-    if do_verify; then
+    if $do_verify; then
         local host="${target%:*}"
         local port="${target#*:}"
         echo "Probing ${target}..."
