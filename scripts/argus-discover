@@ -94,7 +94,7 @@ echo "Scanning ${SUBNET} on port ${PORT}..." >&2
 RESULT_FILE=$(mktemp)
 trap 'rm -f "$RESULT_FILE"' EXIT
 
-IPS=( $(cidr_to_ips "$SUBNET") )
+mapfile -t IPS < <(cidr_to_ips "$SUBNET")
 TOTAL=${#IPS[@]}
 ACTIVE=0
 MAX_PARALLEL=128
