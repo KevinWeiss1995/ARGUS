@@ -9,11 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin nightly for eBPF builds to avoid toolchain flakiness
   NIGHTLY_TOOLCHAIN: nightly-2025-12-01
 
 jobs:
-  # Tier 0: Pure logic tests - runs on all platforms
+  # Tier 0: Pure logic tests — runs on all platforms
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -66,7 +65,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -W clippy::pedantic -W clippy::nursery -D warnings
 
-  # Shell script linting
+  # Shell script linting (enforced — no || true)
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
@@ -75,9 +74,9 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck on scripts
-        run: shellcheck scripts/*.sh scripts/argus-manage-targets scripts/argus-discover deploy/observability/scripts/*.sh || true
+        run: shellcheck scripts/*.sh scripts/argus-manage-targets scripts/argus-discover deploy/observability/scripts/*.sh
 
-  # Security audit
+  # Security audit (pinned tool versions)
   security:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -86,11 +85,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
-        run: cargo install cargo-deny
+        run: cargo install cargo-deny@0.16.3
       - name: Run cargo-deny
         run: cargo deny check
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit@0.21.1
       - name: Run cargo-audit
         run: cargo audit
 
@@ -111,4 +110,44 @@ jobs:
         working-directory: argus-ebpf
         run: cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --target=bpfel-unknown-none -Z build-std=core
       - name: Hash eBPF artifact
-        run: sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf || true
+        run: sha256sum argus-ebpf/target/bpfel-unknown-none/debug/argus-ebpf
+
+  # RPM packaging validation
+  rpm-lint:
+    name: RPM Spec Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rpmlint
+        run: sudo apt-get update && sudo apt-get install -y rpmlint
+      - name: Lint RPM spec
+        run: rpmlint packaging/argus.spec || true
+
+  # Systemd hardening score
+  systemd-analyze:
+    name: Systemd Hardening Score
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analyze service hardening
+        run: systemd-analyze security deploy/argusd.service --no-pager 2>/dev/null || echo "systemd-analyze not available in CI (informational only)"
+
+  # SBOM generation
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx
+      - name: Generate SBOM
+        run: cargo cyclonedx --all --format json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "**/*bom.json"
+          retention-days: 90
