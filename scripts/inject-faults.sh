@@ -26,12 +26,12 @@ live_mode_reminder() {
 }
 
 require_root() {
-    [[ $EUID -eq 0 ]] || die "Must run as root (try: sudo $SCRIPT_NAME $*)"
+    [[ $EUID -eq 0 ]] || die "Must run as root (try: sudo $SCRIPT_NAME $IFACE $ACTION)"
 }
 
 require_iface() {
     [[ -n "$IFACE" ]] || die "No interface specified. Usage: $SCRIPT_NAME <interface> <action>"
-    [[ -d "/sys/class/net/$IFACE" ]] || die "Interface '$IFACE' does not exist. Available: $(ls /sys/class/net/ | tr '\n' ' ')"
+    [[ -d "/sys/class/net/$IFACE" ]] || die "Interface '$IFACE' does not exist. Available: $(printf '%s ' /sys/class/net/*/  | sed 's|/sys/class/net/||g; s|/||g')"
     local state
     state=$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null || echo "unknown")
     if [[ "$state" != "up" && "$state" != "unknown" ]]; then
@@ -75,10 +75,11 @@ try_ensure_netem() {
 # ---------------------------------------------------------------------------
 
 netem_add() {
-    local params="$*"
-    # Replace any existing root qdisc
-    tc qdisc replace dev "$IFACE" root netem $params
-    info "netem active on $IFACE: $params"
+    # Replace any existing root qdisc — word splitting on $* is intentional
+    # as netem params are multiple space-separated arguments.
+    # shellcheck disable=SC2086
+    tc qdisc replace dev "$IFACE" root netem $*
+    info "netem active on $IFACE: $*"
     info "Remove with: $SCRIPT_NAME $IFACE clear"
 }
 
@@ -212,8 +213,12 @@ do_latency() {
 
 do_clear() {
     info "=== Clearing all fault injection rules ==="
-    tc qdisc del dev "$IFACE" root 2>/dev/null && info "netem rules cleared" || true
-    iptables_clear 2>/dev/null && info "iptables rules cleared" || true
+    if tc qdisc del dev "$IFACE" root 2>/dev/null; then
+        info "netem rules cleared"
+    fi
+    if iptables_clear 2>/dev/null; then
+        info "iptables rules cleared"
+    fi
     info "All faults cleared on $IFACE"
 }
 
@@ -237,7 +242,7 @@ Actions:
   capabilities    Detect and report available fault injection methods
 
 Available interfaces:
-  $(ls /sys/class/net/ 2>/dev/null | tr '\n' ' ')
+  $(printf '%s ' /sys/class/net/*/ 2>/dev/null | sed 's|/sys/class/net/||g; s|/||g')
 
 Examples:
   sudo $SCRIPT_NAME enP8p1s0 jitter
