@@ -11,7 +11,6 @@
 # The script auto-detects what's available and runs all applicable tiers.
 set -euo pipefail
 
-SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
