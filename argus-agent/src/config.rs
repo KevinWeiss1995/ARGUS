@@ -12,11 +12,11 @@ use std::path::PathBuf;
 #[command(about = "ARGUS - Adaptive RDMA Guard & Utilization Sentinel")]
 pub struct Cli {
     /// Path to TOML config file [default: /etc/argus/argusd.toml if it exists]
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_CONFIG")]
     pub config: Option<PathBuf>,
 
     /// Operating mode [default: mock]
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, env = "ARGUS_MODE")]
     pub mode: Option<RunMode>,
 
     /// Event file to replay (for replay mode).
@@ -29,11 +29,11 @@ pub struct Cli {
     pub profile: Option<MockProfile>,
 
     /// Path to compiled eBPF object (for live mode)
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_EBPF_PATH")]
     pub ebpf_path: Option<PathBuf>,
 
     /// Expected SHA-256 hash of the eBPF artifact (hex). Rejects loading if mismatch.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_EBPF_HASH")]
     pub ebpf_hash: Option<String>,
 
     /// Number of CPUs (auto-detected if not specified)
@@ -58,58 +58,57 @@ pub struct Cli {
     pub max_events: Option<u64>,
 
     /// Aggregation window duration in seconds [default: 3]
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_WINDOW_SECS")]
     pub window_secs: Option<u64>,
 
     /// Log level (trace, debug, info, warn, error) [default: info]
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_LOG_LEVEL")]
     pub log_level: Option<String>,
 
-    /// Prometheus metrics listen address (e.g. 0.0.0.0:9100). Disabled if not set.
-    #[arg(long)]
+    /// Prometheus metrics listen address (e.g. 127.0.0.1:9100). Disabled if not set.
+    #[arg(long, env = "ARGUS_METRICS_ADDR")]
     pub metrics_addr: Option<String>,
 
     /// TLS certificate file for the metrics endpoint (PEM)
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_TLS_CERT")]
     pub tls_cert: Option<PathBuf>,
 
     /// TLS private key file for the metrics endpoint (PEM)
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_TLS_KEY")]
     pub tls_key: Option<PathBuf>,
 
     /// Bearer token for metrics endpoint authentication
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_METRICS_TOKEN")]
     pub metrics_token: Option<String>,
 
     /// File containing bearer token for metrics endpoint authentication
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_METRICS_TOKEN_FILE")]
     pub metrics_token_file: Option<PathBuf>,
 
     /// Enable seccomp syscall filtering after initialization (Linux only).
-    /// Restricts the process to only the syscalls needed for operation.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_SECCOMP")]
     pub seccomp: bool,
 
     // --- Autonomous action flags ---
     /// Webhook URL for alert notifications (POST JSON).
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_ACTION_WEBHOOK")]
     pub action_webhook: Option<String>,
 
     /// Enable IB port disable on critical link-down events (DANGEROUS).
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_ACTION_PORT_DISABLE")]
     pub action_port_disable: bool,
 
     /// Dry-run mode: log actions without executing them.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_ACTION_DRY_RUN")]
     pub action_dry_run: bool,
 
     // --- Scheduler integration flags ---
     /// Scheduler backend to use (slurm, noop). Omit to disable scheduler integration.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_SCHEDULER")]
     pub scheduler: Option<String>,
 
     /// Scheduler dry-run: log drain/resume without executing.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_SCHEDULER_DRY_RUN")]
     pub scheduler_dry_run: bool,
 
     /// Drain on Degraded health (default: only drain on Critical).
@@ -122,8 +121,12 @@ pub struct Cli {
 
     /// Read-only mode: disable all scheduler, webhook, and port-disable actions.
     /// ARGUS will monitor and report via metrics/TUI but take no automated action.
-    #[arg(long)]
+    #[arg(long, env = "ARGUS_READ_ONLY")]
     pub read_only: bool,
+
+    /// Skip TLS certificate verification when using --attach (insecure).
+    #[arg(long)]
+    pub tls_skip_verify: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +266,7 @@ pub struct EffectiveConfig {
     pub auth_token: Option<String>,
     pub seccomp: bool,
     pub read_only: bool,
+    pub tls_skip_verify: bool,
     pub detection: DetectionConfig,
     pub actions: crate::actions::ActionConfig,
     pub scheduler: Option<crate::scheduler::SchedulerConfig>,
@@ -663,6 +667,7 @@ impl Cli {
             auth_token,
             seccomp: self.seccomp,
             read_only,
+            tls_skip_verify: self.tls_skip_verify,
             detection,
             actions,
             scheduler,
