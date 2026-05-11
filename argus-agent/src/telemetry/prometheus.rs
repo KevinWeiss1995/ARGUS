@@ -6,6 +6,17 @@ use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
 use std::sync::{Arc, Mutex};
 
+/// Constant-time byte comparison to prevent timing side-channels on bearer tokens.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
 pub struct PrometheusExporter {
     registry: Registry,
     metrics: ArgusPrometheusMetrics,
@@ -1195,7 +1206,7 @@ async fn serve_connection<I>(
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.strip_prefix("Bearer "))
-                    .map_or(false, |t| t == expected.as_ref());
+                    .map_or(false, |t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
                 if !authorized {
                     return Ok::<_, hyper::Error>(
                         Response::builder()
@@ -1361,22 +1372,19 @@ async fn serve_connection<I>(
 }
 
 fn build_tls_acceptor(cfg: &TlsConfig) -> anyhow::Result<tokio_rustls::TlsAcceptor> {
-    use rustls_pemfile::{certs, private_key};
-    use std::io::BufReader;
+    use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
     use tokio_rustls::rustls::ServerConfig;
 
-    let cert_file = std::fs::File::open(&cfg.cert_path)
-        .map_err(|e| anyhow::anyhow!("failed to open TLS cert {}: {e}", cfg.cert_path.display()))?;
-    let key_file = std::fs::File::open(&cfg.key_path)
-        .map_err(|e| anyhow::anyhow!("failed to open TLS key {}: {e}", cfg.key_path.display()))?;
+    let cert_chain: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_file_iter(&cfg.cert_path)
+            .map_err(|e| {
+                anyhow::anyhow!("failed to open TLS cert {}: {e}", cfg.cert_path.display())
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("failed to parse TLS cert chain: {e}"))?;
 
-    let cert_chain: Vec<_> = certs(&mut BufReader::new(cert_file))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("failed to parse TLS cert chain: {e}"))?;
-
-    let key = private_key(&mut BufReader::new(key_file))
-        .map_err(|e| anyhow::anyhow!("failed to parse TLS private key: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", cfg.key_path.display()))?;
+    let key = PrivateKeyDer::from_pem_file(&cfg.key_path)
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS key {}: {e}", cfg.key_path.display()))?;
 
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
