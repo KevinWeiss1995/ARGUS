@@ -2,38 +2,106 @@
 Description=ARGUS - Adaptive RDMA Guard & Utilization Sentinel
 Documentation=https://github.com/KevinWeiss1995/ARGUS
 After=network.target
+ConditionPathExists=/etc/argus/argusd.conf
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/argus/argusd.conf
-ExecStart=/bin/sh -c 'exec /usr/local/bin/argusd ${ARGUS_CONFIG:+--config "$ARGUS_CONFIG"} --mode "$ARGUS_MODE" --ebpf-path "$ARGUS_EBPF_PATH" --metrics-addr "$ARGUS_METRICS_ADDR" --log-level "$ARGUS_LOG_LEVEL" --window-secs "$ARGUS_WINDOW_SECS" $ARGUS_EXTRA_ARGS'
 
+# --- Execution: NO SHELL ---
+# The binary reads env vars directly via clap env= attributes.
+# This eliminates all shell injection risk from EnvironmentFile values.
+EnvironmentFile=/etc/argus/argusd.conf
+ExecStart=/usr/bin/argusd
+ExecReload=/bin/kill -HUP $MAINPID
+
+# --- Restart policy ---
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=2 78
+WatchdogSec=120
 
-# Resource limits — ARGUS targets <1% CPU overhead
+# --- Resource Limits ---
 CPUQuota=5%
 Nice=19
 IOSchedulingClass=idle
 MemoryMax=256M
+TasksMax=64
+LimitNOFILE=8192
+LimitMEMLOCK=67108864
 
-# Security hardening — root is required for eBPF load, tracefs, kallsyms,
-# and /proc/pid reads. security.rs drops all caps except CAP_BPF after init.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYSLOG CAP_DAC_READ_SEARCH
+# --- Capabilities (kernel 5.19+) ---
+# CAP_BPF:             load/interact with BPF programs and maps
+# CAP_PERFMON:         perf_event_open() for kprobe/tracepoint attachment
+# CAP_SYSLOG:          read /proc/kallsyms when kptr_restrict >= 1
+# CAP_DAC_READ_SEARCH: read tracefs format files with restrictive permissions
+#
+# For kernels <5.19, add CAP_SYS_ADMIN to both lines below.
+# For --action-port-disable, add CAP_NET_ADMIN to both lines below.
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYSLOG CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYSLOG CAP_DAC_READ_SEARCH
+
+# --- Privilege Escalation Prevention ---
 NoNewPrivileges=yes
-ProtectHome=yes
+SecureBits=noroot-locked
+
+# --- Filesystem Isolation ---
 ProtectSystem=strict
-ReadWritePaths=/var/lib/argus /var/run/argus /sys/class/infiniband
-ReadOnlyPaths=/sys/kernel /proc
+ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
-RestrictSUIDSGID=yes
-RestrictNamespaces=yes
-LockPersonality=yes
-SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
 
-# Logging to journald (agent emits JSON when --tui is absent)
+# Managed directories (systemd creates with correct ownership)
+RuntimeDirectory=argus
+RuntimeDirectoryMode=0750
+StateDirectory=argus
+StateDirectoryMode=0750
+LogsDirectory=argus
+LogsDirectoryMode=0750
+
+# Explicit filesystem grants (principle of least privilege)
+ReadWritePaths=/run/argus /var/lib/argus
+ReadOnlyPaths=/sys/class/infiniband
+ReadOnlyPaths=/sys/kernel/tracing/events
+ReadOnlyPaths=/sys/kernel/debug/tracing/events
+ReadOnlyPaths=/sys/kernel/btf
+ReadOnlyPaths=/proc/kallsyms
+ReadOnlyPaths=/proc/sys/kernel/osrelease
+
+# Hide other processes
+ProtectProc=invisible
+ProcSubset=pid
+
+# --- Process Isolation ---
+UMask=0077
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# --- Memory Protection ---
+MemoryDenyWriteExecute=yes
+
+# --- Network Restriction ---
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+# --- Syscall Filtering (layered: allowlist, denylist, re-allow) ---
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @io-event @network-io
+SystemCallFilter=~@mount @swap @reboot @obsolete @cpu-emulation @clock @debug
+SystemCallFilter=~process_vm_readv process_vm_writev ptrace
+SystemCallFilter=bpf perf_event_open capset capget prctl
+
+# --- Scheduling & Namespace ---
+RestrictRealtime=yes
+RestrictNamespaces=yes
+DevicePolicy=closed
+
+# --- Logging ---
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=argusd
