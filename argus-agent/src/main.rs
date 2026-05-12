@@ -50,8 +50,13 @@ async fn main() -> Result<()> {
     }
 
     // Singleton enforcement: advisory flock on PID file.
-    // The _pid_guard must live for the duration of main() — dropping it releases the lock.
-    let _pid_guard = acquire_pid_lock()?;
+    // Only meaningful in live mode (daemon). Mock/replay are dev tools — no PID lock needed.
+    // The _pid_guard must live for the duration of main(); dropping it releases the lock.
+    let _pid_guard = if config.mode == RunMode::Live {
+        Some(acquire_pid_lock()?)
+    } else {
+        None
+    };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -808,6 +813,10 @@ async fn shutdown_signal() {
 
 /// Acquire an advisory lock on a PID file to prevent multiple agent instances.
 /// Returns a guard that holds the lock file open; dropping it releases the lock.
+///
+/// Only called in live mode (daemon). Requires root, which live mode needs
+/// anyway for eBPF. The directory is normally created by systemd
+/// (`RuntimeDirectory=argus`) or the install script.
 fn acquire_pid_lock() -> Result<std::fs::File> {
     use std::io::Write;
 
