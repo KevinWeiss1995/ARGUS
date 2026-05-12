@@ -82,8 +82,8 @@
 }
 
 \title{ARGUS Detection Engine\\\large A Code-Driven Engineering Analysis}
-\author{ARGUS Engineering}
-\date{April 2026}
+\author{ARGUS Engineering\\\small\url{https://arguslabs.dev}}
+\date{May 2026 --- Revision 2}
 
 \begin{document}
 \maketitle
@@ -327,11 +327,37 @@ between raw events and detection. Its key properties:
   \item It accumulates metrics for one window in \texttt{AggregatedMetrics}.
   \item At \texttt{reset()}, all per-window fields are zeroed, but the
         previous-counter \texttt{HashMap} persists (so deltas remain correct
-        in the next window).
-  \item It maintains a \texttt{DdSketch} for CQ completion latencies.
-        This sketch provides approximate quantiles (p50, p95, p99) within
-        2\% relative error. It is also reset per window.
+        in the next window). The \texttt{per\_cpu\_counts} vector is
+        reallocated to \texttt{num\_cpus} zeros.
+  \item It maintains a \texttt{DdSketch} ($\alpha = 0.02$, max 1024 bins)
+        for CQ completion latencies. This sketch provides approximate
+        quantiles (p50, p95, p99, p999) within 2\% relative error. It is
+        also reset per window.
 \end{itemize}
+
+\paragraph{Hardware counter deltas.}
+The aggregator maintains a \texttt{HashMap<(port, discriminant), u64>} of
+previously observed counter values. On each ingest, delta =
+\texttt{current.saturating\_sub(previous)}. This delta is \emph{added} to
+the relevant field in \texttt{IbCounterDeltas}---meaning deltas from
+multiple ports accumulate into a single struct. The first observation for
+any counter always yields delta 0.
+
+\paragraph{Two CQ data paths.}
+An important subtlety: CQ metrics arrive via two independent paths, and
+they populate \emph{different} fields:
+\begin{itemize}[nosep]
+  \item \textbf{BPF map snapshot path} (\texttt{ingest\_bpf\_snapshot}):
+        CQ data from \texttt{CQ\_JITTER\_STATS} writes to
+        \texttt{cq\_jitter} (the field used by live detection).
+  \item \textbf{Ring buffer event path} (\texttt{ingest} with
+        \texttt{CqCompletion}): writes to \texttt{rdma\_metrics} and the
+        DDSketch. This path is active in mock/replay mode.
+\end{itemize}
+The \texttt{RdmaLatencySpikeRule} reads \texttt{rdma\_metrics} (event path),
+while \texttt{CqJitterRule} reads \texttt{cq\_jitter} (BPF map path). On
+live systems, only the BPF map path is active, so
+\texttt{RdmaLatencySpike} is inert.
 
 \subsection{Window timing and its implications}
 
@@ -916,10 +942,10 @@ Rule name & Caps & When it fires and at what severity \\
 \midrule
 \texttt{InterruptAffinitySkew} & --- & Dominant CPU pct $\geq \max(70, 100/n + 45)$. Degraded; Critical if $\geq 90$\%. Needs $\geq 10$ IRQs ($\geq 1000$ on $\leq$2-CPU). \\[4pt]
 \texttt{RdmaLatencySpike} & CL & Avg CQ latency $\geq 5\times$ baseline (2\,$\mu$s). Needs $\geq 10$ completions. Critical at $\geq 10\times$. \textit{Only fires in mock/replay mode.} \\[4pt]
-\texttt{RdmaLinkDegradation} & LE, RS & \textit{Stateful, 4-layer.} See Section~\ref{sec:link-deg} for detailed explanation. \\[4pt]
+\texttt{RdmaLinkDegradation} & LE, RS & \textit{Stateful, 5-layer.} See Section~\ref{sec:link-deg} for detailed explanation. \\[4pt]
 \texttt{SlabPressure} & --- & $\geq 5000$ slab allocs \emph{and} IB errors $> 0$. Correlation detector. Critical at $> 100$ errors. \\[4pt]
 \texttt{RisingErrorTrend} & LE & Total errors monotonically increasing for $\geq 3$ windows. Critical at $\geq 6$. \\[4pt]
-\texttt{LatencyDrift} & CL & Slab alloc latency z-score $\geq 3$ vs EWMA baseline. Critical at $\geq 6$. \\[4pt]
+\texttt{LatencyDrift} & CL & Slab alloc latency z-score $\geq 3$ vs EWMA baseline. Always Degraded. \\[4pt]
 \texttt{ThroughputDrop} & TH & IB throughput drops $\geq 50$\% below EWMA baseline (floor-clamped at $0.5\times$ initial). Critical at $\geq 80$\%. \\[4pt]
 \texttt{NapiSaturation} & --- & Avg NAPI work/budget $\geq 85$\%. Critical at $\geq 95$\%. \\[4pt]
 \texttt{CqJitter} & CL & Any stall ($>50\,\mu$s completion). Immediate alert. Critical if $>10$ stalls or max $>1$\,ms. Also: p99 anomaly via z-score. \\[4pt]
@@ -932,31 +958,142 @@ RS = RetransmitSignal, TH = Throughput, PP = PfcPause, CS = CreditStall.}
 \label{tab:rules}
 \end{table}
 
+\subsection{Rule detail: InterruptAffinitySkew}
+
+Detects uneven IRQ distribution across CPUs. On modern systems with RSS
+(Receive Side Scaling) and \texttt{irqbalance}, interrupts should be
+spread across cores. A single CPU handling a disproportionate share
+indicates a misconfiguration or a saturated interrupt coalescing path.
+
+\paragraph{Guard conditions.}
+The rule is silenced when interrupt volume is too low to be meaningful:
+$<10$ total IRQs per window (general), or $<1000$ on systems with $\leq 2$
+CPUs (where imbalance is structurally unavoidable).
+
+\paragraph{Effective threshold.}
+The threshold adapts to CPU count:
+$\text{effective} = \max(\texttt{threshold\_pct},\; 100/n_\text{cpus} + 45)$.
+On a 2-CPU system this is $\max(70, 95) = 95$\%, making the rule
+near-impossible to fire (by design---imbalance is expected with 2 CPUs).
+
+\subsection{Rule detail: LatencyDrift}
+
+Detects anomalous slab allocation latency relative to the node's own
+baseline. Uses a \texttt{RollingStats} EWMA tracker ($\alpha = 0.1$) to
+establish what is ``normal'' for this specific system, then fires when the
+current window's average deviates by $\geq 3$ standard deviations.
+
+\paragraph{Guard conditions.}
+Requires slab latency $\geq 1000$\,ns (filters out the common case of
+sub-microsecond allocations on idle systems). Also requires
+\texttt{has\_network\_signal}---at least one of: IB hard errors, IB soft
+errors, \texttt{rdma\_metrics.error\_count} $>0$, or
+\texttt{cq\_jitter.stall\_count} $>0$. This makes it a
+\textbf{correlation detector}: slab latency anomalies alone do not trigger
+alerts; they must co-occur with network-layer indicators.
+
+\paragraph{Severity.}
+Always \texttt{Degraded} (never \texttt{Critical}). This reflects that slab
+latency is a correlating signal, not a root cause.
+
+\subsection{Rule detail: ThroughputDrop}
+
+Monitors IB throughput (bytes or packets, whichever is available) via a
+\texttt{RollingStats} tracker with a floor clamp. The tracker uses
+$\alpha = 0.1$ and prevents the EWMA from dropping below $0.5\times$ the
+initial baseline. This means a legitimate workload reduction eventually
+stops triggering, but a sudden drop always fires.
+
+\paragraph{Thresholds.}
+\begin{itemize}[nosep]
+  \item $\geq 50$\% drop from EWMA baseline: \texttt{Degraded}
+  \item $\geq 80$\% drop: \texttt{Critical}
+\end{itemize}
+
+\subsection{Rule detail: CqJitter}
+
+Two independent detection paths:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Stall detector}: If \texttt{cq\_jitter.stall\_count} $> 0$
+    (any completion $> 50\,\mu$s), fire immediately. Escalate to
+    \texttt{Critical} if $> 10$ stalls or max latency $> 1$\,ms.
+  \item \textbf{p99 anomaly}: Uses a \texttt{RollingStats} tracker with
+    clamp $[0.1, 5.0]$ on the estimated p99 latency. After warmup, fires
+    \texttt{Degraded} if z-score $\geq 3$.
+\end{enumerate}
+
+\subsection{Rule detail: CongestionSpread}
+
+Detects upstream fabric congestion affecting this node as a ``victim.''
+The key insight: when a remote node or switch is congested, IB flow control
+causes \texttt{port\_xmit\_wait} to rise on the local port---but the local
+node has no hard errors of its own.
+
+\paragraph{Guard conditions.}
+Requires: (i) warmup complete, (ii) $\texttt{xmit\_wait} \geq 1$, (iii)
+$\texttt{total\_hard\_error\_delta} + \texttt{link\_error\_recovery\_delta}
+= 0$ (no local errors), (iv) z-score $\geq 3$.
+
+\paragraph{Why exclude local errors.}
+If the node has its own hard errors, the signal is likely a local problem,
+not upstream congestion. The rule only fires when the node itself is clean
+but being starved by its neighbors.
+
+\subsection{Rule detail: PcieBottleneck}
+
+A heuristic detector for PCIe bus saturation. Fires when CQ stalls
+($\geq 5$) and slab pressure ($\geq 1000$ allocs) co-occur \emph{without}
+any IB errors. The logic: if completions are stalling and memory allocation
+is pressured, but the IB link is healthy, the bottleneck is likely between
+the NIC and CPU (PCIe).
+
+Always \texttt{Degraded}---never \texttt{Critical}---because this is an
+indirect inference, not a direct observation.
+
 \subsection{Deep dive: RdmaLinkDegradation (the most complex rule)}
 \label{sec:link-deg}
 
 This rule models the real-world failure sequence for an InfiniBand cable:
 \textit{Nominal $\rightarrow$ Elevated Errors $\rightarrow$ Link Recovery
-$\rightarrow$ Link Down.} It is stateful and uses four detection layers,
-checked in order from most severe to least:
+$\rightarrow$ Link Down.} It is stateful, maintains three
+\texttt{RollingStats} trackers (symbol errors, receive errors, soft errors),
+an \texttt{elevated\_windows} counter (capped at 10), and a cooldown timer.
+It uses five detection layers, checked in priority order from most severe to
+least:
 
 \begin{enumerate}
   \item \textbf{Link downed} ($\texttt{link\_downed\_delta} > 0$):
         Immediately Critical. The cable is dead; replace it.
   \item \textbf{Link recovery} ($\texttt{link\_error\_recovery\_delta} > 0$):
         Immediately Critical. The firmware is actively trying to recover a
-        failing link.
+        failing link. This event precedes link-down and is the earliest
+        warning of a dying cable.
   \item \textbf{Error budget exceeded}
-        ($\texttt{total\_hard\_error\_delta} > 5$ per window):
-        Degraded, or Critical if $> 50$ (10$\times$ budget).
+        ($\texttt{total\_hard\_error\_delta} > \texttt{error\_budget}$,
+        default 5 per window):
+        Degraded, or Critical if $> 10\times$ budget (50). The budget is a
+        per-window count, not a rate---this fires even at low throughput.
   \item \textbf{Absolute error rate ceiling} ($\geq 5$\%):
-        Catches sustained degradation that the EWMA might adapt to (the
-        ``boiling frog'' scenario). Fires every window regardless of EWMA
-        state.
+        On links with traffic, if
+        $\texttt{total\_all\_errors\_delta()} / \texttt{throughput} \geq 0.05$
+        fires unconditionally. This catches sustained degradation that the
+        EWMA might adapt to (the ``boiling frog'' scenario). On Soft-RoCE
+        devices, uses soft-error totals instead.
   \item \textbf{Rate anomaly via z-score} ($z \geq 3$ after warmup):
-        Detects sudden increases relative to the established baseline.
-        Critical at $z \geq 6$ or after 3 consecutive elevated windows.
+        Computes $z = \max(z_\text{sym}, z_\text{rcv}, z_\text{soft})$
+        using clamped EWMA trackers. Requires $\texttt{total\_errors} > 0$.
+        Critical at $z \geq 2\times\texttt{threshold}$ (6), or after
+        $\geq 3$ consecutive elevated windows, or if the total error rate
+        $\geq 3\times$ the absolute ceiling ($15$\%).
 \end{enumerate}
+
+\paragraph{State management.}
+When any layer fires, \texttt{elevated\_windows} increments (capped at 10)
+and \texttt{cooldown\_remaining} resets to 3. When no layer fires and
+cooldown is active, \texttt{cooldown\_remaining} decrements. When cooldown
+expires, \texttt{elevated\_windows} decrements (step-down). This provides
+a memory of recent degradation that decays gradually.
 
 \paragraph{The ``boiling frog'' defense.}
 Rules that use EWMA baselines have a risk: if an error rate rises slowly
@@ -969,6 +1106,56 @@ error rate will eventually exceed the clamped EWMA and trigger an anomaly.
 The absolute error rate ceiling (layer 4) provides a second defense:
 regardless of what the EWMA thinks is ``normal,'' any window with
 $\geq 5$\% error rate fires unconditionally.
+
+\subsection{RollingStats: the statistical backbone}
+\label{sec:rolling-stats}
+
+Several rules (\texttt{RdmaLinkDegradation}, \texttt{LatencyDrift},
+\texttt{ThroughputDrop}, \texttt{CqJitter}, \texttt{CongestionSpread})
+depend on the \texttt{RollingStats} tracker
+(\texttt{detection/rolling\_stats.rs}). Its behavior is central to
+understanding why rules fire when they do.
+
+\paragraph{EWMA update.}
+On each observation $x_t$:
+\[
+  \text{ewma}_t = \text{ewma}_{t-1} + \alpha \cdot (x_t - \text{ewma}_{t-1})
+\]
+After update, the EWMA is clamped:
+$\text{ewma}_t \leftarrow \min(\text{ewma}_t,\; \text{baseline} \times
+\text{clamp\_hi})$, where the baseline is frozen after warmup. Without this
+clamp, a gradually worsening signal would drag the EWMA upward and the
+z-score would never fire.
+
+\paragraph{Variance tracking.}
+Uses an EWMA of squared deviations:
+\[
+  \text{var}_t = \text{var}_{t-1} + \alpha \cdot
+  \left((x_t - \text{ewma}_t)^2 - \text{var}_{t-1}\right)
+\]
+Standard deviation: $\sigma_t = \sqrt{\text{var}_t}$.
+
+\paragraph{Z-score.}
+\[
+  z_t = \frac{x_t - \text{ewma}_t}{\max(\sigma_t, \epsilon)}
+\]
+where $\epsilon$ is a small floor to prevent division by near-zero. A
+$z \geq 3$ indicates the observation is 3+ standard deviations above the
+expected value.
+
+\paragraph{Floor clamp.}
+\texttt{RollingStats::with\_floor($\alpha$, floor\_factor)} prevents the
+EWMA from dropping below $\texttt{floor\_factor} \times \text{initial}$.
+Used by \texttt{ThroughputDrop} with floor 0.5: if throughput drops to
+30\% of baseline, the EWMA stops at 50\%, making the z-score reflect the
+full gap. Without the floor, a gradual workload ramp-down would drag the
+EWMA down and mask a genuine drop.
+
+\paragraph{TrendTracker.}
+A companion type that tracks \emph{monotonically increasing} sequences.
+Each window, if $x_t > x_{t-1}$, \texttt{consecutive\_increases}
+increments; otherwise it resets. Used by \texttt{RisingErrorTrendRule}
+to detect sustained degradation trajectories.
 
 
 % ============================================================================
@@ -1347,7 +1534,674 @@ The raw score depends entirely on the \texttt{compute\_health\_score}
 formula. Detection is reduced but not eliminated.
 
 
+% ============================================================================
+\section{eBPF Kernel Probes}
+\label{sec:ebpf}
+% ============================================================================
+
+This section documents the in-kernel instrumentation that produces the raw
+data the detection engine evaluates.
+
+\subsection{Probe programs}
+
+The eBPF object (\texttt{argus-ebpf/src/}) contains four source files, each
+implementing probes for a specific subsystem:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{p{3.4cm}p{3.8cm}X}
+\toprule
+File & Programs & Kernel attachment \\
+\midrule
+\texttt{slab.rs} & \texttt{trace\_kmem\_cache\_alloc}, \texttt{trace\_kmem\_cache\_free}, \texttt{kprobe\_slab\_alloc\_entry}, \texttt{kretprobe\_slab\_alloc} & Tracepoints \texttt{kmem/kmem\_cache\_alloc}, \texttt{kmem/kmem\_cache\_free}; kprobe/kretprobe on \texttt{kmem\_cache\_alloc} \\[4pt]
+\texttt{interrupts.rs} & \texttt{trace\_irq\_handler\_entry}, \texttt{trace\_napi\_poll} & Tracepoints \texttt{irq/irq\_handler\_entry}, \texttt{napi/napi\_poll} \\[4pt]
+\texttt{rdma\_jitter.rs} & \texttt{kprobe\_wr\_submit}, \texttt{kprobe\_cq\_poll\_entry}, \texttt{kretprobe\_cq\_poll} & Kprobes resolved from \texttt{/proc/kallsyms} at runtime \\
+\bottomrule
+\end{tabularx}
+\caption{eBPF probe programs and their kernel attachments.}
+\end{table}
+
+\subsection{BPF maps}
+
+All data flows from kernel to userspace through per-CPU array maps (no ring
+buffer for the hot path). This keeps probe overhead under 5\,$\mu$s.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm}p{3cm}X}
+\toprule
+Map name & Type & Contents \\
+\midrule
+\texttt{IRQ\_COUNTS} & PerCpuArray\texttt{<u64>} & 1 slot per CPU: cumulative IRQ handler entry count \\[2pt]
+\texttt{SLAB\_STATS} & PerCpuArray\texttt{<[u64;6]>} & \texttt{[alloc\_count, free\_count, total\_bytes\_req, total\_bytes\_alloc, total\_latency\_ns, max\_latency\_ns]} \\[2pt]
+\texttt{SLAB\_ALLOC\_SCRATCH} & LruHashMap\texttt{<u64,u64>} & Key: \texttt{pid\_tgid}; value: entry timestamp for latency pairing. Max 256 entries. \\[2pt]
+\texttt{NAPI\_STATS} & PerCpuArray\texttt{<[u64;3]>} & \texttt{[poll\_count, total\_work, total\_budget]} \\[2pt]
+\texttt{WR\_TIMESTAMPS} & LruHashMap\texttt{<u64,u64>} & Key: QP number; value: WR submit timestamp. Max 4096 entries. \\[2pt]
+\texttt{CQ\_JITTER\_STATS} & PerCpuArray\texttt{<[u64;4]>} & \texttt{[completion\_count, total\_latency\_ns, max\_latency\_ns, stall\_count]} where stall threshold = 50\,$\mu$s \\[2pt]
+\texttt{QP\_OWNERS} & LruHashMap\texttt{<u32,u32>} & QP $\rightarrow$ TGID. Max 4096 entries. \\[2pt]
+\texttt{CQ\_POLL\_SCRATCH} & LruHashMap\texttt{<u64,u64>} & Key: \texttt{pid\_tgid}; value: \texttt{wc} pointer. Max 256 entries. \\[2pt]
+\texttt{LRU\_MISSES} & PerCpuArray\texttt{<[u64;2]>} & \texttt{[cq\_lru\_misses, slab\_lru\_misses]}. Counts when LRU lookup fails (eviction indicator). \\[2pt]
+\texttt{OFFSETS} & Array\texttt{<u32>} & 8 entries: tracepoint field offsets and BTF struct offsets populated by userspace at load time. \\
+\bottomrule
+\end{tabularx}
+\caption{All BPF maps declared in \texttt{argus-ebpf/src/main.rs}.}
+\end{table}
+
+\subsection{CQ jitter measurement path}
+
+The CQ latency measurement works by correlating work request (WR) submission
+timestamps with completion queue (CQ) poll return values:
+
+\begin{enumerate}[nosep]
+  \item \textbf{WR submit kprobe}: Reads \texttt{qp\_num} from the
+        \texttt{ib\_qp} struct (using BTF offsets from \texttt{OFFSETS}),
+        stores \texttt{(qp\_num $\rightarrow$ ktime\_ns)} in
+        \texttt{WR\_TIMESTAMPS} and \texttt{(qp\_num $\rightarrow$ pid)} in
+        \texttt{QP\_OWNERS}.
+  \item \textbf{CQ poll entry kprobe}: Saves the \texttt{ib\_wc} pointer
+        in \texttt{CQ\_POLL\_SCRATCH}.
+  \item \textbf{CQ poll kretprobe}: Iterates up to
+        $\min(\texttt{num\_completions}, 8)$ completions with stride 80 bytes.
+        For each, reads \texttt{wc[i].qp $\rightarrow$ qp\_num}, looks up
+        the submit timestamp in \texttt{WR\_TIMESTAMPS}, computes
+        $\texttt{latency} = \texttt{now} - \texttt{submit\_ts}$, and updates
+        \texttt{CQ\_JITTER\_STATS}. If the WR timestamp lookup fails (LRU
+        eviction), increments \texttt{LRU\_MISSES[0]}.
+\end{enumerate}
+
+\begin{warningbox}
+  The LRU maps have fixed capacity. Under high QP counts ($>4096$ active
+  queue pairs), \texttt{WR\_TIMESTAMPS} entries are evicted before CQ poll,
+  causing latency measurements to be lost. The
+  \texttt{argus\_ebpf\_lru\_evictions\{map=cq\}} Prometheus counter tracks
+  this. If eviction rates are high, the CQ jitter metrics become unreliable.
+\end{warningbox}
+
+
+% ============================================================================
+\section{Hardware Counter Collection}
+\label{sec:hw-counters}
+% ============================================================================
+
+\subsection{Counter types}
+
+The agent reads 17 distinct counter types from
+\texttt{/sys/class/infiniband/*/ports/*/}. Each is identified by a
+discriminant byte in the aggregator:
+
+\begin{center}
+\small
+\begin{tabular}{clp{5.5cm}}
+\toprule
+ID & Counter & sysfs path suffix \\
+\midrule
+0  & \texttt{symbol\_error}             & \texttt{counters/symbol\_error\_count} \\
+1  & \texttt{link\_downed}              & \texttt{counters/link\_downed} \\
+2  & \texttt{port\_rcv\_errors}         & \texttt{counters/port\_rcv\_errors} \\
+3  & \texttt{port\_xmit\_discards}      & \texttt{counters/port\_xmit\_discards} \\
+4  & \texttt{port\_rcv\_data}           & \texttt{counters/port\_rcv\_data} \\
+5  & \texttt{port\_xmit\_data}          & \texttt{counters/port\_xmit\_data} \\
+6  & \texttt{port\_rcv\_remote\_phys}   & \texttt{counters/port\_rcv\_remote\_physical\_errors} \\
+7  & \texttt{local\_link\_integrity}    & \texttt{counters/local\_link\_integrity\_errors} \\
+8  & \texttt{excessive\_buffer\_overrun}& \texttt{counters/excessive\_buffer\_overrun\_errors} \\
+9  & \texttt{hw\_rcv\_pkts}             & \texttt{hw\_counters/rx\_read\_requests} \\
+10 & \texttt{hw\_xmit\_pkts}            & \texttt{hw\_counters/tx\_write\_requests} \\
+11 & \texttt{rxe\_duplicate\_request}   & \texttt{hw\_counters/duplicate\_request} \\
+12 & \texttt{rxe\_seq\_error}           & \texttt{hw\_counters/seq\_error} \\
+13 & \texttt{rxe\_retry\_exceeded}      & \texttt{hw\_counters/retry\_exceeded\_err} \\
+14 & \texttt{rxe\_send\_error}          & \texttt{hw\_counters/send\_err} \\
+15 & \texttt{link\_error\_recovery}     & \texttt{counters/link\_error\_recovery} \\
+16 & \texttt{port\_xmit\_wait}          & \texttt{counters/port\_xmit\_wait} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Throughput note.}
+IB \texttt{port\_rcv\_data} and \texttt{port\_xmit\_data} report values in
+units of 4 bytes (32-bit words). The Prometheus metrics multiply by 4 to
+report actual bytes: \texttt{argus\_ib\_throughput\_rcv\_bytes} $=$
+\texttt{port\_rcv\_data\_delta} $\times$ $4$.
+
+\paragraph{Delta accumulation.}
+Deltas from multiple ports on the same device are summed into a single
+\texttt{IbCounterDeltas} struct. This means on a dual-port HCA, error deltas
+reflect the aggregate across both ports.
+
+\subsection{Derived metrics}
+
+The \texttt{IbCounterDeltas} struct provides several computed accessors:
+\begin{itemize}[nosep]
+  \item \texttt{total\_hard\_error\_delta()}: symbol + rcv errors + remote physical + link integrity + buffer overrun
+  \item \texttt{total\_soft\_error\_delta()}: RXE duplicate + seq error + retry exceeded + send error
+  \item \texttt{throughput\_bytes()}: $(\texttt{rcv\_data} + \texttt{xmit\_data}) \times 4$
+  \item \texttt{throughput\_pkts()}: rcv + xmit packet counts
+  \item \texttt{has\_traffic()}: bytes $> 0$ or pkts $> 0$
+\end{itemize}
+
+
+% ============================================================================
+\section{Capability System}
+\label{sec:capabilities}
+% ============================================================================
+
+\subsection{Design rationale}
+
+Different RDMA hardware exposes different observability surfaces. An IB HCA
+with full sysfs counters, a RoCE NIC with ethtool stats, and a Soft-RoCE
+device with minimal \texttt{hw\_counters/} each require different backends
+to extract the same logical signal. The capability system abstracts this:
+each logical signal (e.g., ``link errors'') can have multiple backend
+implementations, and the best available one is selected at startup.
+
+\subsection{Capabilities}
+
+Each capability represents a logical signal type:
+
+\begin{center}
+\small
+\begin{tabular}{lp{8cm}}
+\toprule
+Capability & What it measures \\
+\midrule
+\texttt{LinkErrors}        & Error counters (symbol, rcv, link integrity, etc.) \\
+\texttt{Throughput}        & Byte/packet throughput rate \\
+\texttt{CompletionLatency} & CQ completion latency distribution (p50--p999) \\
+\texttt{RetransmitSignal}  & Retransmission rate or indicators \\
+\texttt{PfcPause}          & PFC (Priority Flow Control) pause frame counts \\
+\texttt{CreditStall}       & IB credit stalls (\texttt{port\_xmit\_wait}) \\
+\texttt{QpAttribution}     & Map QP numbers to processes \\
+\texttt{PeerLiveness}      & Remote node health (probe-based) \\
+\texttt{EcnSignal}         & ECN marking rates \\
+\texttt{CnpSignal}         & Congestion Notification Packet rates \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Quality levels and coverage grading}
+
+Each provider declares a quality level based on how trustworthy its data is:
+
+\begin{center}
+\begin{tabular}{lcl}
+\toprule
+Quality & Weight & Meaning \\
+\midrule
+\texttt{High}   & 1.0 & Direct hardware counters \\
+\texttt{Medium} & 0.6 & Derived or sampled data \\
+\texttt{Low}    & 0.3 & Heuristic or inferred \\
+\texttt{Absent} & 0.0 & Not available on this hardware \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At startup, the \texttt{CapabilityRegistry} probes all candidate providers
+and selects the highest-quality available backend for each capability.
+A \texttt{CoverageReport} is assembled with an overall grade:
+
+\begin{description}[nosep]
+  \item[Grade A] All four critical capabilities (\texttt{LinkErrors},
+    \texttt{Throughput}, \texttt{CompletionLatency}, \texttt{RetransmitSignal})
+    at \texttt{High} quality.
+  \item[Grade B] All critical capabilities at \texttt{Medium} or above.
+  \item[Grade C] At least one critical capability is non-\texttt{Absent}.
+  \item[Grade F] All critical capabilities are \texttt{Absent} (e.g., no IB
+    hardware present).
+\end{description}
+
+\subsection{Provider backends}
+
+The system ships with 17 candidate providers:
+
+\begin{multicols}{2}
+\begin{itemize}[nosep]
+  \item \texttt{SysfsLinkErrors}
+  \item \texttt{InferredLinkErrors}
+  \item \texttt{SysfsThroughput}
+  \item \texttt{EbpfCqLatency}
+  \item \texttt{ThroughputProxyLatency}
+  \item \texttt{EbpfRetransmit}
+  \item \texttt{MadRetransmit}
+  \item \texttt{SysfsRetransmit}
+  \item \texttt{InferredRetransmit}
+  \item \texttt{EbpfQpAttribution}
+  \item \texttt{RdmaCoreQpAttribution}
+  \item \texttt{SysfsRxeQpAttribution}
+  \item \texttt{EthtoolPfc}
+  \item \texttt{InferredPfc}
+  \item \texttt{EthtoolEcn}
+  \item \texttt{EthtoolCnp}
+  \item \texttt{PeerLiveness}
+\end{itemize}
+\end{multicols}
+
+
+% ============================================================================
+\section{Scheduler Integration}
+\label{sec:scheduler}
+% ============================================================================
+
+\subsection{Architecture}
+
+The scheduler subsystem bridges ARGUS health verdicts and workload
+schedulers. It uses a reconciliation loop: each cycle, the reconciler
+compares the \emph{desired} node state (derived from ARGUS health) against
+the \emph{observed} state (queried from the scheduler backend) and takes
+action to converge them.
+
+\subsection{State model}
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Desired states & Observed states \\
+\midrule
+\texttt{Available}       & \texttt{Available} \\
+\texttt{Draining}        & \texttt{Draining} (jobs still running) \\
+\texttt{HeldByOperator}  & \texttt{Drained} (empty) \\
+                          & \texttt{Down} \\
+                          & \texttt{Unknown} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Policy}
+
+The \texttt{SchedulingPolicy} maps health states to desired states:
+
+\begin{itemize}[nosep]
+  \item \textbf{Healthy} $\rightarrow$ \texttt{Available} (unless operator hold is set)
+  \item \textbf{Degraded / Recovering} $\rightarrow$ \texttt{Draining} only if
+        \texttt{drain\_on\_degraded} is enabled; otherwise, keeps current desired state
+  \item \textbf{Critical} $\rightarrow$ \texttt{Draining} always
+\end{itemize}
+
+Operator holds (\texttt{HeldByOperator}) are never auto-cleared. They
+require explicit release via \texttt{/scheduler/release} or the
+\texttt{argus-scheduler release} CLI.
+
+\subsection{Safety mechanisms}
+
+\begin{description}[style=nextline,leftmargin=0.5cm]
+  \item[Advisory lock]
+    The reconciler holds an \texttt{flock} on
+    \texttt{/var/run/argus/scheduler.lock} to prevent concurrent
+    reconciliation from multiple agent instances.
+  \item[Drain rate limit]
+    Default maximum 3 drains per hour. Rejections are counted in
+    \texttt{argus\_scheduler\_drain\_rejected\_total}.
+  \item[Resume cooldown]
+    Default 60 seconds after drain before a resume is allowed.
+  \item[Contested resume detection]
+    If a node was drained by ARGUS but appeared resumed by an external actor
+    (e.g., operator ran \texttt{scontrol update}), ARGUS enters a 300-second
+    cooldown before re-draining.
+  \item[External drain detection]
+    If the node is drained but the reason does not start with
+    \texttt{ARGUS:}, the reconciler infers an external operator hold and
+    sets \texttt{HeldByOperator}.
+  \item[Persisted state]
+    Scheduler state survives restarts via
+    \texttt{/var/lib/argus/scheduler-state.json} (atomic write with
+    tmp+rename).
+  \item[Audit log]
+    All scheduler actions are appended to
+    \texttt{/var/lib/argus/scheduler-audit.jsonl} (JSON lines format).
+\end{description}
+
+\subsection{SLURM backend}
+
+The SLURM backend interacts via \texttt{scontrol} with sanitized
+environment (\texttt{env\_clear()}, minimal \texttt{PATH}/\texttt{HOME}):
+
+\begin{itemize}[nosep]
+  \item \textbf{Drain}: \texttt{scontrol update NodeName=\textit{node}
+        State=DRAIN Reason=ARGUS:\textit{reason}}
+  \item \textbf{Resume}: \texttt{scontrol update NodeName=\textit{node}
+        State=RESUME}
+  \item \textbf{Ownership}: Reason prefix \texttt{ARGUS:} identifies
+        self-managed drains
+  \item \textbf{Timeout}: 10 seconds per \texttt{scontrol} invocation
+\end{itemize}
+
+
+% ============================================================================
+\section{Autonomous Actions}
+\label{sec:actions}
+% ============================================================================
+
+Beyond scheduler integration, ARGUS can take autonomous actions when health
+states change.
+
+\subsection{Action types}
+
+\begin{description}[style=nextline,leftmargin=0.5cm]
+  \item[Log action]
+    Always enabled. Logs every alert via \texttt{tracing::warn!}.
+  \item[Webhook]
+    Enabled via \texttt{ARGUS\_ACTION\_WEBHOOK}. POST JSON payload
+    containing \texttt{source}, \texttt{severity}, \texttt{kind},
+    \texttt{message}, \texttt{affected}, and \texttt{timestamp\_ns}.
+    Global timeout: 5 seconds. Rejects HTTP status $\geq 400$.
+  \item[Port disable]
+    Enabled via \texttt{ARGUS\_ACTION\_PORT\_DISABLE} (dangerous). Only
+    fires on \textbf{Critical} severity with
+    \texttt{RdmaLinkDegradation} alert and $\texttt{link\_downed\_delta} > 0$.
+    Writes \texttt{"0"} to sysfs \texttt{admin\_state}. Refuses to act if
+    multiple IB ports exist (ambiguity guard).
+\end{description}
+
+\subsection{Rate limiting}
+
+Actions are rate-limited to one dispatch per 60 seconds. An internal audit
+log with capacity for 10,000 entries tracks all dispatched actions.
+
+
+% ============================================================================
+\section{Prometheus Metrics Reference}
+\label{sec:metrics-ref}
+% ============================================================================
+
+The following table lists all Prometheus metrics exposed on
+\texttt{/metrics}. The ``\texttt{\_total}'' suffix is added automatically
+by OpenMetrics encoding for counter types.
+
+\subsection{Health and detection}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Metric & Type & Description \\
+\midrule
+\texttt{argus\_health\_state}               & Gauge   & 0=H, 1=D, 2=C, 3=R \\
+\texttt{argus\_health\_score\_millis}        & Gauge   & Composite score $\times 1000$ \\
+\texttt{argus\_health\_score\_raw\_millis}   & Gauge   & Pre-smoothing score \\
+\texttt{argus\_health\_score\_effective\_millis} & Gauge & Post-smoothing score \\
+\texttt{argus\_health\_score\_ewma\_millis}  & Gauge   & EWMA track \\
+\texttt{argus\_health\_score\_peak\_hold\_millis} & Gauge & Peak-hold track \\
+\texttt{argus\_events}                       & Gauge   & Cumulative event count \\
+\texttt{argus\_alerts}                       & Counter & Labels: \texttt{kind}, \texttt{severity} \\
+\texttt{argus\_state\_transitions}           & Counter & Labels: \texttt{from}, \texttt{to} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{eBPF subsystem metrics}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Metric & Type & Description \\
+\midrule
+\texttt{argus\_irq\{cpu\}}                  & Counter & Per-CPU IRQ count \\
+\texttt{argus\_irq\_imbalance\_pct}          & Gauge   & Dominant CPU share \\
+\texttt{argus\_irq\_dominant\_cpu}           & Gauge   & CPU index \\
+\texttt{argus\_irq\_total\_rate}             & Gauge   & Window IRQ total \\
+\texttt{argus\_slab\_alloc}                  & Counter & Cumulative slab allocations \\
+\texttt{argus\_slab\_avg\_latency\_ns}       & Gauge   & Window average \\
+\texttt{argus\_slab\_max\_latency\_ns}       & Gauge   & Window maximum \\
+\texttt{argus\_cq\_completions}              & Counter & CQ completions from eBPF \\
+\texttt{argus\_cq\_avg\_latency\_ns}         & Gauge   & Window average \\
+\texttt{argus\_cq\_max\_latency\_ns}         & Gauge   & Window maximum \\
+\texttt{argus\_cq\_stalls}                   & Counter & Completions $>50\,\mu$s \\
+\texttt{argus\_cq\_p99\_latency\_ns}         & Gauge   & Estimated p99 \\
+\texttt{argus\_napi\_utilization\_pct}       & Gauge   & work/budget $\times 100$ \\
+\texttt{argus\_ebpf\_lru\_evictions\{map\}}  & Counter & LRU map eviction count \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{IB hardware counter metrics}
+
+All IB metrics carry labels \texttt{device} and \texttt{port}:
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Metric & Source \\
+\midrule
+\texttt{argus\_ib\_error\_delta\_total}             & Sum of all error deltas \\
+\texttt{argus\_ib\_symbol\_errors\_delta}            & \texttt{symbol\_error\_delta} \\
+\texttt{argus\_ib\_link\_downed\_delta}              & \texttt{link\_downed\_delta} \\
+\texttt{argus\_ib\_link\_error\_recovery\_delta}     & \texttt{link\_error\_recovery\_delta} \\
+\texttt{argus\_ib\_port\_rcv\_errors\_delta}         & \texttt{port\_rcv\_errors\_delta} \\
+\texttt{argus\_ib\_port\_xmit\_discards\_delta}      & \texttt{port\_xmit\_discards\_delta} \\
+\texttt{argus\_ib\_port\_xmit\_wait\_delta}          & \texttt{port\_xmit\_wait\_delta} \\
+\texttt{argus\_ib\_throughput\_rcv\_bytes}           & \texttt{rcv\_data $\times$ 4} \\
+\texttt{argus\_ib\_throughput\_xmit\_bytes}          & \texttt{xmit\_data $\times$ 4} \\
+\texttt{argus\_ib\_throughput\_rcv\_pkts}            & \texttt{hw\_rcv\_pkts\_delta} \\
+\texttt{argus\_ib\_throughput\_xmit\_pkts}           & \texttt{hw\_xmit\_pkts\_delta} \\
+\texttt{argus\_ib\_rxe\_*\_delta} (4 metrics)       & RXE soft-error counters \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Capability and timescale metrics}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Metric & Type & Description \\
+\midrule
+\texttt{argus\_capability\_coverage\{cap,backend\}} & Gauge & Quality as integer \\
+\texttt{argus\_capability\_grade}                     & Gauge & A=3, B=2, C=1, F=0 \\
+\texttt{argus\_sample\_contribution\_millis}          & Gauge & Fusion $\Delta$ \\
+\texttt{argus\_cq\_latency\_p\{50,95,99,999\}\_ns}   & Gauge & DDSketch quantiles \\
+\texttt{argus\_timescale\_state\{timescale\}}         & Gauge & Per-track state \\
+\texttt{argus\_timescale\_score\_millis\{timescale\}} & Gauge & Per-track score \\
+\texttt{argus\_burst\_classification\{class\}}        & Gauge & 1=active, 0=not \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Scheduler metrics}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Metric & Type & Description \\
+\midrule
+\texttt{argus\_scheduler\_desired\_state}            & Gauge   & 0=avail, 1=draining, 2=held \\
+\texttt{argus\_scheduler\_observed\_state}            & Gauge   & 0--4 mapping \\
+\texttt{argus\_scheduler\_drain\{mode\}}              & Counter & Drain events \\
+\texttt{argus\_scheduler\_resume\{mode\}}             & Counter & Resume events \\
+\texttt{argus\_scheduler\_errors\{op\}}               & Counter & Backend errors \\
+\texttt{argus\_scheduler\_last\_action\_timestamp}    & Gauge   & Unix seconds \\
+\texttt{argus\_scheduler\_drain\_duration\_seconds}   & Gauge   & Time in drained state \\
+\texttt{argus\_scheduler\_drain\_rejected\_total}     & Counter & Rate-limit rejections \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+% ============================================================================
+\section{Security Architecture}
+\label{sec:security}
+% ============================================================================
+
+ARGUS implements defense-in-depth through multiple security layers.
+
+\subsection{Privilege model}
+
+The agent requires elevated privileges to load eBPF programs and read
+kernel symbols. After initialization, it drops all capabilities except
+\texttt{CAP\_BPF} (needed for ongoing BPF map reads on kernels $<$ 5.19).
+
+\begin{enumerate}[nosep]
+  \item At startup: full capability set (from systemd
+        \texttt{AmbientCapabilities}).
+  \item After eBPF load: \texttt{PR\_SET\_NO\_NEW\_PRIVS} is set, then all
+        capabilities except \texttt{CAP\_BPF} are dropped from both
+        \texttt{Effective} and \texttt{Permitted} sets (loop over caps 0--63).
+  \item \texttt{umask(0o077)} is pinned at process start to prevent
+        world-readable file creation.
+  \item PID file uses \texttt{O\_NOFOLLOW} to prevent symlink attacks.
+\end{enumerate}
+
+\subsection{Systemd hardening}
+
+The production \texttt{argusd.service} unit applies 30+ hardening directives:
+
+\begin{itemize}[nosep]
+  \item \texttt{ProtectSystem=strict}, \texttt{ProtectHome=yes},
+        \texttt{PrivateTmp=yes}
+  \item \texttt{MemoryDenyWriteExecute=yes} (prevents JIT/ROP gadgets)
+  \item \texttt{SystemCallFilter}: layered allowlist (\texttt{@system-service},
+        \texttt{@io-event}, \texttt{@network-io}) with explicit denylists
+        (\texttt{@mount}, \texttt{@swap}, \texttt{@reboot}, \texttt{ptrace},
+        \texttt{process\_vm\_readv/writev})
+  \item \texttt{ProtectProc=invisible}, \texttt{ProcSubset=pid} (hides other
+        processes)
+  \item \texttt{RestrictAddressFamilies=AF\_INET AF\_INET6 AF\_UNIX AF\_NETLINK}
+  \item \texttt{NoNewPrivileges=yes}, \texttt{SecureBits=noroot-locked}
+  \item \texttt{CapabilityBoundingSet}: only \texttt{CAP\_BPF},
+        \texttt{CAP\_PERFMON}, \texttt{CAP\_SYSLOG},
+        \texttt{CAP\_DAC\_READ\_SEARCH}
+  \item Resource limits: \texttt{CPUQuota=5\%}, \texttt{MemoryMax=256M},
+        \texttt{TasksMax=64}
+\end{itemize}
+
+\subsection{eBPF integrity}
+
+Before loading the eBPF object, the agent verifies its SHA-256 hash against
+a known-good value from \texttt{/etc/argus/ebpf.sha256} or the
+\texttt{ARGUS\_EBPF\_HASH} environment variable. Hash mismatch aborts
+startup.
+
+\subsection{Metrics endpoint security}
+
+\begin{itemize}[nosep]
+  \item Optional TLS with certificate hot-reloading via SIGHUP
+  \item Bearer token authentication with constant-time comparison
+        (prevents timing side-channels)
+  \item Default bind to \texttt{127.0.0.1:9100} (loopback only)
+  \item Connection semaphore and idle timeout for DoS protection
+  \item Config file (\texttt{argusd.conf}) installed mode 0640 to protect
+        token values from local users
+\end{itemize}
+
+
+% ============================================================================
+\section{Configuration Reference}
+\label{sec:config-ref}
+% ============================================================================
+
+\subsection{Detection tuning parameters}
+
+These are configurable via the \texttt{[detection]} section of the TOML
+config file:
+
+\begin{center}
+\small
+\begin{tabular}{lcp{6cm}}
+\toprule
+Parameter & Default & Effect \\
+\midrule
+\texttt{irq\_skew\_threshold\_pct} & 70.0 & Base threshold for IRQ affinity skew rule \\
+\texttt{rdma\_spike\_factor}       & 5.0  & Multiplier for RDMA latency spike detection \\
+\texttt{rdma\_baseline\_latency\_ns} & 2000 & Expected normal CQ completion latency \\
+\texttt{slab\_pressure\_min\_allocs} & 100 & Minimum allocs before slab pressure rule considers firing \\
+\texttt{slab\_pressure\_alloc\_rate\_threshold} & 5000 & Alloc count above which correlation with IB errors is checked \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{State machine parameters}
+
+Configurable via \texttt{[detection.state\_machine]} in TOML:
+
+\begin{center}
+\small
+\begin{tabular}{lcp{6cm}}
+\toprule
+Parameter & Default & Effect \\
+\midrule
+\texttt{degrade\_enter}     & 0.30 & Score threshold to enter Degraded \\
+\texttt{degrade\_exit}      & 0.10 & Score threshold to exit Degraded \\
+\texttt{critical\_enter}    & 0.55 & Score threshold to enter Critical \\
+\texttt{critical\_exit}     & 0.30 & Score threshold to exit Critical \\
+\texttt{enter\_windows}     & 2    & Consecutive windows to escalate \\
+\texttt{exit\_windows}      & 5    & Consecutive windows to de-escalate \\
+\texttt{recover\_windows}   & 3    & Mandatory hold in Recovering \\
+\texttt{max\_hold\_windows} & 200  & Stuck-state watchdog \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Non-configurable rule parameters}
+
+The following rule-internal parameters are hard-coded and cannot be changed
+without modifying source:
+
+\begin{center}
+\small
+\begin{tabular}{lcp{5.5cm}}
+\toprule
+Rule & Parameter & Value \\
+\midrule
+\texttt{RdmaLinkDegradation} & z-score threshold & 3.0 \\
+\texttt{RdmaLinkDegradation} & error budget (per window) & 5 \\
+\texttt{RdmaLinkDegradation} & absolute error rate ceiling & 5\% \\
+\texttt{RdmaLinkDegradation} & cooldown windows & 3 \\
+\texttt{RisingErrorTrend}    & min consecutive windows & 3 \\
+\texttt{LatencyDrift}        & z-score threshold & 3.0 \\
+\texttt{ThroughputDrop}      & drop threshold & 50\% \\
+\texttt{ThroughputDrop}      & EWMA floor factor & 0.5$\times$ \\
+\texttt{NapiSaturation}      & utilization threshold & 85\% \\
+\texttt{NapiSaturation}      & critical threshold & 95\% \\
+\texttt{CqJitter}            & stall threshold & 50\,$\mu$s \\
+\texttt{CqJitter}            & critical stall count & $>10$ \\
+\texttt{CqJitter}            & critical max latency & $>1$\,ms \\
+\texttt{CongestionSpread}    & z-score threshold & 3.0 \\
+\texttt{PcieBottleneck}      & min CQ stalls & 5 \\
+\texttt{PcieBottleneck}      & min slab allocs & 1000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Environment variables}
+
+All CLI flags can be set via environment variables with the \texttt{ARGUS\_}
+prefix (read by \texttt{clap} directly---no shell interpretation):
+
+\begin{center}
+\small
+\begin{tabular}{lp{7cm}}
+\toprule
+Variable & Maps to \\
+\midrule
+\texttt{ARGUS\_MODE}               & \texttt{--mode} (live/mock/replay) \\
+\texttt{ARGUS\_EBPF\_PATH}         & \texttt{--ebpf-path} \\
+\texttt{ARGUS\_EBPF\_HASH}         & \texttt{--ebpf-hash} \\
+\texttt{ARGUS\_METRICS\_ADDR}      & \texttt{--metrics-addr} \\
+\texttt{ARGUS\_LOG\_LEVEL}         & \texttt{--log-level} \\
+\texttt{ARGUS\_WINDOW\_SECS}       & \texttt{--window-secs} (1--300) \\
+\texttt{ARGUS\_SCHEDULER}          & \texttt{--scheduler} (slurm/noop) \\
+\texttt{ARGUS\_SCHEDULER\_DRY\_RUN}& \texttt{--scheduler-dry-run} \\
+\texttt{ARGUS\_SECCOMP}            & \texttt{--seccomp} \\
+\texttt{ARGUS\_TLS\_CERT}          & \texttt{--tls-cert} \\
+\texttt{ARGUS\_TLS\_KEY}           & \texttt{--tls-key} \\
+\texttt{ARGUS\_METRICS\_TOKEN}     & \texttt{--metrics-token} \\
+\texttt{ARGUS\_ACTION\_WEBHOOK}    & \texttt{--action-webhook} \\
+\texttt{ARGUS\_READ\_ONLY}         & \texttt{--read-only} \\
+\texttt{ARGUS\_CONFIG}             & \texttt{--config} (TOML path) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Precedence: CLI flags $>$ env vars $>$ TOML config $>$ compiled defaults.
+
+
+% ============================================================================
 \section*{Closing Notes}
+% ============================================================================
 
 \paragraph{Why it behaves this way.}
 Every default parameter---peak-hold decay ($\rho = 0.85$), exit dwell (5
