@@ -693,18 +693,36 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
         .danger_accept_invalid_certs(tls_skip_verify)
         .build()?;
 
-    // Verify connectivity before entering raw mode
-    let resp = client
-        .get(&status_url)
-        .send()
-        .await
-        .with_context(|| format!("cannot reach {status_url}"))?;
-    if !resp.status().is_success() {
-        bail!(
-            "{} returned {} — is argusd running?",
-            status_url,
-            resp.status()
-        );
+    // Wait for the daemon to become reachable before entering raw terminal mode.
+    // Retries for up to 30 seconds to handle systemd restarts and slow startup.
+    let max_wait = std::time::Duration::from_secs(30);
+    let retry_interval = std::time::Duration::from_secs(2);
+    let started = std::time::Instant::now();
+    loop {
+        match client.get(&status_url).send().await {
+            Ok(resp) if resp.status().is_success() => break,
+            Ok(resp) => {
+                if started.elapsed() >= max_wait {
+                    bail!(
+                        "{} returned {} — is argusd running?",
+                        status_url,
+                        resp.status()
+                    );
+                }
+                eprintln!(
+                    "waiting for argusd ({} returned {})...",
+                    status_url,
+                    resp.status()
+                );
+            }
+            Err(_) => {
+                if started.elapsed() >= max_wait {
+                    bail!("cannot reach {status_url} after {max_wait:?} — is argusd running?");
+                }
+                eprintln!("waiting for argusd at {status_url}...");
+            }
+        }
+        tokio::time::sleep(retry_interval).await;
     }
 
     let mut dashboard = Dashboard::new()?;
@@ -721,18 +739,23 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
         }
 
         if last_poll.elapsed() >= poll_interval {
-            if let Ok(resp) = client.get(&status_url).send().await {
-                if let Ok(snap) = resp.json::<StatusSnapshot>().await {
-                    dash_state.health = snap.state;
-                    dash_state.metrics = snap.metrics;
-                    dash_state.recent_alerts = snap.recent_alerts;
-                    dash_state.event_count = snap.events_processed;
-                    dash_state.uptime_secs = snap.uptime_secs;
-                    if !snap.source_name.is_empty() {
-                        dash_state.source_name =
-                            format!("attach/{} ({})", addr, snap.source_name);
+            match client.get(&status_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(snap) = resp.json::<StatusSnapshot>().await {
+                        dash_state.health = snap.state;
+                        dash_state.metrics = snap.metrics;
+                        dash_state.recent_alerts = snap.recent_alerts;
+                        dash_state.event_count = snap.events_processed;
+                        dash_state.uptime_secs = snap.uptime_secs;
+                        dash_state.source_name = if snap.source_name.is_empty() {
+                            format!("attach/{addr}")
+                        } else {
+                            format!("attach/{} ({})", addr, snap.source_name)
+                        };
                     }
-                    dash_state.push_metrics_snapshot();
+                }
+                _ => {
+                    dash_state.source_name = format!("attach/{addr} [disconnected]");
                 }
             }
             last_poll = std::time::Instant::now();
