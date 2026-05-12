@@ -255,7 +255,7 @@ if [[ -f "$INSTALL_TOML" ]]; then
     warn "TOML config already exists at $INSTALL_TOML — not overwriting"
 else
     info "Installing example TOML config to $INSTALL_TOML"
-    install -m 0640 "$REPO_ROOT/deploy/examples/standalone.toml" "$INSTALL_TOML"
+    install -m 0644 "$REPO_ROOT/deploy/examples/standalone.toml" "$INSTALL_TOML"
     ok "$INSTALL_TOML"
 fi
 
