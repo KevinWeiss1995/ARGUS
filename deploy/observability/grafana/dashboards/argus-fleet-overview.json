@@ -200,8 +200,10 @@
             "drawStyle": "line", "lineInterpolation": "stepAfter",
             "fillOpacity": 80, "lineWidth": 1, "showPoints": "never",
             "stacking": { "mode": "normal", "group": "A" },
-            "spanNulls": true, "gradientMode": "none"
+            "spanNulls": true, "gradientMode": "none",
+            "axisSoftMin": 0
           },
+          "min": 0,
           "unit": "short"
         },
         "overrides": [
