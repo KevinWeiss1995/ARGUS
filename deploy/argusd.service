@@ -73,9 +73,10 @@ ReadOnlyPaths=/sys/kernel/btf
 ReadOnlyPaths=/proc/kallsyms
 ReadOnlyPaths=/proc/sys/kernel/osrelease
 
-# Hide other processes
+# Hide other processes' /proc/[pid] entries but keep /proc/sys, /proc/kallsyms
+# etc. visible — aya needs /proc/sys/kernel/osrelease and ARGUS reads
+# /proc/kallsyms for kprobe target discovery. ProcSubset=pid is incompatible.
 ProtectProc=invisible
-ProcSubset=pid
 
 # --- Process Isolation ---
 UMask=0077
