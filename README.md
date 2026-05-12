@@ -4,7 +4,7 @@
 
 [arguslabs.dev](https://arguslabs.dev)
 
-ARGUS is a lightweight eBPF agent that detects InfiniBand link degradation before applications are affected. It monitors kernel-level signals (interrupt distribution, slab allocation latency, NAPI saturation, CQ completion jitter) alongside IB hardware counters, classifying each node as **Healthy**, **Degraded**, or **Critical** in real time. Nodes can be automatically drained and resumed via SLURM or other schedulers.
+ARGUS is a lightweight eBPF agent that detects InfiniBand link degradation before applications are affected. It monitors kernel-level signals (interrupt distribution, slab allocation latency, NAPI saturation, CQ completion jitter) alongside IB hardware counters, classifying each node as **Healthy**, **Degraded**, or **Critical** in real time. Nodes can be automatically drained and resumed via SLURM or other schedulers. 
 
 Metrics are exposed as a standard Prometheus endpoint. Dashboards ship ready to import.
 
