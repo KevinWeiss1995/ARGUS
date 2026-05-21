@@ -8,6 +8,13 @@ groups:
           severity: DEGRADED
         annotations:
           summary: "ARGUS node {{ $labels.instance }} is degraded"
+          description: |
+            Composite health score on {{ $labels.instance }} crossed the
+            degrade-enter threshold for at least 30 seconds. Likely causes
+            include rising symbol errors, IRQ skew, NAPI saturation, or
+            CQ jitter. Open the node detail dashboard for the firing rule.
+          dashboard: "Grafana → ARGUS / Node detail → {{ $labels.instance }}"
+          runbook: "https://github.com/KevinWeiss1995/ARGUS/blob/main/docs/troubleshooting.md#argusnodedegraded"
 
       - alert: ArgusNodeCritical
         expr: argus_health_state == 2
@@ -15,7 +22,13 @@ groups:
         labels:
           severity: CRITICAL
         annotations:
-          summary: "ARGUS node {{ $labels.instance }} is critical"
+          summary: "ARGUS node {{ $labels.instance }} is CRITICAL"
+          description: |
+            {{ $labels.instance }} held Critical state for at least 15 seconds.
+            If scheduler integration is enabled, the node is being drained.
+            Inspect /metrics and recent state transitions, and check IB
+            counters for link_downed / link_error_recovery deltas.
+          runbook: "https://github.com/KevinWeiss1995/ARGUS/blob/main/docs/troubleshooting.md#argusnodecritical"
 
       - alert: ArgusLinkDowned
         expr: argus_ib_link_downed_delta > 0
@@ -23,7 +36,12 @@ groups:
         labels:
           severity: CRITICAL
         annotations:
-          summary: "IB link down on {{ $labels.device }}/{{ $labels.port }}"
+          summary: "IB link DOWN: {{ $labels.device }}/port {{ $labels.port }} on {{ $labels.instance }}"
+          description: |
+            link_downed counter incremented on {{ $labels.instance }}
+            ({{ $labels.device }} port {{ $labels.port }}). This is a hard
+            link event — fabric admin should physically inspect the cable
+            and switch port.
 
       - alert: ArgusHighErrorRate
         expr: (argus_ib_symbol_errors_delta + argus_ib_port_rcv_errors_delta) > 10
@@ -31,7 +49,12 @@ groups:
         labels:
           severity: DEGRADED
         annotations:
-          summary: "High IB error rate on {{ $labels.device }}/{{ $labels.port }}"
+          summary: "High IB error rate on {{ $labels.device }}/{{ $labels.port }} ({{ $labels.instance }})"
+          description: |
+            >10 symbol_errors + port_rcv_errors in a single window on
+            {{ $labels.instance }} ({{ $labels.device }} port {{ $labels.port }}).
+            Sustained high rates over hours indicate a marginal cable;
+            ramping rates predict imminent link loss.
 
       - alert: ArgusCqStalls
         expr: argus_cq_max_latency_ns > 1000000
@@ -40,6 +63,10 @@ groups:
           severity: DEGRADED
         annotations:
           summary: "CQ stalls detected on {{ $labels.instance }}"
+          description: |
+            Max CQ completion latency exceeded 1 ms on {{ $labels.instance }}.
+            Likely cause: head-of-line blocking, IRQ starvation, or
+            congestion on the local NIC.
 
       - alert: ArgusLinkRecovery
         expr: argus_ib_link_error_recovery_delta > 0
@@ -47,7 +74,12 @@ groups:
         labels:
           severity: DEGRADED
         annotations:
-          summary: "IB link recovery on {{ $labels.device }}/{{ $labels.port }}"
+          summary: "IB link recovery on {{ $labels.device }}/{{ $labels.port }} ({{ $labels.instance }})"
+          description: |
+            link_error_recovery counter incremented on {{ $labels.instance }}
+            ({{ $labels.device }} port {{ $labels.port }}). This is the
+            *predictor* of cable failure — it climbs hours-to-days before
+            link_downed fires. Schedule preemptive cable swap.
 
       - alert: ArgusCongestion
         expr: argus_ib_port_xmit_wait_delta > 0
@@ -55,4 +87,27 @@ groups:
         labels:
           severity: DEGRADED
         annotations:
-          summary: "IB congestion on {{ $labels.device }}/{{ $labels.port }}"
+          summary: "IB congestion on {{ $labels.device }}/{{ $labels.port }} ({{ $labels.instance }})"
+          description: |
+            port_xmit_wait increasing on {{ $labels.instance }}
+            ({{ $labels.device }} port {{ $labels.port }}). Credit stalls
+            indicate upstream congestion propagating into this node.
+
+      # Idle-fabric awareness — informational, fires when a port has been
+      # passive for over 24h. ARGUS continues to monitor symbol errors,
+      # link recovery, and link_downed regardless; this alert exists so
+      # ops can sanity-check that passive monitoring really is "on" for
+      # links nobody's been using.
+      - alert: ArgusFabricIdleSanityCheck
+        expr: argus_ib_max_idle_seconds > 86400
+        for: 5m
+        labels:
+          severity: INFO
+        annotations:
+          summary: "IB fabric idle >24h on {{ $labels.instance }} (still monitoring)"
+          description: |
+            No IB throughput observed on {{ $labels.instance }} for the
+            past 24 hours. ARGUS is still polling hardware counters and
+            will alert on any errors — this is just a heads-up that the
+            link has been quiet. Suppress this alert if the cluster is
+            expected to sit idle (e.g. batch-only academic setup).
