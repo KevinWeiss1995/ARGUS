@@ -1,0 +1,89 @@
+---
+# Install or upgrade the ARGUS RPM, manage config, and optionally load
+# the SELinux policy module.
+
+- name: Stage RPM locally on each node
+  ansible.builtin.copy:
+    src: "{{ argus_rpm_source }}"
+    dest: /tmp/argus.rpm
+    mode: "0644"
+  when: argus_rpm_source is regex('^[/.~]')
+
+- name: Determine RPM location on node
+  ansible.builtin.set_fact:
+    argus_rpm_path: >-
+      {% if argus_rpm_source is regex('^https?://') %}{{ argus_rpm_source }}{% else %}/tmp/argus.rpm{% endif %}
+
+- name: Install / upgrade argus package
+  ansible.builtin.dnf:
+    name: "{{ argus_rpm_path }}"
+    state: present
+    disable_gpg_check: "{{ argus_disable_gpg_check | default(true) }}"
+  notify: restart argusd
+
+- name: Ensure /etc/argus exists
+  ansible.builtin.file:
+    path: /etc/argus
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render /etc/argus/argusd.conf
+  ansible.builtin.template:
+    src: argusd.conf.j2
+    dest: /etc/argus/argusd.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: restart argusd
+
+- name: Render /etc/argus/argusd.toml
+  ansible.builtin.template:
+    src: argusd.toml.j2
+    dest: /etc/argus/argusd.toml
+    owner: root
+    group: root
+    mode: "0640"
+  notify: restart argusd
+
+- name: Stage TLS materials when configured
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ argus_tls_files | default([]) }}"
+  when: argus_tls_cert_path != ''
+  notify: restart argusd
+
+# --- Optional SELinux policy install ---
+
+- name: Build & load argus.pp on SELinux Enforcing hosts
+  when: argus_install_selinux | bool
+  block:
+    - name: Ensure selinux-policy-devel installed
+      ansible.builtin.dnf:
+        name:
+          - selinux-policy-devel
+          - policycoreutils-python-utils
+        state: present
+
+    - name: Check that argus.pp shipped with the RPM
+      ansible.builtin.stat:
+        path: /usr/share/argus/selinux/argus.pp
+      register: argus_pp
+
+    - name: Load argus SELinux module
+      ansible.builtin.command: semodule -i /usr/share/argus/selinux/argus.pp
+      register: semodule_load
+      changed_when: "'reloading' in semodule_load.stdout or semodule_load.rc == 0"
+      when: argus_pp.stat.exists
+
+    - name: Re-label installed paths
+      ansible.builtin.command: >-
+        restorecon -RFv /usr/bin/argusd /etc/argus /var/lib/argus /run/argus
+      register: restorecon_out
+      changed_when: restorecon_out.stdout != ''
+      failed_when: false
