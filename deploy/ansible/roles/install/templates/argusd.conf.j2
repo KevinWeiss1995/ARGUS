@@ -1,0 +1,22 @@
+# /etc/argus/argusd.conf — rendered by Ansible. Edits will be overwritten on
+# next play; tune via group_vars instead.
+
+ARGUS_CONFIG=/etc/argus/argusd.toml
+ARGUS_MODE=live
+ARGUS_EBPF_PATH=/usr/lib/argus/argus-ebpf
+ARGUS_METRICS_ADDR={{ argus_metrics_addr | default('0.0.0.0:9100') }}
+ARGUS_LOG_LEVEL={{ argus_log_level | default('info') }}
+ARGUS_WINDOW_SECS={{ argus_window_secs | default(3) }}
+
+{% if argus_metrics_token %}
+ARGUS_METRICS_TOKEN_FILE=/etc/argus/token
+{% endif %}
+
+{% if argus_scheduler %}
+ARGUS_SCHEDULER={{ argus_scheduler }}
+ARGUS_SCHEDULER_DRY_RUN={{ argus_scheduler_dry_run | default(true) | string | lower }}
+{% endif %}
+
+{% if argus_action_webhook %}
+ARGUS_ACTION_WEBHOOK={{ argus_action_webhook }}
+{% endif %}
