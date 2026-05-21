@@ -1,9 +1,16 @@
 # Building ARGUS on HPC clusters without polluting the system
 
+> **TL;DR for most sites:** you don't need to build at all. Every tagged
+> release publishes a signed RPM as a GitHub release artifact. See the
+> "Use the published RPM" section near the bottom — that's the fastest
+> path for sites where `apptainer build --fakeroot` is disabled and the
+> admin doesn't want to install a build toolchain.
+
 HPC environments typically resist `curl | sh` rustup installs and bare-metal
 `dnf install -y rust cargo clang llvm` because those leak into a shared
 build host's global state. This document covers three professional, fully
-dependency-managed paths that keep the build toolchain isolated.
+dependency-managed paths that keep the build toolchain isolated — for
+sites that want to rebuild from source.
 
 | Method                | Build host needs                          | Where build deps live          | When to use                                                                 |
 | --------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------------------------------- |
@@ -205,13 +212,50 @@ stack before you commit to a full RPM install via Ansible.
 
 ---
 
-## Runtime install is unchanged
+## Use the published RPM (no build at all)
 
-Regardless of which build path you used, the output is an RPM. Install
-the same way:
+For sites where `apptainer build --fakeroot` is disabled and no admin
+wants to add toolchain packages to a build host, skip the build entirely
+and use the RPM that ARGUS CI publishes on every release tag.
 
 ```bash
-sudo dnf install -y ./out/argus-0.1.0-1.x86_64.rpm
+TAG=v0.1.0
+ARCH=x86_64
+URL=https://github.com/KevinWeiss1995/ARGUS/releases/download/$TAG
+
+# Download + verify
+wget $URL/argus-${TAG#v}-1.el8.$ARCH.rpm
+wget $URL/argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
+sha256sum -c argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
+
+# Install (single host)
+sudo dnf install -y ./argus-${TAG#v}-1.el8.$ARCH.rpm
+
+# Optional SELinux subpackage if your nodes run Enforcing
+wget $URL/argus-selinux-${TAG#v}-1.el8.noarch.rpm
+sudo dnf install -y ./argus-selinux-${TAG#v}-1.el8.noarch.rpm
+
+# Validate, then enable
+sudo argus-preflight
+sudo systemctl enable --now argusd
+curl -s localhost:9100/health
+```
+
+The published RPM is built by `.github/workflows/release.yml` in the
+same Rocky 8 toolchain container that local builds use, so the binary
+is bit-identical to what you'd produce with `./scripts/build-rpm.sh --apptainer`
+on a host where you DO have fakeroot. Both methods produce SHA-256
+attestations.
+
+Browse releases: <https://github.com/KevinWeiss1995/ARGUS/releases>
+
+## Runtime install (any build path)
+
+Regardless of whether you used a published RPM or rebuilt locally,
+install the same way:
+
+```bash
+sudo dnf install -y ./argus-*.rpm
 sudo argus-preflight
 sudo systemctl enable --now argusd
 ```
