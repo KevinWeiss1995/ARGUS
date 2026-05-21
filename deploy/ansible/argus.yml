@@ -1,0 +1,41 @@
+---
+# ARGUS HPC cluster bootstrap.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini argus.yml                 # full deploy
+#   ansible-playbook -i inventory.ini argus.yml --tags preflight # just check
+#   ansible-playbook -i inventory.ini argus.yml --tags install,verify
+#
+# Required group_vars (see group_vars/all.yml.example):
+#   argus_rpm_source: path or URL of the .rpm to install
+#   argus_metrics_addr: host:port for the Prometheus endpoint (default 0.0.0.0:9100)
+#   argus_metrics_token (optional): bearer token for /metrics
+#   argus_install_selinux (default false): build & load argus.pp under SELinux Enforcing
+#
+# This playbook is idempotent. Re-running it upgrades the RPM in place and
+# restarts argusd only when the binary or config actually changed.
+
+- name: Deploy ARGUS to HPC nodes
+  hosts: argus_nodes
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Fail fast on non-RHEL-family hosts
+      ansible.builtin.fail:
+        msg: "ARGUS RPM deployment supports RHEL/Rocky/AlmaLinux only — got {{ ansible_distribution }}"
+      when:
+        - ansible_os_family != "RedHat"
+      tags: always
+
+  roles:
+    - role: preflight
+      tags: [preflight, always]
+    - role: install
+      tags: [install]
+    - role: firewalld
+      tags: [firewalld, install]
+    - role: service
+      tags: [service, install]
+    - role: verify
+      tags: [verify]
