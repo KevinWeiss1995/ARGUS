@@ -1,19 +1,56 @@
+# Alertmanager configuration for ARGUS.
+#
+# Two delivery channels are shown:
+#   1. Email — the primary path for HPC sites where ops teams want
+#      condensed digest mail with grouping/dedup handled by Alertmanager.
+#   2. Webhook — a placeholder for forwarding to in-house alert routers,
+#      Slack, PagerDuty, etc. Empty by default.
+#
+# Site admins normally only edit the `[REQUIRED]` lines below to fill in
+# their SMTP relay and recipient list. Everything else is sensible
+# default behaviour for a 10–500-node cluster.
+#
+# Verify with: amtool check-config /etc/alertmanager/alertmanager.yml
+
 global:
   resolve_timeout: 1m
+  # [REQUIRED] SMTP relay. For most HPC sites this is the local postfix or
+  # the site mail bastion. Use authenticated SMTPS when going outbound.
+  smtp_smarthost: "mail.example.org:25"
+  smtp_from: "argus-alerts@example.org"
+  smtp_require_tls: false           # Flip to `true` and set auth_username/password for SMTPS.
+  smtp_hello: "argus.example.org"   # HELO hostname the relay sees.
+  # smtp_auth_username: "argus"
+  # smtp_auth_password: "REDACTED"
+
+templates:
+  - /etc/alertmanager/templates/*.tmpl
 
 route:
   group_by: ["alertname", "node", "severity"]
   group_wait: 10s
   group_interval: 30s
   repeat_interval: 4h
-  receiver: default
+  receiver: argus_email
   routes:
-    - match:
-        severity: CRITICAL
-      receiver: default
+    # Critical: page immediately with no group_wait so on-call gets the
+    # message within a single Alertmanager poll cycle.
+    - matchers:
+        - severity = CRITICAL
+      receiver: argus_email_critical
       group_wait: 5s
+      repeat_interval: 1h
+    # DEGRADED: digest-style; group across the whole rack for 5 minutes
+    # so a noisy switch doesn't pager 32 separate mails.
+    - matchers:
+        - severity = DEGRADED
+      receiver: argus_email
+      group_wait: 30s
+      group_interval: 5m
 
 inhibit_rules:
+  # When a node is Critical, suppress the noisier Degraded alert from
+  # the same node.
   - source_matchers:
       - severity = CRITICAL
     target_matchers:
@@ -21,5 +58,24 @@ inhibit_rules:
     equal: ["alertname", "instance"]
 
 receivers:
-  - name: default
-    webhook_configs: []
+  - name: argus_email
+    email_configs:
+      - to: "argus-ops@example.org"        # [REQUIRED]
+        send_resolved: true
+        headers:
+          Subject: "{{ template \"argus.email.subject\" . }}"
+        html: '{{ template "argus.email.html" . }}'
+        text: '{{ template "argus.email.text" . }}'
+
+  - name: argus_email_critical
+    email_configs:
+      - to: "argus-pager@example.org"      # [REQUIRED] — paging list, often a different DL than the digest one
+        send_resolved: true
+        headers:
+          Subject: "{{ template \"argus.email.subject\" . }}"
+        html: '{{ template "argus.email.html" . }}'
+        text: '{{ template "argus.email.text" . }}'
+    # Optional: also POST to a chatops webhook (uncomment + edit).
+    # webhook_configs:
+    #   - url: "https://chat.example.org/hooks/argus"
+    #     send_resolved: true
