@@ -2,7 +2,47 @@
 
 All notable changes are recorded here. Versions follow semver.
 
-## [0.1.0] — 2026-05-20
+## [0.1.0] — 2026-05-21
+
+### Added — RHEL 8 / Rocky 8 first-class support
+
+- Default systemd unit now grants `CAP_SYS_ADMIN` (the only cap RHEL 8
+  systemd 239 reliably understands for BPF access). This works
+  unchanged on RHEL 8.5+ stock kernels (kernel `4.18.0-348.*` and
+  later — including the user-reported `4.18.0-553.89.1.el8_10`) as
+  well as on modern kernels.
+- Fine-grained `CAP_BPF` + `CAP_PERFMON` drop-in shipped separately at
+  `/usr/share/argus/systemd/modern-caps.conf` and auto-activated by
+  the install scripts on non-RHEL-8 hosts running kernel ≥ 5.8.
+  Ansible exposes the same logic via `argus_force_modern_caps`.
+- `argus-agent/src/security.rs::drop_privileges` now keeps whichever
+  of `{CAP_BPF, CAP_SYS_ADMIN}` is actually held, plus
+  `CAP_DAC_READ_SEARCH`, `CAP_PERFMON`, `CAP_SYSLOG` when present.
+  Previous behaviour kept only `CAP_BPF` — on RHEL 8 stock where the
+  unit holds `CAP_SYS_ADMIN`, that stranded the agent with no caps
+  after init, breaking ongoing BPF map reads.
+- `scripts/argus-preflight` now distinguishes RHEL 8.5+ (`.el8` +
+  kernel revision ≥ 348) as OK, RHEL 8.4 and older as WARN with
+  remediation, and RHEL 9 as OK. The previous policy of marking 4.18
+  as FAIL was wrong.
+- `scripts/argus-preflight` downgrades the BTF-missing check from
+  FAIL to WARN — the agent ships compiled-in struct offsets covering
+  RHEL 8 in `argus-agent/src/sources/kallsyms.rs`, so BTF improves
+  CO-RE accuracy but is not strictly required.
+- SELinux policy now includes `sys_admin` in the capability class so
+  the fallback path works under Enforcing mode.
+- RPM spec drops the bogus `Requires: kernel >= 5.4` line and stages
+  the modern-caps drop-in under `/usr/share/argus/systemd/`.
+
+### Notes for upgrades from prior 0.1.0 builds
+
+- After upgrading, restart argusd. Existing hosts running pre-fix
+  builds may have leaked privileges (kept fewer caps than they should
+  have). The new drop_privileges path logs the keep-list explicitly
+  in the journal; check with:
+  `journalctl -u argusd | grep "post-drop keep-list"`
+
+## [0.1.0-rc1] — 2026-05-20
 
 First production release. Target environment is Rocky Linux 8 / RHEL 8 HPC
 clusters running InfiniBand, RoCEv2, or Soft-RoCE fabrics.
