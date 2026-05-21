@@ -105,36 +105,52 @@ hosts it also builds and loads `deploy/selinux/argus.pp` (requires
 
 ### Path 2 — RPM (single host on Rocky 8 / RHEL 8)
 
-On a build host (any Linux with Rust + rpmbuild):
+#### Building the RPM
+
+HPC sites typically can't install Rust + LLVM + bpf-linker bare-metal on
+their build hosts. ARGUS supports three professional, dependency-managed
+build paths — pick whichever fits your site (full guide:
+[`docs/hpc-build.md`](docs/hpc-build.md)):
+
+**Apptainer (recommended for HPC):**
+
+```bash
+./scripts/build-rpm.sh --apptainer         # builds SIF on first run; ./out/*.rpm
+```
+
+The SIF is a single relocatable file containing a pinned Rocky 8
+toolchain. Build host needs only `apptainer`. Output: `./out/argus-*.rpm`.
+
+**Spack (sites already using Lmod + Spack):**
+
+```bash
+spack repo add /path/to/ARGUS/deploy/spack
+spack install argus +rpm                   # all build deps materialized via Spack
+```
+
+**Podman / Docker (sites with container runtime but not Apptainer):**
+
+```bash
+./scripts/build-rpm.sh --container podman  # ./out/*.rpm
+```
+
+**Bare-metal (only if you accept Rust installed system-wide):**
 
 ```bash
 sudo dnf install -y rpm-build cargo rust clang llvm openssl-devel pkg-config
-just setup-ebpf                    # nightly + bpf-linker (one-time)
-sudo ./scripts/build-rpm.sh        # → ~/rpmbuild/RPMS/$arch/argus-0.1.0-1.*.rpm
+just setup-ebpf                            # nightly + bpf-linker (one-time)
+sudo ./scripts/build-rpm.sh                # → ~/rpmbuild/RPMS/$arch/argus-*.rpm
 ```
 
-For SELinux Enforcing sites, also build the policy first so the
-`argus-selinux` subpackage gets included:
+For SELinux Enforcing sites, all four paths produce the optional
+`argus-selinux` subpackage automatically when `selinux-policy-devel` is
+available. To sign for distribution via a yum repo, add `--sign` (with
+`RPM_GPG_KEY_ID` set).
 
-```bash
-sudo dnf install -y selinux-policy-devel policycoreutils-python-utils
-make -C deploy/selinux
-sudo ./scripts/build-rpm.sh        # now produces argus + argus-selinux RPMs
-```
+For air-gapped / reproducible builds, layer `--mock rocky-8-x86_64` on
+top of any of the above.
 
-To sign for distribution via a yum repo:
-
-```bash
-RPM_GPG_KEY_ID="Your Build Key" sudo ./scripts/build-rpm.sh --sign
-```
-
-For airgapped / repro builds, swap in mock:
-
-```bash
-sudo ./scripts/build-rpm.sh --mock rocky-8-x86_64
-```
-
-On each target node:
+#### Installing the RPM
 
 ```bash
 sudo dnf install -y argus-0.1.0-1.x86_64.rpm
@@ -143,6 +159,10 @@ sudo argus-preflight                                    # validate
 sudo systemctl enable --now argusd
 curl localhost:9100/health
 ```
+
+The RPM is tracked by `rpm -qa`, declares its runtime requires
+(`systemd`, `chrony`), and is fully removable via `dnf remove`. Nothing
+additional gets installed on cluster nodes outside package management.
 
 ### Path 3 — Ansible (HPC fleet)
 
