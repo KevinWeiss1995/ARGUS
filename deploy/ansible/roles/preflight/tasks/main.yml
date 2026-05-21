@@ -1,0 +1,40 @@
+---
+# Stage the preflight script onto each node and run it. Aborts the play
+# for any node that fails the check, so we don't waste time installing
+# onto hosts that can't run argusd.
+
+- name: Ensure /usr/local/sbin exists
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: "0755"
+
+- name: Copy argus-preflight to /usr/local/sbin
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/argus-preflight"
+    dest: /usr/local/sbin/argus-preflight
+    mode: "0755"
+
+- name: Run argus-preflight (JSON mode)
+  ansible.builtin.command: /usr/local/sbin/argus-preflight --json
+  register: preflight
+  changed_when: false
+  failed_when: false
+
+- name: Parse preflight JSON output
+  ansible.builtin.set_fact:
+    preflight_result: "{{ preflight.stdout | from_json }}"
+
+- name: Show preflight summary
+  ansible.builtin.debug:
+    msg: >-
+      Preflight: {{ preflight_result.summary.ok }} OK,
+      {{ preflight_result.summary.warn }} WARN,
+      {{ preflight_result.summary.fail }} FAIL
+
+- name: Fail when any preflight check FAILed
+  ansible.builtin.fail:
+    msg: >-
+      argus-preflight reported {{ preflight_result.summary.fail }} FAIL check(s):
+      {{ preflight_result.checks | selectattr('status','equalto','FAIL') | list }}
+  when: preflight_result.summary.fail | int > 0
