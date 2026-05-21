@@ -270,10 +270,26 @@ if $DRY_RUN; then
     exit 0
 fi
 
-RPM_OUT=$(find "$BUILD_DIR/RPMS" "$BUILD_DIR/MOCK" -name "argus-$VERSION-$RELEASE*.rpm" 2>/dev/null | head -1)
-if [[ -z "$RPM_OUT" || ! -f "$RPM_OUT" ]]; then
-    die "no RPM produced — check rpmbuild output above"
+# Build the list of directories to search — only ones that actually
+# exist. find returns exit 1 when any path arg is missing, and combined
+# with `set -o pipefail` that propagates out of the $(...) substitution
+# and aborts the script even after rpmbuild succeeded. We've watched
+# this swallow a successful build in CI; never again.
+SEARCH_DIRS=()
+[[ -d "$BUILD_DIR/RPMS" ]] && SEARCH_DIRS+=("$BUILD_DIR/RPMS")
+[[ -d "$BUILD_DIR/MOCK" ]] && SEARCH_DIRS+=("$BUILD_DIR/MOCK")
+
+if (( ${#SEARCH_DIRS[@]} == 0 )); then
+    die "rpmbuild succeeded but no output directories were created — check $BUILD_DIR"
 fi
+
+RPM_OUT=$(find "${SEARCH_DIRS[@]}" -name "argus-$VERSION-$RELEASE*.rpm" | head -1)
+if [[ -z "$RPM_OUT" || ! -f "$RPM_OUT" ]]; then
+    die "no RPM matching argus-$VERSION-$RELEASE*.rpm in ${SEARCH_DIRS[*]} — check rpmbuild output above"
+fi
+
+# Also enumerate every RPM produced (main + subpackages) for the summary.
+mapfile -t ALL_RPMS < <(find "${SEARCH_DIRS[@]}" -name "argus-*-$VERSION-$RELEASE*.rpm" -o -name "argus-$VERSION-$RELEASE*.rpm" | sort -u)
 
 # --- Sign ---
 if $SIGN; then
@@ -285,9 +301,12 @@ if $SIGN; then
 fi
 
 # --- Summary ---
-ok "Built $RPM_OUT"
+ok "Built ${#ALL_RPMS[@]} RPM(s):"
+for rpm_file in "${ALL_RPMS[@]}"; do
+    echo "  $rpm_file"
+done
 echo ""
 rpm -qpi "$RPM_OUT"
 echo ""
 echo "Install with:"
-echo "  sudo dnf install -y $RPM_OUT"
+echo "  sudo dnf install -y ${ALL_RPMS[*]}"

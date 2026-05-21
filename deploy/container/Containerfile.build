@@ -108,8 +108,17 @@ ENTRYPOINT ["/bin/bash", "-c", "\
     mkdir -p /out; \
     cd /src; \
     bash scripts/build-rpm.sh \"$@\"; \
-    cp /root/rpmbuild/RPMS/*/argus-*.rpm /out/ 2>/dev/null || \
-       cp ~/rpmbuild/RPMS/*/argus-*.rpm /out/ 2>/dev/null || true; \
+    # Copy every produced RPM (main + subpackages, arch + noarch) to \
+    # the bind-mounted /out. shopt -s nullglob keeps the glob from \
+    # leaving a literal '*' if a directory is empty. \
+    shopt -s nullglob; \
+    for rpm_file in /root/rpmbuild/RPMS/*/argus-*.rpm; do \
+        cp -v \"$rpm_file\" /out/; \
+    done; \
+    if ! ls /out/argus-*.rpm >/dev/null 2>&1; then \
+        echo 'ERROR: no RPMs copied into /out — check rpmbuild output' >&2; \
+        exit 1; \
+    fi; \
     ls -la /out/ \
 ", "--"]
 

@@ -110,12 +110,23 @@ From: rockylinux/rockylinux:8
     cd /src
     bash scripts/build-rpm.sh "$@"
 
-    # Copy any RPM the build produced into the bind-mounted /out.
+    # Copy every produced RPM (main + subpackages, arch + noarch) into
+    # the bind-mounted /out. The for-d loop tolerates different
+    # rpmbuild prefixes depending on how the container runs (rootful
+    # vs unprivileged).
+    found_any=false
     for d in /root/rpmbuild/RPMS ~/rpmbuild/RPMS /tmp/rpmbuild/RPMS; do
         if [ -d "$d" ]; then
-            find "$d" -name 'argus-*.rpm' -exec cp -v {} /out/ \;
+            while IFS= read -r rpm_file; do
+                cp -v "$rpm_file" /out/
+                found_any=true
+            done < <(find "$d" -name 'argus-*.rpm')
         fi
     done
+    if [ "$found_any" != true ]; then
+        echo "ERROR: no RPMs found to copy into /out — check rpmbuild output" >&2
+        exit 1
+    fi
 
     echo
     echo "Build artifacts:"
