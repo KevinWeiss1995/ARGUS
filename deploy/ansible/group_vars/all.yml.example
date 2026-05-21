@@ -1,0 +1,55 @@
+---
+# Site-wide ARGUS configuration. Copy to group_vars/all.yml and edit.
+
+# --- Required ---
+
+# Where to fetch the ARGUS RPM. Either a local path on the control host
+# or an HTTP(S) URL the nodes can reach. Use a local path for air-gapped
+# clusters and have ansible copy it over (the install role handles both).
+argus_rpm_source: "/var/lib/argus-build/argus-0.1.0-1.x86_64.rpm"
+
+# Metrics listen address. Use 0.0.0.0:9100 for cluster-wide scraping, or
+# 127.0.0.1:9100 if Prometheus federates from each node's sshd tunnel.
+argus_metrics_addr: "0.0.0.0:9100"
+
+# --- Optional: hardening ---
+
+# Bearer token for /metrics + /health auth. Leave empty to disable.
+# If set, Prometheus needs `authorization: credentials:` configured.
+argus_metrics_token: ""
+
+# TLS cert/key paths if you terminate TLS at the agent. Leave empty
+# to use plain HTTP and rely on cluster network isolation.
+argus_tls_cert_path: ""
+argus_tls_key_path: ""
+
+# Load the SELinux policy module shipped with the RPM. Required if your
+# cluster runs SELinux in Enforcing mode. Leave false on Permissive /
+# Disabled hosts.
+argus_install_selinux: false
+
+# --- Optional: scheduler integration ---
+
+# Set to "slurm" to enable SLURM drain/resume on health transitions.
+# Leave empty to disable.
+argus_scheduler: ""
+
+# Dry-run mode: log drain/resume actions without executing.
+# Strongly recommended for first rollout on a production cluster.
+argus_scheduler_dry_run: true
+
+# --- Optional: notifications ---
+
+# Webhook URL receiving alert POSTs (e.g. Slack incoming webhook,
+# PagerDuty Events API, or your in-house alert proxy). Email is
+# delivered via Alertmanager, not this knob.
+argus_action_webhook: ""
+
+# --- Optional: detection tuning ---
+
+# Override default per-window seconds. Lower = more responsive, more CPU.
+argus_window_secs: 3
+
+# Override the detection profile per fabric type. Leave blank for defaults.
+# Example: {"infiniband": {"irq_skew_threshold_pct": 75.0}}
+argus_detection_profiles: {}
