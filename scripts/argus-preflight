@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# argus-preflight — Validate that this host can run argusd in production.
+#
+# Checks (each emits OK / WARN / FAIL):
+#   • Linux kernel ≥ 5.4 (5.8+ recommended for CAP_BPF)
+#   • BTF available at /sys/kernel/btf/vmlinux
+#   • /sys/class/infiniband populated
+#   • SELinux mode + argus.pp loaded
+#   • firewalld zone allowing port 9100/tcp
+#   • chronyd / ntpd / systemd-timesyncd active
+#   • argusd binary capabilities (if installed)
+#
+# Exit codes:
+#   0   all checks OK or only WARN
+#   1   any FAIL
+#
+# Usage:
+#   argus-preflight              # run all checks
+#   argus-preflight --json       # machine-readable JSON output
+#   argus-preflight --quiet      # only print FAIL lines
+#
+# Designed to be safe to run as root or as an unprivileged user — falls back
+# gracefully when a check requires privilege we don't have.
+
+set -uo pipefail
+
+PORT="${ARGUS_PORT:-9100}"
+JSON=false
+QUIET=false
+FAIL_COUNT=0
+WARN_COUNT=0
+OK_COUNT=0
+RESULTS_JSON="["
+
+usage() {
+    cat <<EOF
+Usage: argus-preflight [--json] [--quiet]
+
+Run readiness checks before deploying argusd to this host.
+Exit code 0 means deploy is safe; 1 means at least one FAIL.
+
+Options:
+  --json    Emit JSON array of {check, status, detail} objects
+  --quiet   Suppress OK/WARN lines, print only FAILs
+  -h        Show this help
+EOF
+    exit 0
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --json)  JSON=true ;;
+        --quiet) QUIET=true ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
+
+# Output helpers — colorized for humans, recorded for JSON output.
+
+emit() {
+    # emit STATUS CHECK DETAIL
+    local status="$1" check="$2" detail="$3"
+    case "$status" in
+        OK)    OK_COUNT=$((OK_COUNT+1));   color="\033[1;32mOK  \033[0m" ;;
+        WARN)  WARN_COUNT=$((WARN_COUNT+1)); color="\033[1;33mWARN\033[0m" ;;
+        FAIL)  FAIL_COUNT=$((FAIL_COUNT+1)); color="\033[1;31mFAIL\033[0m" ;;
+    esac
+
+    if $JSON; then
+        local d_escaped
+        d_escaped=$(printf '%s' "$detail" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        if [[ "$RESULTS_JSON" != "[" ]]; then RESULTS_JSON+=","; fi
+        RESULTS_JSON+="{\"check\":\"$check\",\"status\":\"$status\",\"detail\":\"$d_escaped\"}"
+        return
+    fi
+
+    if $QUIET && [[ "$status" != "FAIL" ]]; then
+        return
+    fi
+    printf "  [%b] %-30s %s\n" "$color" "$check" "$detail"
+}
+
+# ---------------------------------------------------------------------------
+# Check 1: kernel version
+# ---------------------------------------------------------------------------
+check_kernel() {
+    local release major minor patch
+    release=$(uname -r 2>/dev/null || echo "")
+    if [[ -z "$release" ]]; then
+        emit FAIL "kernel.version" "uname -r returned nothing"
+        return
+    fi
+
+    IFS=. read -r major minor _ <<< "${release%%-*}"
+    major=${major:-0}; minor=${minor:-0}
+
+    if (( major >= 6 )); then
+        emit OK "kernel.version" "$release (≥ 6.0)"
+    elif (( major == 5 && minor >= 8 )); then
+        emit OK "kernel.version" "$release (CAP_BPF supported)"
+    elif (( major == 5 && minor >= 4 )); then
+        emit WARN "kernel.version" "$release — CAP_BPF needs 5.8+; unit may need CAP_SYS_ADMIN"
+    else
+        emit FAIL "kernel.version" "$release — ARGUS requires kernel ≥ 5.4 (5.8+ recommended). On Rocky 8, install ELRepo kernel-ml or use RHEL 8.4+ kernel with backported BPF features."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Check 2: BTF (CO-RE eBPF needs this)
+# ---------------------------------------------------------------------------
+check_btf() {
+    if [[ -r /sys/kernel/btf/vmlinux ]]; then
+        local sz
+        sz=$(stat -c%s /sys/kernel/btf/vmlinux 2>/dev/null || echo "?")
+        emit OK "kernel.btf" "/sys/kernel/btf/vmlinux present ($sz bytes)"
+    elif [[ -e /sys/kernel/btf/vmlinux ]]; then
+        emit WARN "kernel.btf" "BTF present but unreadable for current user"
+    else
+        emit FAIL "kernel.btf" "/sys/kernel/btf/vmlinux missing — eBPF programs cannot be loaded. Rebuild kernel with CONFIG_DEBUG_INFO_BTF=y or install kernel-devel + a kernel that exports BTF."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Check 3: InfiniBand stack
+# ---------------------------------------------------------------------------
+check_ib() {
+    local ib_dir=/sys/class/infiniband
+    if [[ ! -d "$ib_dir" ]]; then
+        emit WARN "ib.devices" "$ib_dir missing — no IB stack; ARGUS will run in eBPF-only mode"
+        return
+    fi
+
+    local devices=()
+    for dev in "$ib_dir"/*; do
+        [[ -d "$dev" ]] || continue
+        devices+=("$(basename "$dev")")
+    done
+
+    if (( ${#devices[@]} == 0 )); then
+        emit WARN "ib.devices" "$ib_dir empty — no IB/RoCE/Soft-RoCE devices discovered"
+        return
+    fi
+
+    local detail="${devices[*]}"
+    emit OK "ib.devices" "discovered: $detail"
+
+    # Per-port link_layer probe (best-effort)
+    for dev in "$ib_dir"/*; do
+        [[ -d "$dev/ports" ]] || continue
+        for port in "$dev"/ports/*; do
+            [[ -d "$port" ]] || continue
+            local p_num
+            p_num=$(basename "$port")
+            local link_layer="?"
+            [[ -r "$port/link_layer" ]] && link_layer=$(cat "$port/link_layer" 2>/dev/null | tr -d '[:space:]' || echo "?")
+            local state="?"
+            [[ -r "$port/state" ]] && state=$(awk '{print $NF}' "$port/state" 2>/dev/null || echo "?")
+            emit OK "ib.port" "$(basename "$dev")/port $p_num — $link_layer, state=$state"
+        done
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Check 4: SELinux
+# ---------------------------------------------------------------------------
+check_selinux() {
+    if ! command -v getenforce &>/dev/null; then
+        emit OK "selinux.mode" "SELinux tools not installed — assumed disabled"
+        return
+    fi
+
+    local mode
+    mode=$(getenforce 2>/dev/null || echo "Unknown")
+
+    case "$mode" in
+        Disabled|Permissive)
+            emit OK "selinux.mode" "$mode (no policy enforcement)"
+            ;;
+        Enforcing)
+            # Need the argus module loaded
+            if command -v semodule &>/dev/null; then
+                if semodule -l 2>/dev/null | grep -q '^argus'; then
+                    emit OK "selinux.policy" "Enforcing + argus.pp loaded"
+                else
+                    emit WARN "selinux.policy" "Enforcing but argus.pp NOT loaded — install with: semodule -i /usr/share/argus/selinux/argus.pp"
+                fi
+            else
+                emit WARN "selinux.policy" "Enforcing; can't inspect modules (no semodule)"
+            fi
+            ;;
+        *)
+            emit WARN "selinux.mode" "unknown mode: $mode"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Check 5: firewalld
+# ---------------------------------------------------------------------------
+check_firewalld() {
+    if ! command -v firewall-cmd &>/dev/null; then
+        emit OK "firewall.daemon" "firewalld not installed — assume host firewall not in use"
+        return
+    fi
+
+    if ! systemctl is-active --quiet firewalld 2>/dev/null; then
+        emit OK "firewall.daemon" "firewalld not running"
+        return
+    fi
+
+    local zone
+    zone=$(firewall-cmd --get-default-zone 2>/dev/null || echo "?")
+    if firewall-cmd --zone="$zone" --query-port="${PORT}/tcp" 2>/dev/null | grep -q yes; then
+        emit OK "firewall.port" "${PORT}/tcp allowed in zone '$zone'"
+    else
+        emit FAIL "firewall.port" "${PORT}/tcp NOT allowed in zone '$zone'. Fix: firewall-cmd --permanent --zone=$zone --add-port=${PORT}/tcp && firewall-cmd --reload"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Check 6: time sync
+# ---------------------------------------------------------------------------
+check_time_sync() {
+    if systemctl is-active --quiet chronyd 2>/dev/null; then
+        emit OK "time.sync" "chronyd active"
+        return
+    fi
+    if systemctl is-active --quiet ntpd 2>/dev/null; then
+        emit OK "time.sync" "ntpd active"
+        return
+    fi
+    if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
+        emit OK "time.sync" "systemd-timesyncd active"
+        return
+    fi
+
+    emit WARN "time.sync" "no time sync service active — fleet-wide alert correlation will be unreliable. Install chrony: dnf install -y chrony && systemctl enable --now chronyd"
+}
+
+# ---------------------------------------------------------------------------
+# Check 7: argusd binary capabilities
+# ---------------------------------------------------------------------------
+check_argusd_caps() {
+    local bin=/usr/bin/argusd
+    if [[ ! -x "$bin" ]]; then
+        emit OK "argusd.install" "$bin not present yet — install before deploy"
+        return
+    fi
+
+    if ! command -v getcap &>/dev/null; then
+        emit WARN "argusd.caps" "getcap unavailable; cannot verify file capabilities"
+        return
+    fi
+
+    local caps
+    caps=$(getcap "$bin" 2>/dev/null || echo "")
+    if [[ -z "$caps" ]]; then
+        # Capabilities likely granted by systemd at runtime — not a FAIL
+        emit OK "argusd.caps" "no file caps set; systemd unit grants CAP_BPF / CAP_PERFMON at runtime"
+    else
+        emit OK "argusd.caps" "$caps"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Check 8: existing argusd state
+# ---------------------------------------------------------------------------
+check_running() {
+    if systemctl is-active --quiet argusd 2>/dev/null; then
+        emit OK "argusd.service" "already running — preflight on a live host is informational"
+    else
+        emit OK "argusd.service" "not running (expected for fresh deploy)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Run all checks
+# ---------------------------------------------------------------------------
+
+if ! $JSON; then
+    if ! $QUIET; then
+        echo ""
+        echo "ARGUS preflight on $(hostname) ($(uname -r))"
+        echo "─────────────────────────────────────────────"
+    fi
+fi
+
+check_kernel
+check_btf
+check_ib
+check_selinux
+check_firewalld
+check_time_sync
+check_argusd_caps
+check_running
+
+if $JSON; then
+    RESULTS_JSON+="]"
+    printf '{"summary":{"ok":%d,"warn":%d,"fail":%d},"checks":%s}\n' \
+        "$OK_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$RESULTS_JSON"
+else
+    if ! $QUIET; then
+        echo "─────────────────────────────────────────────"
+        printf "Summary: \033[1;32m%d OK\033[0m  \033[1;33m%d WARN\033[0m  \033[1;31m%d FAIL\033[0m\n" \
+            "$OK_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
+        echo ""
+    fi
+fi
+
+if (( FAIL_COUNT > 0 )); then
+    exit 1
+fi
+exit 0
