@@ -29,16 +29,35 @@ TasksMax=64
 LimitNOFILE=8192
 LimitMEMLOCK=67108864
 
-# --- Capabilities (kernel 5.19+) ---
-# CAP_BPF:             load/interact with BPF programs and maps
-# CAP_PERFMON:         perf_event_open() for kprobe/tracepoint attachment
-# CAP_SYSLOG:          read /proc/kallsyms when kptr_restrict >= 1
-# CAP_DAC_READ_SEARCH: read tracefs format files with restrictive permissions
+# --- Capabilities ---
 #
-# For kernels <5.19, add CAP_SYS_ADMIN to both lines below.
-# For --action-port-disable, add CAP_NET_ADMIN to both lines below.
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYSLOG CAP_DAC_READ_SEARCH
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYSLOG CAP_DAC_READ_SEARCH
+# Default: CAP_SYS_ADMIN. This is intentionally broad because it works on
+# EVERY supported kernel — including RHEL 8 / Rocky 8 stock (4.18.0-*.el8)
+# where systemd 239 does not recognize the CAP_BPF / CAP_PERFMON names,
+# and on pre-5.8 kernels (or RHEL 8 prior to the CAP_BPF backport) where
+# those caps don't exist in the kernel.
+#
+# CAP_SYS_ADMIN is a superset that covers:
+#   - bpf() syscall — load programs, create maps, read/write maps
+#   - perf_event_open() — kprobe / tracepoint attachment
+#   - reads of /proc/kallsyms under kptr_restrict >= 1
+#   - reads of tracefs / debugfs format files
+#
+# For kernel ≥ 5.8 with modern systemd (≥ 247): drop in the file
+# /usr/lib/systemd/system/argusd.service.d/modern-caps.conf which the
+# RPM ships at /usr/share/argus/systemd/modern-caps.conf. It overrides
+# the cap set to fine-grained CAP_BPF + CAP_PERFMON + CAP_SYSLOG +
+# CAP_DAC_READ_SEARCH. Activate with:
+#
+#   sudo mkdir -p /etc/systemd/system/argusd.service.d/
+#   sudo cp /usr/share/argus/systemd/modern-caps.conf \
+#       /etc/systemd/system/argusd.service.d/modern-caps.conf
+#   sudo systemctl daemon-reload
+#   sudo systemctl restart argusd
+#
+# For --action-port-disable, also grant CAP_NET_ADMIN via a drop-in.
+CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_ADMIN
 
 # --- Privilege Escalation Prevention ---
 NoNewPrivileges=yes
