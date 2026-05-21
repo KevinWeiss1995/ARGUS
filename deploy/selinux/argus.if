@@ -1,0 +1,37 @@
+## <summary>ARGUS — Adaptive RDMA Guard &amp; Utilization Sentinel.</summary>
+
+########################################
+## <summary>
+##      Read ARGUS configuration files in /etc/argus.
+## </summary>
+## <param name="domain">
+##      <summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`argus_read_config',`
+        gen_require(`
+                type argusd_etc_t;
+        ')
+
+        files_search_etc($1)
+        allow $1 argusd_etc_t:dir { search read open };
+        allow $1 argusd_etc_t:file { open read getattr };
+')
+
+########################################
+## <summary>
+##      Read /var/lib/argus state files (scheduler audit log, etc.).
+## </summary>
+## <param name="domain">
+##      <summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`argus_read_state',`
+        gen_require(`
+                type argusd_var_lib_t;
+        ')
+
+        files_search_var_lib($1)
+        allow $1 argusd_var_lib_t:dir { search read open };
+        allow $1 argusd_var_lib_t:file { open read getattr };
+')
