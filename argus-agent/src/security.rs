@@ -2,16 +2,30 @@
 //!
 //! After eBPF programs are loaded and tracepoints attached, the agent no longer
 //! needs elevated privileges. This module drops everything unnecessary, keeping
-//! only `CAP_BPF` for ongoing BPF map reads on kernels < 5.19.
+//! only what is required for ongoing operation:
+//!
+//!   - `CAP_BPF` on kernels that grant it (5.8+ or RHEL 8.5+ via backport).
+//!     Otherwise `CAP_SYS_ADMIN` (the universal fallback).
+//!   - `CAP_DAC_READ_SEARCH` if held (needed to read tracefs format files
+//!     on hosts where `/sys/kernel/tracing/events/*/format` has restrictive
+//!     permissions — common on RHEL 8).
+//!
+//! Without this discrimination, on RHEL 8 stock kernel-4.18 + systemd 239
+//! (where the unit holds `CAP_SYS_ADMIN`, not `CAP_BPF`), the old "keep only
+//! `CAP_BPF`" logic would strand the agent with no caps for ongoing BPF map
+//! reads. This module's "keep what's actually held" approach works on both
+//! the wide-cap default unit and the fine-grained modern-caps drop-in.
 
 /// Drop capabilities and set `PR_SET_NO_NEW_PRIVS` after eBPF initialization.
 ///
-/// Strategy: iterate ALL known capabilities and drop everything except `CAP_BPF`.
-/// This is future-proof — if Linux adds new caps, they get dropped automatically
-/// rather than requiring a manual update to a drop-list.
+/// Strategy: probe which of `{CAP_BPF, CAP_SYS_ADMIN, CAP_PERFMON,
+/// CAP_DAC_READ_SEARCH}` we actually hold, keep that minimal set, and drop
+/// everything else. Future-proof against new kernel caps because the drop
+/// list iterates the full cap range; only the explicit keep-list survives.
 ///
-/// This is Linux-only and best-effort: failure to drop is logged but non-fatal,
-/// since running in a container or without ambient caps can cause benign errors.
+/// Best-effort: failure to drop any individual cap is logged but non-fatal,
+/// since running in a container or without ambient caps can produce benign
+/// "operation not permitted" results that are not security issues.
 #[cfg(target_os = "linux")]
 pub fn drop_privileges() {
     use tracing::{info, warn};
@@ -24,6 +38,18 @@ pub fn drop_privileges() {
         info!("PR_SET_NO_NEW_PRIVS set");
     }
 
+    let keep = compute_caps_to_keep();
+    if keep.is_empty() {
+        warn!(
+            "no caps held in the effective set — running unprivileged. \
+             BPF map reads will likely fail. Are you running argusd as a \
+             non-root user without ambient caps?"
+        );
+    } else {
+        let names: Vec<String> = keep.iter().map(|c| format!("{c:?}")).collect();
+        info!(keep = names.join(", "), "post-drop keep-list");
+    }
+
     let mut dropped = 0u32;
     let mut errors = 0u32;
 
@@ -33,7 +59,7 @@ pub fn drop_privileges() {
             None => continue,
         };
 
-        if cap == caps::Capability::CAP_BPF {
+        if keep.contains(&cap) {
             continue;
         }
 
@@ -60,6 +86,48 @@ pub fn drop_privileges() {
     }
 
     log_held_capabilities("post-drop");
+}
+
+/// Determine which capabilities to keep across the privilege-drop boundary.
+///
+/// Order of preference for the BPF-access cap:
+///   1. `CAP_BPF`  — preferred on kernel 5.8+ / RHEL 8.5+ (fine-grained)
+///   2. `CAP_SYS_ADMIN` — fallback for older kernels and RHEL 8 stock
+///
+/// We also keep:
+///   - `CAP_PERFMON` if held — covers `perf_event_open()` if the agent
+///     ever needs to re-attach a probe at runtime.
+///   - `CAP_DAC_READ_SEARCH` if held — common on RHEL 8 where tracefs
+///     format files have restrictive perms.
+///   - `CAP_SYSLOG` if held — `/proc/kallsyms` reads with kptr_restrict >= 1.
+///
+/// All four together still represent a strict subset of what `CAP_SYS_ADMIN`
+/// alone grants; the keep-list cannot escalate privilege.
+#[cfg(target_os = "linux")]
+fn compute_caps_to_keep() -> Vec<caps::Capability> {
+    use caps::Capability::*;
+    let mut keep = Vec::new();
+
+    let has = |cap: caps::Capability| {
+        matches!(caps::has_cap(None, caps::CapSet::Effective, cap), Ok(true))
+    };
+
+    // Prefer fine-grained CAP_BPF when available; otherwise fall back to
+    // CAP_SYS_ADMIN. Both grant bpf() syscall access; the kernel honours
+    // whichever the unit holds.
+    if has(CAP_BPF) {
+        keep.push(CAP_BPF);
+    } else if has(CAP_SYS_ADMIN) {
+        keep.push(CAP_SYS_ADMIN);
+    }
+
+    for cap in [CAP_PERFMON, CAP_DAC_READ_SEARCH, CAP_SYSLOG] {
+        if has(cap) {
+            keep.push(cap);
+        }
+    }
+
+    keep
 }
 
 /// Log all capabilities currently in the effective set.
