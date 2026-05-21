@@ -28,6 +28,17 @@ argus_tls_key_path: ""
 # Disabled hosts.
 argus_install_selinux: false
 
+# Capabilities mode. By default the systemd unit grants CAP_SYS_ADMIN
+# which works on every supported kernel — including RHEL 8 / Rocky 8
+# stock 4.18 with systemd 239. The install role auto-enables the
+# fine-grained CAP_BPF/CAP_PERFMON drop-in when:
+#   - the host is NOT RHEL 8, AND
+#   - kernel >= 5.8.
+# Set true to force the drop-in on every host (only safe if you've
+# confirmed your distro's systemd recognizes CAP_BPF in unit files —
+# RHEL 8 stock does not).
+argus_force_modern_caps: false
+
 # --- Optional: scheduler integration ---
 
 # Set to "slurm" to enable SLURM drain/resume on health transitions.

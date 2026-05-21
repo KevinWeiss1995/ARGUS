@@ -58,6 +58,54 @@
   when: argus_tls_cert_path != ''
   notify: restart argusd
 
+# --- Optional fine-grained capabilities drop-in ---
+# Activate the modern-caps drop-in only when:
+#   - The host is NOT RHEL 8 (systemd 239 doesn't understand CAP_BPF), AND
+#   - Kernel >= 5.8, OR the operator explicitly forced it via argus_force_modern_caps.
+# Otherwise the default unit (CAP_SYS_ADMIN) is used — works everywhere
+# including the user's RHEL 8.10 stock kernel.
+
+- name: Detect RHEL 8 from kernel release
+  ansible.builtin.set_fact:
+    argus_is_rhel8: "{{ '.el8' in ansible_kernel }}"
+
+- name: Decide whether to enable fine-grained caps drop-in
+  ansible.builtin.set_fact:
+    argus_use_modern_caps: >-
+      {{ (argus_force_modern_caps | default(false))
+         or ((not argus_is_rhel8)
+             and (ansible_kernel.split('.')[0] | int > 5
+                  or (ansible_kernel.split('.')[0] | int == 5
+                      and ansible_kernel.split('.')[1].split('-')[0] | int >= 8))) }}
+
+- name: Install modern-caps drop-in when appropriate
+  when: argus_use_modern_caps | bool
+  block:
+    - name: Ensure argusd.service.d exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/argusd.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy modern-caps drop-in from RPM's staging location
+      ansible.builtin.copy:
+        src: /usr/share/argus/systemd/modern-caps.conf
+        dest: /etc/systemd/system/argusd.service.d/modern-caps.conf
+        owner: root
+        group: root
+        mode: "0644"
+        remote_src: true
+      notify: restart argusd
+
+- name: Remove modern-caps drop-in on RHEL 8 hosts (failsafe)
+  ansible.builtin.file:
+    path: /etc/systemd/system/argusd.service.d/modern-caps.conf
+    state: absent
+  when: argus_is_rhel8 and not (argus_force_modern_caps | default(false))
+  notify: restart argusd
+
 # --- Optional SELinux policy install ---
 
 - name: Build & load argus.pp on SELinux Enforcing hosts
