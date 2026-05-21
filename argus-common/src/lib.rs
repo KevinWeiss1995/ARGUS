@@ -345,6 +345,48 @@ pub struct AggregatedMetrics {
     /// Composite health score (0.0 = perfectly healthy, 1.0 = maximally degraded).
     /// Computed by the detection engine from weighted signal combination.
     pub composite_health_score: f64,
+    /// Per-port idle tracking. Each entry reports how long a discovered IB
+    /// port has been observed with zero throughput. The agent continues
+    /// passive monitoring of error counters regardless of idle state; this
+    /// field exists so operators can distinguish "quiet fabric, monitored"
+    /// from "monitoring offline."
+    #[serde(default)]
+    pub ib_port_idle: Vec<IbPortIdle>,
+}
+
+/// Per-port idle snapshot for surfaces like /status and Prometheus gauges.
+/// Hardware error counters (symbol_error_delta, link_error_recovery_delta,
+/// link_downed_delta) continue to fire regardless of idle_seconds — passive
+/// monitoring of an idle link is still real monitoring.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IbPortIdle {
+    pub device: String,
+    pub port: u32,
+    /// Wall-clock seconds since the last window in which this port observed
+    /// any non-zero throughput. 0 means the port saw traffic this window.
+    pub idle_seconds: u64,
+}
+
+impl AggregatedMetrics {
+    /// True when at least one IB port is known and every discovered port has
+    /// been idle for one window or more. Returns false when there are no
+    /// known ports, so consumers can distinguish "fabric is idle" from
+    /// "no fabric detected."
+    #[must_use]
+    pub fn ib_fabric_idle(&self) -> bool {
+        if self.ib_port_idle.is_empty() {
+            return false;
+        }
+        self.ib_port_idle.iter().all(|p| p.idle_seconds > 0)
+    }
+
+    /// Maximum idle-seconds across all known ports. 0 means at least one
+    /// port has traffic; positive means fabric has been idle that long
+    /// (passive monitoring still active).
+    #[must_use]
+    pub fn ib_max_idle_seconds(&self) -> u64 {
+        self.ib_port_idle.iter().map(|p| p.idle_seconds).max().unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
