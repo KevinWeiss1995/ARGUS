@@ -1,0 +1,334 @@
+# Zabbix 6.x / 7.x template for ARGUS.
+#
+# Import via:  Configuration → Templates → Import → this YAML
+# Then link the template to your HPC host group and configure macros
+# (Configuration → Hosts → <host> → Macros).
+#
+# Macros:
+#   {$ARGUS_PORT}       — agent metrics port (default 9100)
+#   {$ARGUS_SCHEME}     — http or https
+#   {$ARGUS_TOKEN}      — Bearer token (leave empty if auth disabled)
+#   {$ARGUS_IDLE_MAX}   — informational idle-seconds threshold (default 86400)
+#
+# This template only uses HTTP agent items — no zabbix_agent2 / UserParameter
+# needed. The agent already speaks Prometheus exposition format, so we
+# preprocess with `prometheus pattern` to extract values directly.
+
+zabbix_export:
+  version: '6.4'
+  date: '2026-05-20T00:00:00Z'
+
+  template_groups:
+    - uuid: 7df96b18c230490a9a0a9e2307226338
+      name: Templates/Applications
+
+  templates:
+    - uuid: 9f1c2cda19b04acdb1b3aa4abf2dfb0e
+      template: ARGUS
+      name: ARGUS Adaptive RDMA Guard
+      description: |
+        Monitors ARGUS (Adaptive RDMA Guard & Utilization Sentinel) instances
+        via their /metrics and /health Prometheus endpoints. Discovers per-port
+        IB hardware counters and tracks health state transitions.
+
+      groups:
+        - name: Templates/Applications
+
+      macros:
+        - macro: '{$ARGUS_PORT}'
+          value: '9100'
+          description: ARGUS metrics endpoint port
+        - macro: '{$ARGUS_SCHEME}'
+          value: 'http'
+          description: 'http or https'
+        - macro: '{$ARGUS_TOKEN}'
+          value: ''
+          description: Bearer token for /metrics auth (leave empty to disable)
+        - macro: '{$ARGUS_IDLE_MAX}'
+          value: '86400'
+          description: Idle-seconds threshold for informational alert
+        - macro: '{$ARGUS_BER_WARN}'
+          value: '1e-9'
+          description: BER warning threshold (errors/bit estimate)
+        - macro: '{$ARGUS_BER_CRIT}'
+          value: '1e-6'
+          description: BER critical threshold
+
+      # ────────────────────────────────────────────────────────────────
+      # Master HTTP item — scrapes /metrics once, all other items extract
+      # from this output via dependent items. Minimises HTTP load on the
+      # agent and keeps everything atomic per scrape window.
+      # ────────────────────────────────────────────────────────────────
+      items:
+        - uuid: a8e1e0c2faf64b0e9dba6f0c3ecf25c1
+          name: 'ARGUS: raw metrics'
+          type: HTTP_AGENT
+          key: argus.metrics.raw
+          delay: 30s
+          history: '0'
+          trends: '0'
+          value_type: TEXT
+          timeout: '10'
+          url: '{$ARGUS_SCHEME}://{HOST.CONN}:{$ARGUS_PORT}/metrics'
+          headers:
+            - name: Authorization
+              value: 'Bearer {$ARGUS_TOKEN}'
+          status_codes: '200,401'
+          allow_traps: 'NO'
+          description: Raw Prometheus exposition. Other items extract from this.
+
+        - uuid: 11d9c6cca0334a9b8de4cea3f70b8a8a
+          name: 'ARGUS: health state (0=Healthy/1=Deg/2=Crit/3=Recov)'
+          type: DEPENDENT
+          key: argus.health.state
+          delay: '0'
+          value_type: UNSIGNED
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'argus_health_state'
+                - 'value'
+                - ''
+          valuemap:
+            name: 'ARGUS health state'
+
+        - uuid: e8d3acaaef6f4b5b8d3a527af0b3f2a4
+          name: 'ARGUS: composite health score (millis)'
+          type: DEPENDENT
+          key: argus.health.score
+          delay: '0'
+          value_type: UNSIGNED
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'argus_health_score_millis'
+                - 'value'
+                - ''
+
+        - uuid: 9c1c6f7b8e394e119e9e547c5a8e84ee
+          name: 'ARGUS: fabric idle (all ports idle)'
+          type: DEPENDENT
+          key: argus.fabric.idle
+          delay: '0'
+          value_type: UNSIGNED
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'argus_ib_fabric_idle'
+                - 'value'
+                - ''
+
+        - uuid: 6f7df01b54284f88adb43cf9e2c08f74
+          name: 'ARGUS: max idle seconds across all ports'
+          type: DEPENDENT
+          key: argus.fabric.idle.max_seconds
+          delay: '0'
+          value_type: UNSIGNED
+          units: s
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'argus_ib_max_idle_seconds'
+                - 'value'
+                - ''
+
+        - uuid: 7a8b3c6df81643d0b3a4ec1abc5d3eed
+          name: 'ARGUS: events processed (cumulative)'
+          type: DEPENDENT
+          key: argus.events
+          delay: '0'
+          value_type: UNSIGNED
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'argus_events'
+                - 'value'
+                - ''
+
+        - uuid: 9a1bb7c5a0e5494d931d4c7b4ce0e7f2
+          name: 'ARGUS: agent health (HTTP /health)'
+          type: HTTP_AGENT
+          key: argus.health.up
+          delay: 30s
+          value_type: UNSIGNED
+          timeout: '5'
+          url: '{$ARGUS_SCHEME}://{HOST.CONN}:{$ARGUS_PORT}/health'
+          headers:
+            - name: Authorization
+              value: 'Bearer {$ARGUS_TOKEN}'
+          status_codes: '200'
+          retrieve_mode: HEADERS
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'HTTP/[12](\.[01])?\s+(\d+)'
+                - '\2'
+            - type: JAVASCRIPT
+              parameters:
+                - 'return value == "200" ? 1 : 0;'
+
+      # ────────────────────────────────────────────────────────────────
+      # Per-port discovery — finds (device, port) pairs from
+      # argus_ib_port_idle_seconds labels and creates one prototype
+      # item per pair.
+      # ────────────────────────────────────────────────────────────────
+      discovery_rules:
+        - uuid: 18b4f7e7a93e431b8d9f3a5d8b0bda07
+          name: 'IB port discovery'
+          type: DEPENDENT
+          key: argus.ib.port.discovery
+          delay: '0'
+          master_item:
+            key: argus.metrics.raw
+          preprocessing:
+            - type: PROMETHEUS_TO_JSON
+              parameters:
+                - 'argus_ib_port_idle_seconds'
+            - type: JSONPATH
+              parameters:
+                - '$[*].labels'
+            - type: JAVASCRIPT
+              parameters: |
+                var arr = JSON.parse(value);
+                var out = [];
+                for (var i = 0; i < arr.length; i++) {
+                  out.push({
+                    "{#DEVICE}": arr[i].device,
+                    "{#PORT}": arr[i].port
+                  });
+                }
+                return JSON.stringify(out);
+          item_prototypes:
+            - uuid: 5e30b8eaae8d4a2c849ab36c0d3ad9c5
+              name: 'IB port {#DEVICE}/{#PORT}: idle seconds'
+              type: DEPENDENT
+              key: 'argus.ib.port.idle[{#DEVICE},{#PORT}]'
+              delay: '0'
+              value_type: UNSIGNED
+              units: s
+              master_item:
+                key: argus.metrics.raw
+              preprocessing:
+                - type: PROMETHEUS_PATTERN
+                  parameters:
+                    - 'argus_ib_port_idle_seconds{device="{#DEVICE}",port="{#PORT}"}'
+                    - 'value'
+                    - ''
+
+            - uuid: 1f4a9b6a1cd64fc09da13fbb74a07c01
+              name: 'IB port {#DEVICE}/{#PORT}: symbol errors delta'
+              type: DEPENDENT
+              key: 'argus.ib.port.symbol_errors[{#DEVICE},{#PORT}]'
+              delay: '0'
+              value_type: UNSIGNED
+              master_item:
+                key: argus.metrics.raw
+              preprocessing:
+                - type: PROMETHEUS_PATTERN
+                  parameters:
+                    - 'argus_ib_symbol_errors_delta{device="{#DEVICE}",port="{#PORT}"}'
+                    - 'value'
+                    - ''
+
+            - uuid: 2c1cc3bb83894c0bb1ed5a2a9e7da53d
+              name: 'IB port {#DEVICE}/{#PORT}: link downed delta'
+              type: DEPENDENT
+              key: 'argus.ib.port.link_downed[{#DEVICE},{#PORT}]'
+              delay: '0'
+              value_type: UNSIGNED
+              master_item:
+                key: argus.metrics.raw
+              preprocessing:
+                - type: PROMETHEUS_PATTERN
+                  parameters:
+                    - 'argus_ib_link_downed_delta{device="{#DEVICE}",port="{#PORT}"}'
+                    - 'value'
+                    - ''
+
+            - uuid: 3a82e8f54e6b40fab1ab1f7a2c4e6b0c
+              name: 'IB port {#DEVICE}/{#PORT}: link error recovery delta'
+              type: DEPENDENT
+              key: 'argus.ib.port.link_error_recovery[{#DEVICE},{#PORT}]'
+              delay: '0'
+              value_type: UNSIGNED
+              master_item:
+                key: argus.metrics.raw
+              preprocessing:
+                - type: PROMETHEUS_PATTERN
+                  parameters:
+                    - 'argus_ib_link_error_recovery_delta{device="{#DEVICE}",port="{#PORT}"}'
+                    - 'value'
+                    - ''
+
+          trigger_prototypes:
+            - uuid: 4be018a44b4f4ad8a9b06b6ee37a1d83
+              expression: 'last(/ARGUS/argus.ib.port.link_downed[{#DEVICE},{#PORT}]) > 0'
+              name: 'IB link DOWN: {HOST.NAME} {#DEVICE}/port {#PORT}'
+              priority: DISASTER
+              description: 'link_downed counter incremented this window. Physical inspection required.'
+
+            - uuid: 5ce92a13ff034a76b8f4f5e92cefb53e
+              expression: 'last(/ARGUS/argus.ib.port.link_error_recovery[{#DEVICE},{#PORT}]) > 0'
+              name: 'IB link recovery: {HOST.NAME} {#DEVICE}/port {#PORT}'
+              priority: WARNING
+              description: 'link_error_recovery climbed — the predictor of cable failure. Schedule preemptive swap.'
+
+            - uuid: 6f3b1de8c6e244c6b6dac6daf3b0fea2
+              expression: 'last(/ARGUS/argus.ib.port.symbol_errors[{#DEVICE},{#PORT}]) > 10'
+              name: 'IB high symbol errors: {HOST.NAME} {#DEVICE}/port {#PORT}'
+              priority: AVERAGE
+              description: '>10 symbol errors in a single window. Sustained rates predict link failure.'
+
+      # ────────────────────────────────────────────────────────────────
+      # Triggers on host-level items
+      # ────────────────────────────────────────────────────────────────
+      triggers:
+        - uuid: 7a59ed1c4cd54c81a8c5d8edd1a7b5e1
+          expression: 'last(/ARGUS/argus.health.up) <> 1'
+          name: 'ARGUS agent unreachable on {HOST.NAME}'
+          priority: HIGH
+          description: '/health did not return 200 — argusd is down, blocked by firewall, or auth misconfigured.'
+
+        - uuid: 8b4afb13b6f74da6948b1d63cf6f64a3
+          expression: 'last(/ARGUS/argus.health.state) = 2'
+          name: 'ARGUS CRITICAL on {HOST.NAME}'
+          priority: HIGH
+          description: 'Composite health crossed critical_enter threshold; node may be drained by scheduler integration.'
+
+        - uuid: 9b9b80d7706443c9b8a4d39f9d39d50f
+          expression: 'last(/ARGUS/argus.health.state) = 1'
+          name: 'ARGUS DEGRADED on {HOST.NAME}'
+          priority: AVERAGE
+          description: 'Composite health crossed degrade_enter threshold for ≥30s.'
+
+        - uuid: a3a4af7f6bbb4a52a8f5b97d2f08d83a
+          expression: 'last(/ARGUS/argus.fabric.idle.max_seconds) > {$ARGUS_IDLE_MAX}'
+          name: 'ARGUS IB fabric idle >{$ARGUS_IDLE_MAX}s on {HOST.NAME} (still monitoring)'
+          priority: INFO
+          description: |
+            Informational: ARGUS has not observed IB throughput on {HOST.NAME} for over the configured threshold.
+            Hardware error counters keep firing — this is NOT a monitoring outage, just a "no traffic" notice.
+            Suppress on idle-by-design clusters.
+
+      valuemaps:
+        - uuid: 1ec05bb73c4d4b389b41c6c0a3a7eaef
+          name: 'ARGUS health state'
+          mappings:
+            - value: '0'
+              newvalue: HEALTHY
+            - value: '1'
+              newvalue: DEGRADED
+            - value: '2'
+              newvalue: CRITICAL
+            - value: '3'
+              newvalue: RECOVERING
