@@ -1,0 +1,32 @@
+---
+# Post-install sanity check. We tolerate Degraded here (this is just to
+# make sure argusd is reachable and emitting metrics); Critical is fatal.
+
+- name: Query /health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ argus_metrics_addr.split(':')[1] | default('9100') }}/health"
+    return_content: true
+    timeout: 5
+  register: argus_health_check
+
+- name: Show health state per host
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} → {{ argus_health_check.json.state }} (uptime {{ argus_health_check.json.uptime_secs | round(1) }}s)"
+
+- name: Refuse to declare success if any node is Critical
+  ansible.builtin.fail:
+    msg: "argusd reports Critical on {{ inventory_hostname }} immediately after install — investigate"
+  when: argus_health_check.json.state == 'CRITICAL'
+
+- name: Sample a few metric names
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ argus_metrics_addr.split(':')[1] | default('9100') }}/metrics"
+    return_content: true
+    timeout: 5
+  register: argus_metrics
+
+- name: Confirm idle visibility gauge is present
+  ansible.builtin.assert:
+    that:
+      - "'argus_ib_port_idle_seconds' in argus_metrics.content or 'argus_ib_fabric_idle' in argus_metrics.content"
+    fail_msg: "expected idle visibility gauges not in /metrics — old binary?"
