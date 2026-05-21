@@ -4,6 +4,24 @@ All notable changes are recorded here. Versions follow semver.
 
 ## [0.1.0] — 2026-05-21
 
+### Added — HPC-friendly build paths (no bare-metal toolchain)
+
+- **Apptainer build container.** `deploy/container/argus-build.def`
+  defines a Rocky 8 SIF with pinned Rust 1.83 + nightly 2025-01-15 +
+  bpf-linker 0.9.13 + LLVM 17. Build host needs only `apptainer`;
+  nothing else gets installed bare-metal. Rootless via `--fakeroot`.
+- **Podman / Docker fallback.**
+  `deploy/container/Containerfile.build` produces an equivalent image
+  for sites that have a container runtime but not Apptainer.
+- **Spack package + environment.** `deploy/spack/packages/argus/package.py`
+  and `deploy/spack/spack.yaml` let Spack-managed sites get build deps
+  as Lmod modules and optionally install ARGUS itself via Spack.
+- **`scripts/build-rpm.sh --apptainer / --container [podman|docker]`** —
+  one-command wrapper that builds the image if missing, runs the build,
+  and drops RPMs into `./out/`.
+- **`docs/hpc-build.md`** — guide comparing Apptainer / Spack /
+  Podman / bare-metal build paths and when to use each.
+
 ### Added — RHEL 8 / Rocky 8 first-class support
 
 - Default systemd unit now grants `CAP_SYS_ADMIN` (the only cap RHEL 8
