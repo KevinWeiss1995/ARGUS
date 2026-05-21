@@ -1,0 +1,135 @@
+Bootstrap: docker
+From: rockylinux/rockylinux:8
+
+# Apptainer (formerly Singularity) build definition for ARGUS.
+#
+# Produces a Rocky 8 RPM (and the optional SELinux subpackage) without
+# requiring any Rust toolchain, LLVM, or bpf-linker on the build host
+# bare-metal. The build host needs only Apptainer (default container
+# runtime on most HPC clusters).
+#
+# Build the SIF image once (typically on a build/login node):
+#
+#   apptainer build --fakeroot deploy/container/argus-build.sif \
+#       deploy/container/argus-build.def
+#
+# (--fakeroot needs user namespaces enabled in /proc/sys/user — already
+#  on by default on Rocky 8 + most HPC clusters. If your site disables
+#  it, ask the admin to set `unprivileged_userns_clone=1` or to do the
+#  one-time `apptainer build` as root and distribute the SIF.)
+#
+# Then run as an unprivileged user against a checkout of the repo:
+#
+#   mkdir -p out
+#   apptainer run \
+#       --bind $PWD:/src \
+#       --bind $PWD/out:/out \
+#       deploy/container/argus-build.sif
+#
+# The RPM(s) land in ./out/. scripts/build-rpm.sh --apptainer wraps this.
+
+%arguments
+    RUST_VERSION=1.83.0
+    RUST_NIGHTLY=nightly-2025-01-15
+    BPF_LINKER_VERSION=0.9.13
+
+%post
+    set -euo pipefail
+    export RUSTUP_HOME=/opt/rust
+    export CARGO_HOME=/opt/cargo
+
+    # --- System packages -------------------------------------------------
+    # rpm-build:           rpmbuild for the final artifact
+    # clang/llvm-toolset:  required by bpf-linker (LLVM 17)
+    # openssl-devel:       cargo crates that link OpenSSL
+    # selinux-policy-devel: argus-selinux subpackage
+    # patchelf:            in case relocation is needed later
+    # Everything else: rpmbuild internals + curl for rustup
+
+    dnf install -y --setopt=tsflags=nodocs \
+        rpm-build \
+        clang \
+        llvm-toolset \
+        openssl-devel \
+        pkg-config \
+        git \
+        make \
+        gcc \
+        tar \
+        gzip \
+        findutils \
+        which \
+        patchelf \
+        ca-certificates \
+        curl \
+        selinux-policy-devel \
+        policycoreutils-python-utils
+
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+    # --- Rust toolchain (stable + nightly + bpf-linker) ------------------
+    # All under /opt so it lives in the read-only SIF, not the user's HOME.
+
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain {{ RUST_VERSION }}
+
+    export PATH=/opt/cargo/bin:$PATH
+
+    rustup toolchain install {{ RUST_NIGHTLY }} --profile minimal
+    rustup component add rust-src --toolchain {{ RUST_NIGHTLY }}
+    rustup component add llvm-tools --toolchain {{ RUST_VERSION }}
+
+    cargo install --version {{ BPF_LINKER_VERSION }} --locked bpf-linker
+
+    # Make the toolchain world-readable so unprivileged users running
+    # `apptainer run` can invoke it through the SIF's overlay.
+    chmod -R a+rX /opt/rust /opt/cargo
+
+%environment
+    export RUSTUP_HOME=/opt/rust
+    export CARGO_HOME=/opt/cargo
+    export PATH=/opt/cargo/bin:$PATH
+    # Sentinel: build-rpm.sh sees this and skips its own container wrapper,
+    # preventing recursive `apptainer run` calls.
+    export ARGUS_IN_BUILD_CONTAINER=1
+
+%runscript
+    set -e
+    if [ ! -f /src/Cargo.toml ]; then
+        echo "Mount the ARGUS source tree at /src" >&2
+        echo "  apptainer run --bind \$PWD:/src --bind \$PWD/out:/out argus-build.sif" >&2
+        exit 1
+    fi
+    mkdir -p /out
+    cd /src
+    bash scripts/build-rpm.sh "$@"
+
+    # Copy any RPM the build produced into the bind-mounted /out.
+    for d in /root/rpmbuild/RPMS ~/rpmbuild/RPMS /tmp/rpmbuild/RPMS; do
+        if [ -d "$d" ]; then
+            find "$d" -name 'argus-*.rpm' -exec cp -v {} /out/ \;
+        fi
+    done
+
+    echo
+    echo "Build artifacts:"
+    ls -la /out/
+
+%labels
+    org.opencontainers.image.title    ARGUS build environment
+    org.opencontainers.image.licenses Apache-2.0
+    org.opencontainers.image.source   https://github.com/KevinWeiss1995/ARGUS
+
+%help
+    Reproducible ARGUS build container for HPC.
+
+    Build the image:
+      apptainer build --fakeroot argus-build.sif argus-build.def
+
+    Use it to build RPMs:
+      mkdir -p out
+      apptainer run --bind $PWD:/src --bind $PWD/out:/out argus-build.sif
+
+    Pass extra args to scripts/build-rpm.sh after the SIF name:
+      apptainer run --bind $PWD:/src --bind $PWD/out:/out argus-build.sif --no-build
