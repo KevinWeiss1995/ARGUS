@@ -180,6 +180,25 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
         ("— idle", Style::default().fg(Color::DarkGray))
     };
 
+    // When the fabric is idle, surface it next to RDMA so operators can
+    // tell "passive monitoring" apart from "monitoring offline." Hardware
+    // error counters keep firing regardless.
+    let fabric_idle = state.metrics.ib_fabric_idle();
+    let max_idle = state.metrics.ib_max_idle_seconds();
+    let (idle_indicator, idle_style) = if !state.metrics.ib_port_idle.is_empty() && fabric_idle {
+        (
+            format!(" | IB: passive ({}s idle)", max_idle),
+            Style::default().fg(Color::Yellow),
+        )
+    } else if !state.metrics.ib_port_idle.is_empty() {
+        (
+            " | IB: traffic".to_string(),
+            Style::default().fg(Color::Green),
+        )
+    } else {
+        (String::new(), Style::default())
+    };
+
     let header_text = Line::from(vec![
         Span::styled(" ARGUS ", Style::default().fg(Color::Cyan).bold()),
         Span::raw("| State: "),
@@ -189,6 +208,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
             state.source_name, state.event_count, state.uptime_secs
         )),
         Span::styled(rdma_indicator, rdma_style),
+        Span::styled(idle_indicator, idle_style),
     ]);
 
     let block = Block::default()
