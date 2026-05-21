@@ -48,7 +48,7 @@ Mock mode generates synthetic events through the full pipeline. Try `--profile p
 ## Deploy on a real node
 
 ```bash
-# As root on any Rocky 8 / RHEL 8 node:
+# As root on any Rocky 8 / RHEL 8 node — no SELinux dep, no extras:
 dnf install -y \
     https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-0.1.0-1.el8.x86_64.rpm
 
@@ -58,22 +58,30 @@ curl -s localhost:9100/health         # confirm: {"state":"HEALTHY",...}
 argus-status                          # human-readable health line
 ```
 
-That's the production install in four commands.
+That's the entire production install. One RPM, no SELinux assumptions,
+no surprise dependency cascades.
 
-**SELinux subpackage — only if the host is actually running SELinux:**
+### Optional: SELinux integration (post-install opt-in)
+
+ARGUS follows the same pattern as its SLURM integration: the code and
+artifacts ship with the main RPM, but enabling them is a site decision.
+The SELinux policy source files install to `/usr/share/argus/selinux/`
+and stay inert until you explicitly opt in. **Nothing about SELinux is
+required to run ARGUS** — if your site doesn't use SELinux, skip this
+entire section.
+
+On hosts where `getenforce` reports `Enforcing` or `Permissive`:
 
 ```bash
-# Check first — output must be "Enforcing" or "Permissive":
-getenforce
-
-# Only then:
-dnf install -y \
-    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-selinux-0.1.0-1.el8.noarch.rpm
+dnf install -y selinux-policy-devel policycoreutils-python-utils
+sudo argus-selinux-enable                   # builds + loads the module
+sudo argus-selinux-enable --status          # verify it's loaded
+sudo argus-selinux-enable --disable         # unload if needed
 ```
 
-Do **not** install `argus-selinux` on hosts where `getenforce` says
-`Disabled` or where the command isn't installed — it'll pull in
-~13 MB of `selinux-policy` packages that won't be used.
+On hosts where `getenforce` says `Disabled`, or where the command
+doesn't exist, do nothing — the shipped policy files are a few KB and
+have no runtime impact.
 
 **Newer releases:** browse <https://github.com/KevinWeiss1995/ARGUS/releases>
 and substitute the tag. Verify the download against the published

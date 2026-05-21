@@ -150,17 +150,13 @@ jobs:
             ## Install on Rocky 8 / RHEL 8
 
             ```bash
-            # Direct install (replace x86_64 with your arch if different):
-            sudo dnf install -y \
+            # As root on any cluster node — no SELinux dependency, no extra subpackages:
+            dnf install -y \
                 https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/argus-${{ steps.version.outputs.version }}-1.el8.x86_64.rpm
 
-            # Optional SELinux subpackage if your nodes run Enforcing:
-            sudo dnf install -y \
-                https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/argus-selinux-${{ steps.version.outputs.version }}-1.el8.noarch.rpm
-
             # Validate, then enable
-            sudo argus-preflight
-            sudo systemctl enable --now argusd
+            argus-preflight
+            systemctl enable --now argusd
             curl -s localhost:9100/health
             ```
 
@@ -170,13 +166,27 @@ jobs:
             sha256sum -c argus-${{ steps.version.outputs.version }}-1.el8.x86_64.rpm.sha256
             ```
 
+            ## Optional: SELinux integration
+
+            On hosts where `getenforce` reports Enforcing or Permissive,
+            opt in to the shipped SELinux policy module post-install:
+
+            ```bash
+            dnf install -y selinux-policy-devel policycoreutils-python-utils
+            sudo argus-selinux-enable
+            ```
+
+            Hosts with SELinux Disabled need no extra step — the policy
+            source files ship at `/usr/share/argus/selinux/` but stay
+            inert. No RPM dependency on SELinux is imposed.
+
             ## What's in this RPM
 
             - Agent binary built against the workspace pinned to commit `${{ github.sha }}`
             - Pre-compiled eBPF object with SHA-256 manifest at `/etc/argus/ebpf.sha256`
             - systemd unit that defaults to `CAP_SYS_ADMIN` (works on RHEL 8.5+ stock kernels including 4.18.0-553.x.el8_10)
-            - argus-preflight, argus-status, argus-tui, argus-discover, argus-scheduler CLI tools
-            - Optional `argus-selinux` subpackage for SELinux Enforcing mode
+            - argus-preflight, argus-status, argus-tui, argus-discover, argus-scheduler, argus-selinux-enable CLI tools
+            - SELinux policy artifacts at `/usr/share/argus/selinux/` (opt-in via `argus-selinux-enable`)
 
             Full deployment guide: [`docs/production-deployment.md`](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.tag }}/docs/production-deployment.md)
 

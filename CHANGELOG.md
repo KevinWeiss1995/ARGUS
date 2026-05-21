@@ -4,6 +4,37 @@ All notable changes are recorded here. Versions follow semver.
 
 ## [0.1.0] — 2026-05-21
 
+### Changed — SELinux is now opt-in post-install (no separate RPM)
+
+The argus-selinux subpackage is **removed**. The policy source files
+(argus.te / .fc / .if) still ship — they now install into the main
+argus RPM at `/usr/share/argus/selinux/`. Loading the policy is a
+deliberate post-install step:
+
+    sudo argus-selinux-enable           # build + load + relabel
+    sudo argus-selinux-enable --status  # check
+    sudo argus-selinux-enable --disable # unload
+
+Rationale: mirrors ARGUS's SLURM pattern. The integration code is
+always shipped, but enabling it is a site decision. Imposing a
+selinux-policy-base `Requires:` (as the old subpackage did) caused
+real damage on hosts running SELinux Disabled — dnf pulled in
+~13 MB of selinux-policy-minimum that the host couldn't use, plus
+rpm-plugin-selinux which then wedged every subsequent dnf transaction.
+
+Net effect for sites:
+
+  - SELinux Disabled  → install argus, done. No SELinux touched.
+  - SELinux Permissive → install argus, optionally run argus-selinux-enable.
+  - SELinux Enforcing  → install argus + dnf install selinux-policy-devel,
+    then argus-selinux-enable. Same outcome as the old subpackage but
+    without the dnf cascade surprises.
+
+The Ansible install role now drives argus-selinux-enable behind
+`argus_install_selinux: true` instead of installing a second RPM.
+
+
+
 ### Added — Pre-built RPM via GitHub release
 
 - `.github/workflows/release.yml` builds a Rocky 8 RPM (and the
