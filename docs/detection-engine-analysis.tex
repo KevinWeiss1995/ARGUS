@@ -1542,10 +1542,122 @@ formula. Detection is reduced but not eliminated.
 This section documents the in-kernel instrumentation that produces the raw
 data the detection engine evaluates.
 
+\subsection{What is eBPF?}
+
+eBPF (extended Berkeley Packet Filter) is a Linux kernel technology that
+allows user-supplied programs to run \emph{inside the kernel} in a sandboxed
+virtual machine. Unlike kernel modules, eBPF programs:
+
+\begin{itemize}[nosep]
+  \item Cannot crash the kernel---the BPF verifier statically analyzes every
+        program before loading, rejecting any that might loop infinitely,
+        access invalid memory, or overflow the stack.
+  \item Cannot allocate dynamic memory or call arbitrary kernel functions.
+  \item Run at near-native speed (JIT-compiled to machine code).
+  \item Can attach to thousands of kernel instrumentation points
+        (tracepoints, kprobes, perf events) without modifying the kernel
+        source or rebooting.
+\end{itemize}
+
+ARGUS uses eBPF to instrument four kernel subsystems without any kernel
+patches, without any kernel modules, and with provably bounded overhead.
+
+\subsection{Why eBPF instead of alternatives?}
+
+\begin{description}[style=nextline,leftmargin=0.5cm]
+  \item[\texttt{/proc} and \texttt{/sys} polling]
+    Reading sysfs counters gives you absolute values with no timing
+    information. You know ``there have been 1000 interrupts'' but not
+    ``interrupts arrived at 5\,$\mu$s intervals'' or ``all interrupts hit
+    CPU~0.'' eBPF gives per-event granularity (which CPU, how long the
+    allocation took, which QP completed) without requiring per-event copies
+    to userspace.
+  \item[Kernel modules]
+    Offer full kernel access but are dangerous: a bug in a module can panic
+    the kernel or corrupt memory. They require matching kernel headers,
+    cannot be verified for safety, and must be rebuilt on kernel upgrades.
+    eBPF programs are verified and portable via CO-RE (Compile Once, Run
+    Everywhere).
+  \item[perf / ftrace]
+    These work well for interactive tracing but generate per-event data that
+    must be read from userspace. At millions of slab allocations per second,
+    the ring buffer bandwidth is prohibitive. ARGUS's eBPF probes aggregate
+    \emph{in-kernel}: they maintain counters and sums in BPF maps, and
+    userspace reads only the summary once per window (10 map reads per
+    3-second window, regardless of event rate).
+\end{description}
+
+\subsection{How ARGUS uses eBPF}
+
+The ARGUS eBPF layer follows a strict pattern:
+
+\begin{enumerate}
+  \item \textbf{Probes fire on kernel events.} Each eBPF program is attached
+        to a kernel tracepoint or function entry/return point (kprobe).
+        The program runs inside the kernel, in the context of the thread
+        that triggered the event.
+  \item \textbf{Probes write to per-CPU maps.} Rather than copying data to
+        userspace per-event, each probe increments counters or accumulates
+        sums in a \texttt{PerCpuArray} map. Per-CPU maps avoid cross-CPU
+        locking---each CPU writes to its own slot, so there is zero
+        contention even under millions of events per second.
+  \item \textbf{Userspace reads maps once per window.} At the end of each
+        3-second window, the agent's main loop reads all maps, sums across
+        CPUs, computes deltas from the previous read, and produces a
+        \texttt{BpfMapSnapshot}. This snapshot is fed to the aggregator and
+        then to the detection engine.
+\end{enumerate}
+
+The result: \textbf{O(1) userspace cost regardless of event rate.} Whether
+the kernel handles 100 interrupts or 10 million interrupts per window, the
+agent performs the same 10 map reads.
+
+\subsection{Attachment types}
+
+ARGUS uses two eBPF attachment mechanisms:
+
+\paragraph{Tracepoints.}
+Stable kernel instrumentation points defined in the kernel source with a
+documented format. Examples: \texttt{irq/irq\_handler\_entry},
+\texttt{kmem/kmem\_cache\_alloc}, \texttt{napi/napi\_poll}. Tracepoints
+survive kernel upgrades---they are part of the kernel ABI. The probe reads
+fields at byte offsets discovered from
+\texttt{/sys/kernel/tracing/events/\textit{category}/\textit{name}/format}
+at startup and written into the \texttt{OFFSETS} BPF map.
+
+\paragraph{Kprobes.}
+Dynamic instrumentation on arbitrary kernel function entry/return points.
+Unlike tracepoints, kprobes are \emph{not} stable---function names and
+signatures can change between kernel versions. ARGUS uses kprobes for two
+purposes: (1)~slab allocation latency measurement (entry/return pairing on
+\texttt{kmem\_cache\_alloc}, a core kernel function that has been stable
+for 20+ years), and (2)~RDMA CQ jitter measurement (entry/return pairing
+on RDMA verbs functions discovered at runtime from \texttt{/proc/kallsyms}).
+
+The RDMA kprobes are driver-specific:
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Driver & WR submit function & CQ poll function \\
+\midrule
+Soft-RoCE (rxe)  & \texttt{rxe\_post\_send}    & \texttt{rxe\_poll\_cq} \\
+Mellanox (mlx5)  & \texttt{mlx5\_ib\_post\_send} & \texttt{mlx5\_ib\_poll\_cq} \\
+Intel OPA (hfi1) & \texttt{hfi1\_post\_send}    & \texttt{hfi1\_poll\_cq} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+If neither function is present in \texttt{/proc/kallsyms} (e.g., no RDMA
+driver loaded), CQ jitter probes are silently skipped and the
+\texttt{CqJitterRule} relies on estimated p99 from sysfs counters instead.
+
 \subsection{Probe programs}
 
-The eBPF object (\texttt{argus-ebpf/src/}) contains four source files, each
-implementing probes for a specific subsystem:
+The eBPF object (\texttt{argus-ebpf/src/}) is written in Rust using the
+\texttt{aya} framework and compiled with \texttt{clang} to BPF bytecode.
+It contains four source files:
 
 \begin{table}[h]
 \centering
@@ -1589,27 +1701,142 @@ Map name & Type & Contents \\
 \caption{All BPF maps declared in \texttt{argus-ebpf/src/main.rs}.}
 \end{table}
 
-\subsection{CQ jitter measurement path}
+\subsection{The OFFSETS map: how probes read kernel structures}
 
-The CQ latency measurement works by correlating work request (WR) submission
-timestamps with completion queue (CQ) poll return values:
+Different kernel versions lay out tracepoint arguments and kernel structs at
+different byte offsets. Rather than hardcoding offsets (which breaks on
+kernel upgrades), ARGUS discovers them at startup:
 
 \begin{enumerate}[nosep]
-  \item \textbf{WR submit kprobe}: Reads \texttt{qp\_num} from the
-        \texttt{ib\_qp} struct (using BTF offsets from \texttt{OFFSETS}),
-        stores \texttt{(qp\_num $\rightarrow$ ktime\_ns)} in
-        \texttt{WR\_TIMESTAMPS} and \texttt{(qp\_num $\rightarrow$ pid)} in
-        \texttt{QP\_OWNERS}.
-  \item \textbf{CQ poll entry kprobe}: Saves the \texttt{ib\_wc} pointer
-        in \texttt{CQ\_POLL\_SCRATCH}.
-  \item \textbf{CQ poll kretprobe}: Iterates up to
-        $\min(\texttt{num\_completions}, 8)$ completions with stride 80 bytes.
-        For each, reads \texttt{wc[i].qp $\rightarrow$ qp\_num}, looks up
-        the submit timestamp in \texttt{WR\_TIMESTAMPS}, computes
-        $\texttt{latency} = \texttt{now} - \texttt{submit\_ts}$, and updates
-        \texttt{CQ\_JITTER\_STATS}. If the WR timestamp lookup fails (LRU
-        eviction), increments \texttt{LRU\_MISSES[0]}.
+  \item \textbf{Tracepoint field offsets}: Parsed from
+        \texttt{/sys/kernel/tracing/events/\textit{cat}/\textit{name}/format},
+        which describes the binary layout of each tracepoint's argument
+        buffer. For example, \texttt{napi/napi\_poll/format} contains the
+        byte offsets of the \texttt{work} and \texttt{budget} fields.
+  \item \textbf{Struct field offsets}: Discovered from BTF (BPF Type
+        Format) metadata embedded in the kernel, or from hardcoded
+        fallback values. Used for reading \texttt{ib\_qp.qp\_num} and
+        \texttt{ib\_wc.qp} via \texttt{bpf\_probe\_read\_kernel}.
 \end{enumerate}
+
+These offsets are written into the \texttt{OFFSETS} BPF map before any
+probes are attached. If an offset is zero (not discovered), the
+corresponding probe silently returns without recording data---graceful
+degradation, no crash.
+
+\begin{center}
+\small
+\begin{tabular}{cl}
+\toprule
+Index & What it stores \\
+\midrule
+0 & \texttt{irq/irq\_handler\_entry} $\rightarrow$ \texttt{irq} field offset \\
+1 & \texttt{napi/napi\_poll} $\rightarrow$ \texttt{work} field offset \\
+2 & \texttt{napi/napi\_poll} $\rightarrow$ \texttt{budget} field offset \\
+3 & \texttt{kmem/kmem\_cache\_alloc} $\rightarrow$ \texttt{bytes\_req} field offset \\
+4 & \texttt{kmem/kmem\_cache\_alloc} $\rightarrow$ \texttt{bytes\_alloc} field offset \\
+5 & \texttt{struct ib\_qp} $\rightarrow$ \texttt{qp\_num} byte offset (BTF) \\
+6 & \texttt{struct ib\_wc} $\rightarrow$ \texttt{qp} pointer byte offset (BTF) \\
+7 & (reserved) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Probe details: slab allocation monitoring}
+
+The slab subsystem is monitored by four cooperating eBPF programs:
+
+\paragraph{Byte accounting (tracepoints).}
+\texttt{trace\_kmem\_cache\_alloc} fires on every completed slab allocation.
+It reads \texttt{bytes\_req} and \texttt{bytes\_alloc} from the tracepoint
+arguments (at offsets from \texttt{OFFSETS[3]} and \texttt{OFFSETS[4]}) and
+accumulates them into \texttt{SLAB\_STATS}: increments \texttt{alloc\_count},
+adds to \texttt{total\_bytes\_req} and \texttt{total\_bytes\_alloc}.
+\texttt{trace\_kmem\_cache\_free} increments \texttt{free\_count}.
+
+A tracepoint fires \emph{after} the allocation completes, so it can see
+the result but not the duration. Latency requires a different approach.
+
+\paragraph{Latency measurement (kprobe/kretprobe pair).}
+\texttt{kprobe\_slab\_alloc\_entry} fires at the \emph{entry} of
+\texttt{kmem\_cache\_alloc}. It records \texttt{(pid\_tgid, ktime\_ns)} in
+the \texttt{SLAB\_ALLOC\_SCRATCH} map. When the function returns,
+\texttt{kretprobe\_slab\_alloc} looks up the entry timestamp, computes
+$\texttt{delta\_ns} = \texttt{now} - \texttt{entry\_ts}$, and adds it to
+\texttt{SLAB\_STATS[4]} (total latency). If the delta exceeds the current
+maximum in \texttt{SLAB\_STATS[5]}, the max is updated.
+
+If the scratch lookup fails (the LRU evicted the entry under heavy
+concurrent allocation pressure), \texttt{LRU\_MISSES[1]} is incremented
+and the latency sample is lost. With 256 scratch slots, this only occurs
+under extreme concurrency ($>256$ simultaneous in-flight
+\texttt{kmem\_cache\_alloc} calls).
+
+\subsection{Probe details: interrupt and NAPI monitoring}
+
+\paragraph{IRQ distribution.}
+\texttt{trace\_irq\_handler\_entry} attaches to \texttt{irq/irq\_handler\_entry},
+which fires on every hardware interrupt. The probe increments a single
+\texttt{u64} counter in \texttt{IRQ\_COUNTS} on the current CPU. Because
+\texttt{PerCpuArray} gives each CPU its own slot, there is zero contention.
+Userspace reads all per-CPU slots and computes the distribution: which CPU
+handles what fraction of interrupts.
+
+\paragraph{NAPI saturation.}
+\texttt{trace\_napi\_poll} attaches to \texttt{napi/napi\_poll}, which fires
+when the kernel's NAPI subsystem polls a NIC for received packets. The probe
+reads the \texttt{work} (packets processed) and \texttt{budget} (maximum
+allowed) fields and accumulates both into \texttt{NAPI\_STATS}. Userspace
+computes utilization as $\texttt{total\_work} / \texttt{total\_budget}$.
+When this ratio approaches 1.0, the NIC's polling budget is exhausted every
+cycle---the system cannot process packets fast enough.
+
+\subsection{Probe details: CQ jitter measurement}
+
+The most complex probe set. Measures the time between RDMA work request
+submission and completion queue polling---a proxy for RDMA operation latency
+visible to the kernel.
+
+\paragraph{Step 1: WR submit kprobe.}
+Attaches to the driver's \texttt{post\_send} function (e.g.,
+\texttt{rxe\_post\_send}). Reads \texttt{ibqp->qp\_num} via
+\texttt{bpf\_probe\_read\_kernel} at the BTF-discovered offset
+(\texttt{OFFSETS[5]}). Stores \texttt{(qp\_num $\rightarrow$ ktime\_ns)}
+in \texttt{WR\_TIMESTAMPS} and \texttt{(qp\_num $\rightarrow$ pid)} in
+\texttt{QP\_OWNERS} (for blast-radius attribution---identifying which
+process owns a degraded QP).
+
+\paragraph{Step 2: CQ poll entry kprobe.}
+Attaches to the driver's \texttt{poll\_cq} function. Saves the
+\texttt{ib\_wc *wc} pointer (argument 2) in \texttt{CQ\_POLL\_SCRATCH}
+keyed by \texttt{pid\_tgid}. This pointer is needed by the kretprobe to
+walk the completion array.
+
+\paragraph{Step 3: CQ poll kretprobe.}
+Fires after \texttt{poll\_cq} returns. The return value is the number of
+completions polled (or negative on error). The probe:
+
+\begin{enumerate}[nosep]
+  \item Retrieves the \texttt{wc} base pointer from \texttt{CQ\_POLL\_SCRATCH}.
+  \item Iterates up to $\min(\texttt{num\_completions}, 8)$ entries.
+        The cap of 8 is required by the BPF verifier (all loops must be
+        bounded at compile time).
+  \item For each \texttt{wc[i]}: reads \texttt{wc[i].qp} (pointer to
+        \texttt{ib\_qp}) at offset \texttt{OFFSETS[6]}, then reads
+        \texttt{qp->qp\_num} at offset \texttt{OFFSETS[5]}.
+  \item Looks up \texttt{qp\_num} in \texttt{WR\_TIMESTAMPS} to find the
+        submit time. Computes $\texttt{delta\_ns} = \texttt{now} -
+        \texttt{submit\_ts}$.
+  \item Updates \texttt{CQ\_JITTER\_STATS}: increments completion count,
+        adds \texttt{delta\_ns} to total, updates max if larger, and
+        increments \texttt{stall\_count} if $\texttt{delta\_ns} > 50{,}000$
+        (50\,$\mu$s).
+  \item If the \texttt{WR\_TIMESTAMPS} lookup fails (LRU eviction),
+        increments \texttt{LRU\_MISSES[0]} instead.
+\end{enumerate}
+
+\texttt{struct ib\_wc} is 72 bytes on 64-bit kernels; the probe uses a
+conservative stride of 80 bytes between array elements.
 
 \begin{warningbox}
   The LRU maps have fixed capacity. Under high QP counts ($>4096$ active
@@ -1618,6 +1845,78 @@ timestamps with completion queue (CQ) poll return values:
   \texttt{argus\_ebpf\_lru\_evictions\{map=cq\}} Prometheus counter tracks
   this. If eviction rates are high, the CQ jitter metrics become unreliable.
 \end{warningbox}
+
+\subsection{Userspace map reading: delta computation}
+
+The userspace reader (\texttt{sources/ebpf.rs}) maintains a
+\texttt{prev\_*} array for each cumulative map. On each read:
+
+\[
+  \texttt{delta} = \texttt{current\_total} - \texttt{prev\_total}
+  \quad (\text{via \texttt{saturating\_sub}})
+\]
+
+For max-valued fields (\texttt{slab\_max\_latency\_ns},
+\texttt{cq\_max\_latency\_ns}), the map is \emph{rearmed} after reading:
+the userspace writer zeros the max slot on each CPU so the next window
+starts with a fresh maximum. Cumulative fields (counts, totals) are never
+zeroed---only deltas are computed.
+
+\paragraph{Warmup read.}
+The main loop performs one ``warmup'' BPF snapshot read \emph{before}
+entering the detection loop. This primes the \texttt{prev\_*} buffers so
+the first real window produces meaningful deltas (not ``everything since
+boot'').
+
+\subsection{Graceful degradation}
+
+Probe attachment is best-effort. If any probe fails to load (e.g., the
+kernel lacks a tracepoint, or the RDMA driver is not present), the agent
+logs a warning and continues with the probes that succeeded. The only fatal
+condition is if \emph{zero} probes attach---the agent cannot do useful work.
+
+On a system with no RDMA driver: tracepoints for IRQ, slab, and NAPI
+attach normally; CQ jitter kprobes are silently skipped; the detection
+engine operates on host-level signals only; capability coverage grade
+drops to C or F depending on sysfs counters.
+
+\subsection{eBPF verifier constraints}
+
+All eBPF programs must pass the Linux BPF verifier before loading. ARGUS
+probes are written to comply with these constraints:
+
+\begin{itemize}[nosep]
+  \item \textbf{No unbounded loops.} The CQ poll kretprobe iterates at most
+        8 times (\texttt{MAX\_ENTRIES = 8}), with an explicit
+        \texttt{while i < MAX\_ENTRIES} guard.
+  \item \textbf{No dynamic allocation.} All storage is in pre-sized BPF maps.
+  \item \textbf{No recursion.} Each probe is a single function.
+  \item \textbf{Bounded stack.} eBPF programs have a 512-byte stack limit.
+        ARGUS probes use only local scalars and pointers.
+  \item \textbf{Valid memory access.} All kernel memory reads use
+        \texttt{bpf\_probe\_read\_kernel}; all map accesses check for
+        \texttt{None}/null before dereferencing.
+  \item \textbf{Offset bounds checking.} Every offset read from the
+        \texttt{OFFSETS} map is bounds-checked against 256 before use as
+        a pointer offset. This prevents the verifier from rejecting the
+        program for unbounded pointer arithmetic.
+\end{itemize}
+
+\subsection{Performance characteristics}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+Property & Value \\
+\midrule
+Per-event overhead & $<5\,\mu$s (tracepoints $\sim$200\,ns, kprobes $\sim$1--5\,$\mu$s with \texttt{bpf\_probe\_read\_kernel}) \\
+Userspace cost per window & 10 BPF map reads (constant, independent of event rate) \\
+Memory footprint & $\sim$7\,KB eBPF object; maps total $\sim$500\,KB (dominated by per-CPU arrays $\times$ CPU count) \\
+Kernel version & Minimum 4.18; full functionality at 5.8+ (BTF support) \\
+CPU overhead & $<1$\% at 1M events/sec on modern hardware \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 
 % ============================================================================
@@ -2057,8 +2356,10 @@ The production \texttt{argusd.service} unit applies 30+ hardening directives:
         \texttt{@io-event}, \texttt{@network-io}) with explicit denylists
         (\texttt{@mount}, \texttt{@swap}, \texttt{@reboot}, \texttt{ptrace},
         \texttt{process\_vm\_readv/writev})
-  \item \texttt{ProtectProc=invisible}, \texttt{ProcSubset=pid} (hides other
-        processes)
+  \item \texttt{ProtectProc=invisible} (hides other processes' directories in
+        \texttt{/proc}; \texttt{ProcSubset=pid} is deliberately \emph{not} used
+        because it hides \texttt{/proc/kallsyms} and
+        \texttt{/proc/sys/kernel/osrelease}, both required by the eBPF loader)
   \item \texttt{RestrictAddressFamilies=AF\_INET AF\_INET6 AF\_UNIX AF\_NETLINK}
   \item \texttt{NoNewPrivileges=yes}, \texttt{SecureBits=noroot-locked}
   \item \texttt{CapabilityBoundingSet}: only \texttt{CAP\_BPF},
@@ -2081,7 +2382,9 @@ startup.
   \item Optional TLS with certificate hot-reloading via SIGHUP
   \item Bearer token authentication with constant-time comparison
         (prevents timing side-channels)
-  \item Default bind to \texttt{127.0.0.1:9100} (loopback only)
+  \item Default bind to \texttt{0.0.0.0:9100} (all interfaces, for
+        Prometheus scraping and \texttt{argus-discover}; restrict with
+        \texttt{ARGUS\_METRICS\_TOKEN} for untrusted networks)
   \item Connection semaphore and idle timeout for DoS protection
   \item Config file (\texttt{argusd.conf}) installed mode 0640 to protect
         token values from local users
