@@ -1,0 +1,61 @@
+{{/* Subject line — short, severity-first, node-second. */}}
+{{ define "argus.email.subject" }}[{{ .Status | toUpper }}] {{ .CommonLabels.severity }} — {{ if .CommonLabels.alertname }}{{ .CommonLabels.alertname }}{{ end }} on {{ if .CommonLabels.instance }}{{ .CommonLabels.instance }}{{ else }}fleet{{ end }}{{ end }}
+
+{{/* Plain-text body for mail clients without HTML. */}}
+{{ define "argus.email.text" }}
+ARGUS alert digest — {{ .Status | toUpper }} ({{ .Alerts | len }} alert{{ if ne (len .Alerts) 1 }}s{{ end }})
+
+{{ range .Alerts -}}
+─────────────────────────────────────────────
+[{{ .Labels.severity }}] {{ .Labels.alertname }}
+Node:      {{ .Labels.instance }}
+{{- if .Labels.device }}
+Device:    {{ .Labels.device }}{{ if .Labels.port }} (port {{ .Labels.port }}){{ end }}
+{{- end }}
+Started:   {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}
+{{- if eq .Status "resolved" }}
+Resolved:  {{ .EndsAt.Format "2006-01-02 15:04:05 MST" }}
+{{- end }}
+
+{{ .Annotations.summary }}
+
+{{ .Annotations.description }}
+{{- if .Annotations.runbook }}
+
+Runbook: {{ .Annotations.runbook }}
+{{- end }}
+{{- if .Annotations.dashboard }}
+Dashboard: {{ .Annotations.dashboard }}
+{{- end }}
+
+{{ end -}}
+─────────────────────────────────────────────
+View in Alertmanager: {{ .ExternalURL }}
+{{ end }}
+
+{{/* HTML body — minimal styling so it survives most enterprise mail relays. */}}
+{{ define "argus.email.html" }}
+<!doctype html>
+<html><body style="font-family: -apple-system, Segoe UI, sans-serif; color:#222; line-height:1.4;">
+<h2 style="margin:0 0 12px 0;">ARGUS alert digest — {{ .Status | toUpper }}</h2>
+<p style="margin:0 0 16px 0; color:#555;">{{ .Alerts | len }} alert{{ if ne (len .Alerts) 1 }}s{{ end }}</p>
+
+{{ range .Alerts }}
+<div style="border-left:4px solid {{ if eq .Labels.severity "CRITICAL" }}#c0392b{{ else if eq .Labels.severity "DEGRADED" }}#e67e22{{ else }}#3498db{{ end }}; padding:8px 12px; margin-bottom:14px; background:#f7f7f7;">
+  <div style="font-weight:600; font-size:15px;">[{{ .Labels.severity }}] {{ .Labels.alertname }}</div>
+  <div style="font-size:13px; color:#555; margin:4px 0 8px 0;">
+    {{ .Labels.instance }}{{ if .Labels.device }} / {{ .Labels.device }}{{ if .Labels.port }} port {{ .Labels.port }}{{ end }}{{ end }}
+    &middot; started {{ .StartsAt.Format "2006-01-02 15:04 MST" }}
+    {{ if eq .Status "resolved" }}&middot; <span style="color:#27ae60;">resolved {{ .EndsAt.Format "15:04 MST" }}</span>{{ end }}
+  </div>
+  <div style="font-weight:500;">{{ .Annotations.summary }}</div>
+  <div style="font-size:13px; margin-top:6px; white-space:pre-wrap;">{{ .Annotations.description }}</div>
+  {{ if .Annotations.runbook }}<div style="font-size:12px; margin-top:6px;"><a href="{{ .Annotations.runbook }}">Runbook</a></div>{{ end }}
+</div>
+{{ end }}
+
+<p style="font-size:12px; color:#888;">
+  <a href="{{ .ExternalURL }}">View in Alertmanager</a>
+</p>
+</body></html>
+{{ end }}
