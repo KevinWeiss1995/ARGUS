@@ -280,6 +280,41 @@ ok "Runtime directories (/var/lib/argus, /var/run/argus)"
 info "Installing systemd unit to $INSTALL_UNIT"
 mkdir -p "$(dirname "$INSTALL_UNIT")"
 install -m 0644 "$REPO_ROOT/deploy/argusd.service" "$INSTALL_UNIT"
+
+# Stage the optional modern-caps drop-in to /usr/share/argus/systemd/
+# so operators on kernel 5.8+ with modern systemd can opt in to
+# fine-grained capabilities (CAP_BPF/CAP_PERFMON) instead of the
+# CAP_SYS_ADMIN default. Not auto-activated.
+mkdir -p /usr/share/argus/systemd
+install -m 0644 "$REPO_ROOT/deploy/systemd/modern-caps.conf" \
+    /usr/share/argus/systemd/modern-caps.conf
+ok "Staged modern-caps drop-in at /usr/share/argus/systemd/modern-caps.conf"
+
+# Auto-activation criterion: kernel >= 5.8 (upstream cutoff for CAP_BPF).
+# On RHEL 8.x even with the kernel backport, systemd 239 in stock RHEL 8
+# does NOT understand the CAP_BPF / CAP_PERFMON unit-file names, so we
+# explicitly leave the drop-in inactive on RHEL 8 regardless of kernel
+# revision. RHEL 9 / Rocky 9 + systemd 252 do understand them.
+KREL=$(uname -r 2>/dev/null || echo "")
+KMAJOR=$(echo "$KREL" | awk -F. '{print $1+0}')
+KMINOR=$(echo "$KREL" | awk -F. '{print $2+0}')
+IS_RHEL8=false
+if [[ "$KREL" == *.el8* ]]; then IS_RHEL8=true; fi
+DROPIN_DIR="/etc/systemd/system/argusd.service.d"
+DROPIN_FILE="$DROPIN_DIR/modern-caps.conf"
+if ! $IS_RHEL8 && { (( KMAJOR > 5 )) || { (( KMAJOR == 5 )) && (( KMINOR >= 8 )); }; }; then
+    if [[ ! -f "$DROPIN_FILE" ]]; then
+        info "Kernel $KREL ≥ 5.8 (non-RHEL-8) — activating modern-caps drop-in"
+        mkdir -p "$DROPIN_DIR"
+        install -m 0644 /usr/share/argus/systemd/modern-caps.conf "$DROPIN_FILE"
+        ok "$DROPIN_FILE"
+    else
+        ok "Modern-caps drop-in already present at $DROPIN_FILE"
+    fi
+else
+    info "Kernel $KREL — using default CAP_SYS_ADMIN unit (safe on RHEL 8 + older kernels)"
+fi
+
 systemctl daemon-reload
 ok "$INSTALL_UNIT (daemon-reload done)"
 
