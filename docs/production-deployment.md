@@ -9,21 +9,48 @@ start — none of this document is required for that.
 
 ## 1. Prerequisites
 
-| Component               | Requirement                                       | Why                                                  |
-| ----------------------- | ------------------------------------------------- | ---------------------------------------------------- |
-| Linux kernel            | ≥ 5.4 (5.8+ recommended)                          | CAP_BPF + BTF for CO-RE eBPF                          |
-| BTF                     | `/sys/kernel/btf/vmlinux` readable                | required for CO-RE eBPF                              |
-| InfiniBand stack        | `/sys/class/infiniband` populated (or skip live)  | counter polling                                      |
-| systemd                 | any modern version                                | unit file                                            |
-| chronyd / ntpd          | active and synced                                 | cross-node alert correlation                         |
-| SELinux                 | Permissive *or* `argus-selinux` subpackage loaded | enforcing mode without the policy will block BPF    |
-| firewalld               | port 9100/tcp allowed (or disabled on internal net) | Prometheus/Zabbix scrape path                        |
+| Component               | Requirement                                                                      | Why                                                  |
+| ----------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Linux kernel            | RHEL/Rocky/Alma 8.5+ stock (4.18 + backports), or upstream ≥ 5.4                  | BPF programs, kprobes, tracepoints                   |
+| BTF                     | Best if present; ARGUS ships compiled-in fallbacks covering RHEL 8                | improves CO-RE accuracy, not strictly required       |
+| InfiniBand stack        | `/sys/class/infiniband` populated (or skip live mode)                             | counter polling                                      |
+| systemd                 | any version (RHEL 8's systemd 239 works with the default unit)                    | unit file                                            |
+| chronyd / ntpd          | active and synced                                                                 | cross-node alert correlation                         |
+| SELinux                 | Permissive *or* `argus-selinux` subpackage loaded                                 | Enforcing mode without the policy will block BPF     |
+| firewalld               | port 9100/tcp allowed (or disabled on internal net)                               | Prometheus/Zabbix scrape path                        |
 
-Rocky 8 ships with kernel 4.18. **You need a newer kernel.** Options:
+### RHEL 8 / Rocky 8 kernel matrix
 
-- Install ELRepo kernel-ml (recommended): `dnf install -y elrepo-release && dnf install -y kernel-ml`.
-- Use a RHEL 8.4+ kernel with backported BPF (subset of features only — preflight will warn).
-- For test-only sites: run ARGUS in mock/replay mode, which has no kernel requirement.
+RHEL 8 stock kernels report as `4.18.0` regardless of which point release
+they came from. The backports for BPF features land at different RHEL
+minor versions:
+
+| RHEL/Rocky 8.x         | Kernel revision               | Status with default unit                          |
+| ---------------------- | ----------------------------- | ------------------------------------------------- |
+| 8.10 (current)         | `4.18.0-553.*`                | **Fully supported**                                |
+| 8.5 — 8.9              | `4.18.0-348.*` — `4.18.0-513.*` | **Fully supported**                                |
+| 8.4 and older          | `4.18.0-305.*` and earlier    | Best-effort; upgrade or install ELRepo kernel-ml   |
+| Pre-RHEL-8 / non-EL    | any 4.18 without `.el8` tag   | Not validated; run in mock mode first              |
+
+`argus-preflight` distinguishes these cases automatically. RHEL 9 / Rocky 9
+(kernel 5.14.0) is fully supported by definition.
+
+The systemd unit defaults to `CAP_SYS_ADMIN`, which works on every
+supported configuration including stock RHEL 8 (whose systemd 239 does
+not recognize the `CAP_BPF` capability name in unit files). On kernel
+5.8+ outside the RHEL 8 family, the installers auto-activate the
+`CAP_BPF` + `CAP_PERFMON` fine-grained drop-in at
+`/etc/systemd/system/argusd.service.d/modern-caps.conf`.
+
+For sites that want to push beyond 8.4:
+
+```bash
+sudo dnf install -y elrepo-release
+sudo dnf install -y kernel-ml      # ELRepo mainline kernel; reboot to activate
+```
+
+For test-only sites with no IB hardware, `--mode mock` runs the full
+detection pipeline on any kernel with no eBPF requirement.
 
 ## 2. Build the RPM
 
@@ -226,7 +253,7 @@ boundary — no migration step is required.
 | `/health` returns 503 or timeout              | `argus-preflight`, then firewalld and SELinux    |
 | All nodes Healthy but no IB metrics           | `/sys/class/infiniband` empty? IB driver loaded? |
 | Metric values frozen                          | Aggregator stuck — `argus-status --watch`         |
-| `bpf_prog_load(...): Operation not permitted` | Kernel <5.8 without CAP_SYS_ADMIN fallback        |
+| `bpf_prog_load(...): Operation not permitted` | systemd unit didn't grant CAP_SYS_ADMIN (or CAP_BPF if you switched to the modern-caps drop-in) |
 | SELinux denials in audit.log                  | See `docs/troubleshooting.md`                    |
 
 See `docs/troubleshooting.md` for the full playbook.
