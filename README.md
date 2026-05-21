@@ -61,25 +61,28 @@ every step.
 
 ### 0. Prerequisites (all paths)
 
-| Component         | Requirement                                          |
-| ----------------- | ---------------------------------------------------- |
-| Linux kernel      | ≥ 5.4 (5.8+ recommended for CAP_BPF)                  |
-| BTF               | `/sys/kernel/btf/vmlinux` readable                   |
-| InfiniBand stack  | `/sys/class/infiniband` populated (or skip live)      |
-| systemd           | any recent version                                   |
-| chronyd or ntpd   | active (fleet-wide alert correlation needs it)        |
+| Component         | Requirement                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| Linux kernel      | RHEL/Rocky 8.5+ stock (4.18 with backports), or any upstream ≥ 5.4           |
+| BTF               | Best if present; ARGUS ships compiled-in offset fallbacks for RHEL 8         |
+| InfiniBand stack  | `/sys/class/infiniband` populated (or skip live mode)                        |
+| systemd           | any recent version (RHEL 8's systemd 239 works with the default unit)        |
+| chronyd or ntpd   | active (fleet-wide alert correlation needs it)                               |
 
-**Rocky 8 / RHEL 8 ship with kernel 4.18.** For ARGUS live mode you need a newer kernel:
+**RHEL 8 / Rocky 8 stock kernels are fully supported.** RHEL 8.5 onward
+(kernel `4.18.0-348.*` and later) ships every BPF feature ARGUS needs via
+Red Hat backports. The systemd unit defaults to `CAP_SYS_ADMIN` so it
+works across stock RHEL 8 systemd 239 and modern systemd alike. On kernel
+≥ 5.8 outside the RHEL 8 family, the installers auto-activate a
+fine-grained `CAP_BPF` + `CAP_PERFMON` drop-in.
+
+For RHEL 8.4 or older, either upgrade the OS (recommended) or install
+ELRepo `kernel-ml`. The preflight check will mark these explicitly.
+
+Validate any host with `scripts/argus-preflight` before installing:
 
 ```bash
-sudo dnf install -y elrepo-release
-sudo dnf install -y kernel-ml      # ELRepo mainline kernel; reboot to activate
-```
-
-Validate the host with `scripts/argus-preflight` before installing:
-
-```bash
-sudo ./scripts/argus-preflight     # OK / WARN / FAIL per check
+sudo ./scripts/argus-preflight     # OK / WARN / FAIL per check, exits non-zero on FAIL
 ```
 
 ### Path 1 — Source install (single host)
