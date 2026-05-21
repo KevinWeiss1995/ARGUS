@@ -84,6 +84,11 @@ struct ArgusPrometheusMetrics {
     timescale_score_millis: Family<Vec<(String, String)>, Gauge>,
     burst_classification: Family<Vec<(String, String)>, Gauge>,
     ebpf_lru_evictions: Family<Vec<(String, String)>, Counter>,
+    // IB fabric idle visibility. Idle means "no throughput observed this
+    // window" — hardware error counters keep firing regardless.
+    ib_port_idle_seconds: Family<Vec<(String, String)>, Gauge>,
+    ib_fabric_idle: Gauge,
+    ib_max_idle_seconds: Gauge,
 }
 
 impl PrometheusExporter {
@@ -480,6 +485,27 @@ impl PrometheusExporter {
             ebpf_lru_evictions.clone(),
         );
 
+        let ib_port_idle_seconds = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_port_idle_seconds",
+            "Seconds since the labelled IB port last observed any throughput. Hardware error monitoring continues regardless of idle state — passive monitoring of an idle link is still real monitoring.",
+            ib_port_idle_seconds.clone(),
+        );
+
+        let ib_fabric_idle = Gauge::default();
+        registry.register(
+            "argus_ib_fabric_idle",
+            "1 when every discovered IB port has been idle for at least one window; 0 when any port has traffic. Always 0 if no ports are discovered.",
+            ib_fabric_idle.clone(),
+        );
+
+        let ib_max_idle_seconds = Gauge::default();
+        registry.register(
+            "argus_ib_max_idle_seconds",
+            "Largest idle-seconds value across all discovered IB ports.",
+            ib_max_idle_seconds.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -537,6 +563,9 @@ impl PrometheusExporter {
             timescale_score_millis,
             burst_classification,
             ebpf_lru_evictions,
+            ib_port_idle_seconds,
+            ib_fabric_idle,
+            ib_max_idle_seconds,
         };
 
         Self {
@@ -665,6 +694,25 @@ impl PrometheusExporter {
             0.0
         };
         self.metrics.napi_utilization_pct.set(napi_util as i64);
+
+        // IB fabric idle visibility — operators distinguish "no traffic but
+        // we're still watching the link" from "monitoring is offline."
+        // Hardware error counters always fire regardless of this state.
+        for port in &metrics.ib_port_idle {
+            self.metrics
+                .ib_port_idle_seconds
+                .get_or_create(&vec![
+                    ("device".to_string(), port.device.clone()),
+                    ("port".to_string(), port.port.to_string()),
+                ])
+                .set(port.idle_seconds as i64);
+        }
+        self.metrics
+            .ib_fabric_idle
+            .set(if metrics.ib_fabric_idle() { 1 } else { 0 });
+        self.metrics
+            .ib_max_idle_seconds
+            .set(metrics.ib_max_idle_seconds() as i64);
 
         // IB counters (aggregate — includes both hard and soft/rxe errors)
         self.metrics
