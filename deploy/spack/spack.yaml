@@ -1,0 +1,60 @@
+# Spack environment for ARGUS build dependencies.
+#
+# Two ways to use this:
+#
+# 1. To get a fully-managed install of ARGUS itself (recommended):
+#
+#       spack repo add /path/to/ARGUS/deploy/spack
+#       spack install argus
+#       spack load argus
+#       argusd --mode mock --tui      # unprivileged smoke test
+#
+#    Spack materializes Rust, LLVM, OpenSSL, etc. from its own packaging
+#    layer — nothing gets installed bare-metal on the build host.
+#
+# 2. To get JUST the build dependencies as Lmod modules and then build
+#    ARGUS yourself with `cargo build`:
+#
+#       spack env activate -p /path/to/ARGUS/deploy/spack
+#       spack install
+#       # Lmod auto-generates modules; load them with:
+#       spack env loads -r > load.sh && source load.sh
+#       cargo build --release --workspace
+#
+#    Useful when you want cargo's caching / partial rebuild behaviour
+#    instead of letting Spack rebuild from scratch each time.
+#
+# Sites that prefer their own toolchain versions can edit the version
+# specs below.
+
+spack:
+  specs:
+    - rust@1.83.0
+    - llvm@17 +clang
+    - openssl
+    - pkg-config
+    - git
+
+  view: true
+
+  concretizer:
+    unify: true
+    reuse: true
+
+  modules:
+    default:
+      enable:
+        - lmod
+      lmod:
+        hash_length: 0
+        whitelist:
+          - rust
+          - llvm
+          - openssl
+        projections:
+          all: '{name}/{version}'
+
+  # When the argus package is being installed via this env, point at
+  # the in-repo recipe so users don't need a separate `spack repo add`.
+  repos:
+    - $env/../
