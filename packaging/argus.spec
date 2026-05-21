@@ -53,21 +53,6 @@ behavior related to RDMA networking, interrupt handling, and memory
 allocation in real time. It detects early signs of InfiniBand degradation
 or system imbalance before application performance collapses.
 
-%package selinux
-Summary:        SELinux policy module for ARGUS
-Requires:       %{name} = %{version}-%{release}
-Requires:       selinux-policy-base
-Requires(post): policycoreutils
-Requires(postun): policycoreutils
-BuildArch:      noarch
-
-%description selinux
-SELinux policy module that allows argusd to run under SELinux Enforcing on
-Rocky 8 / RHEL 8. Grants CAP_BPF, sysfs/IB read access, port 9100 bind, and
-write access to /var/lib/argus and /run/argus. Install on hosts where
-`getenforce` reports `Enforcing`; on Permissive/Disabled hosts it is a
-no-op.
-
 %prep
 %autosetup -n %{name}-%{version}
 
@@ -115,7 +100,7 @@ install -Dpm 0644 packaging/tmpfiles.d/argus.conf \
     %{buildroot}%{_tmpfilesdir}/argus.conf
 
 # CLI tools
-for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight; do
+for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight argus-selinux-enable; do
     install -Dpm 0755 scripts/${tool} %{buildroot}%{_bindir}/${tool}
 done
 ln -sf argusd %{buildroot}%{_bindir}/argus-tui
@@ -170,20 +155,12 @@ fi
 %postun
 %systemd_postun_with_restart argusd.service
 
-%post selinux
-# Load the policy module on install or upgrade. semodule -i is idempotent.
-if [ -f %{_datadir}/argus/selinux/argus.pp ]; then
-    /usr/sbin/semodule -i %{_datadir}/argus/selinux/argus.pp 2>/dev/null || :
-    # Re-label installed paths so the new types take effect immediately.
-    /usr/sbin/restorecon -RFv %{_bindir}/argusd %{_sysconfdir}/argus \
-        %{_sharedstatedir}/argus %{_rundir}/argus 2>/dev/null || :
-fi
-
-%postun selinux
-# Only unload on full uninstall ($1 == 0), not on upgrade ($1 == 1).
-if [ $1 -eq 0 ]; then
-    /usr/sbin/semodule -r argus 2>/dev/null || :
-fi
+# SELinux policy is shipped as an opt-in artifact at
+# /usr/share/argus/selinux/, NOT loaded automatically. Operators run
+# `argus-selinux-enable` on Enforcing/Permissive hosts when they want
+# the policy active. Mirrors the SLURM pattern: the integration code is
+# always present in the RPM, but enabling it is a deliberate choice
+# made at the site level.
 
 %files
 %license LICENSE
@@ -198,6 +175,7 @@ fi
 %{_bindir}/argus-manage-targets
 %{_bindir}/argus-scheduler
 %{_bindir}/argus-preflight
+%{_bindir}/argus-selinux-enable
 
 # eBPF artifact
 %dir %{_libdir}/argus
@@ -216,25 +194,28 @@ fi
 %dir %{_datadir}/argus/systemd
 %{_datadir}/argus/systemd/modern-caps.conf
 
-# State directories
-%dir %attr(0750,root,root) %{_sharedstatedir}/argus
-%ghost %dir %{_rundir}/argus
-
-%files selinux
+# Optional SELinux policy artifacts — NOT a separate subpackage, NO
+# Requires on selinux-policy-*. Operators opt in by running
+# argus-selinux-enable on hosts where SELinux is active. On Disabled
+# hosts these files are inert: a few kilobytes, no behavioural impact.
 %dir %{_datadir}/argus
 %dir %{_datadir}/argus/selinux
 %{_datadir}/argus/selinux/argus.te
 %{_datadir}/argus/selinux/argus.fc
 %{_datadir}/argus/selinux/argus.if
-# argus.pp is only present if the build host had selinux-policy-devel.
 %ghost %{_datadir}/argus/selinux/argus.pp
 
+# State directories
+%dir %attr(0750,root,root) %{_sharedstatedir}/argus
+%ghost %dir %{_rundir}/argus
+
 %changelog
-* Wed May 20 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
+* Thu May 21 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
 - v0.1.0 production-readiness release for Rocky 8 / RHEL 8 HPC clusters
 - IB fabric idle visibility (argus_ib_port_idle_seconds, argus_ib_fabric_idle)
 - argus-preflight readiness checker
-- Optional argus-selinux subpackage with SELinux policy module
+- SELinux policy shipped as opt-in artifact (no RPM deps); enable via
+  argus-selinux-enable post-install on hosts that need it
 - Ansible bootstrap playbook
 - Alertmanager email + Zabbix HTTP-agent template
 - Production deployment runbook and troubleshooting docs
