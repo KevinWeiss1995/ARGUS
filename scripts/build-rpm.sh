@@ -2,17 +2,28 @@
 # build-rpm.sh — Produce a Rocky 8 / RHEL 8 RPM for ARGUS.
 #
 # Usage:
-#   sudo ./scripts/build-rpm.sh                  # full build via rpmbuild
+#   ./scripts/build-rpm.sh --apptainer           # build inside Apptainer SIF (HPC default)
+#   ./scripts/build-rpm.sh --container podman    # alt: Podman / Docker
+#   sudo ./scripts/build-rpm.sh                  # bare-metal build via rpmbuild
 #   sudo ./scripts/build-rpm.sh --no-build       # skip cargo, package existing artifacts
 #   sudo ./scripts/build-rpm.sh --mock <cfg>     # build inside a clean mock chroot
 #   sudo ./scripts/build-rpm.sh --sign           # rpmsign with $RPM_GPG_KEY_ID
 #   sudo ./scripts/build-rpm.sh --dry-run        # print the rpmbuild commands
 #
-# Designed to be run on a Linux build host (Rocky 8, RHEL 8, Fedora). On macOS
-# it will print an error before doing anything destructive.
+# Container modes (--apptainer / --container):
+#   The build runs inside a pinned Rocky 8 toolchain image so the build
+#   host needs only the container runtime — no Rust/LLVM/bpf-linker
+#   installed bare-metal. Apptainer is the HPC default (rootless, no
+#   daemon, plays nice with shared filesystems). RPM artifacts land in
+#   ./out/.
 #
-# Output: a single binary RPM under ~/rpmbuild/RPMS/<arch>/argus-<ver>-1.<arch>.rpm,
-# plus an optional SELinux-policy subpackage when selinux-policy-devel is present.
+# Designed to be run on a Linux build host (Rocky 8, RHEL 8, Fedora) or
+# inside the build container. On macOS it errors out.
+#
+# Output: a binary RPM at ./out/argus-<ver>-1.<arch>.rpm (container mode)
+# or ~/rpmbuild/RPMS/<arch>/argus-<ver>-1.<arch>.rpm (bare-metal mode),
+# plus an optional argus-selinux subpackage when selinux-policy-devel is
+# available.
 
 set -euo pipefail
 
@@ -23,26 +34,111 @@ NO_BUILD=false
 MOCK_CFG=""
 SIGN=false
 DRY_RUN=false
+USE_APPTAINER=false
+CONTAINER_RUNTIME=""
+APPTAINER_SIF="${ARGUS_BUILD_SIF:-deploy/container/argus-build.sif}"
+CONTAINER_IMAGE="${ARGUS_BUILD_IMAGE:-localhost/argus-build:latest}"
 
 info()  { echo -e "\033[1;34m==>\033[0m $*"; }
 ok()    { echo -e "\033[1;32m OK\033[0m $*"; }
 warn()  { echo -e "\033[1;33mWRN\033[0m $*"; }
 die()   { echo -e "\033[1;31mERR\033[0m $*" >&2; exit 1; }
 
-for arg in "$@"; do
-    case "$arg" in
-        --no-build) NO_BUILD=true ;;
-        --mock=*)   MOCK_CFG="${arg#--mock=}" ;;
-        --mock)     shift; MOCK_CFG="$1" ;;
-        --sign)     SIGN=true ;;
-        --dry-run)  DRY_RUN=true ;;
+# Pass-through args for the inner build inside a container.
+INNER_ARGS=()
+
+# Two-pass: pop our own flags, collect anything else for the inner build.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-build)  NO_BUILD=true; INNER_ARGS+=("--no-build"); shift ;;
+        --mock=*)    MOCK_CFG="${1#--mock=}"; INNER_ARGS+=("$1"); shift ;;
+        --mock)      shift; MOCK_CFG="$1"; INNER_ARGS+=("--mock" "$1"); shift ;;
+        --sign)      SIGN=true; INNER_ARGS+=("--sign"); shift ;;
+        --dry-run)   DRY_RUN=true; INNER_ARGS+=("--dry-run"); shift ;;
+        --apptainer) USE_APPTAINER=true; shift ;;
+        --container=*)
+            CONTAINER_RUNTIME="${1#--container=}"; shift ;;
+        --container)
+            shift; CONTAINER_RUNTIME="${1:-podman}"; shift ;;
         -h|--help)
-            sed -n '2,12p' "$0"
+            sed -n '2,30p' "$0"
             exit 0
             ;;
-        *) die "Unknown option: $arg" ;;
+        *) die "Unknown option: $1" ;;
     esac
 done
+
+# ─── Container dispatch ─────────────────────────────────────────────────
+# When invoked with --apptainer or --container, re-enter the build inside
+# the appropriate runtime. The sentinel env var ARGUS_IN_BUILD_CONTAINER
+# stops the wrapper from recursing once we're already inside.
+if [[ -z "${ARGUS_IN_BUILD_CONTAINER:-}" ]]; then
+    if $USE_APPTAINER; then
+        command -v apptainer >/dev/null || die "apptainer not found. Install: dnf install -y apptainer (Rocky 8: dnf install -y epel-release apptainer)"
+
+        if [[ ! -f "$REPO_ROOT/$APPTAINER_SIF" ]]; then
+            info "SIF image missing — building $APPTAINER_SIF"
+            if $DRY_RUN; then
+                echo "(dry-run) apptainer build --fakeroot $REPO_ROOT/$APPTAINER_SIF $REPO_ROOT/deploy/container/argus-build.def"
+            else
+                apptainer build --fakeroot \
+                    "$REPO_ROOT/$APPTAINER_SIF" \
+                    "$REPO_ROOT/deploy/container/argus-build.def"
+            fi
+        else
+            info "Using existing SIF: $APPTAINER_SIF"
+        fi
+
+        mkdir -p "$REPO_ROOT/out"
+        info "Running build inside Apptainer (output → ./out/)"
+        if $DRY_RUN; then
+            echo "(dry-run) apptainer run --bind $REPO_ROOT:/src --bind $REPO_ROOT/out:/out $APPTAINER_SIF ${INNER_ARGS[*]}"
+            exit 0
+        fi
+        apptainer run \
+            --bind "$REPO_ROOT:/src" \
+            --bind "$REPO_ROOT/out:/out" \
+            "$REPO_ROOT/$APPTAINER_SIF" \
+            "${INNER_ARGS[@]:-}"
+        ok "RPM(s) in $REPO_ROOT/out/:"
+        ls -la "$REPO_ROOT/out/" | tail -n +2
+        exit 0
+    fi
+
+    if [[ -n "$CONTAINER_RUNTIME" ]]; then
+        command -v "$CONTAINER_RUNTIME" >/dev/null || die "$CONTAINER_RUNTIME not found"
+
+        if ! $CONTAINER_RUNTIME image exists "$CONTAINER_IMAGE" 2>/dev/null && \
+           ! $CONTAINER_RUNTIME images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -q "^${CONTAINER_IMAGE}$"; then
+            info "Container image missing — building $CONTAINER_IMAGE"
+            if $DRY_RUN; then
+                echo "(dry-run) $CONTAINER_RUNTIME build -f $REPO_ROOT/deploy/container/Containerfile.build -t $CONTAINER_IMAGE $REPO_ROOT"
+            else
+                $CONTAINER_RUNTIME build \
+                    -f "$REPO_ROOT/deploy/container/Containerfile.build" \
+                    -t "$CONTAINER_IMAGE" \
+                    "$REPO_ROOT"
+            fi
+        fi
+
+        mkdir -p "$REPO_ROOT/out"
+        info "Running build inside $CONTAINER_RUNTIME (output → ./out/)"
+        # :Z is for SELinux relabeling on rootful podman; docker chokes on it.
+        z_flag=":Z"
+        if [[ "$CONTAINER_RUNTIME" == "docker" ]]; then z_flag=""; fi
+        if $DRY_RUN; then
+            echo "(dry-run) $CONTAINER_RUNTIME run --rm -v $REPO_ROOT:/src$z_flag -v $REPO_ROOT/out:/out$z_flag $CONTAINER_IMAGE ${INNER_ARGS[*]}"
+            exit 0
+        fi
+        $CONTAINER_RUNTIME run --rm \
+            -v "$REPO_ROOT:/src$z_flag" \
+            -v "$REPO_ROOT/out:/out$z_flag" \
+            "$CONTAINER_IMAGE" "${INNER_ARGS[@]:-}"
+        ok "RPM(s) in $REPO_ROOT/out/:"
+        ls -la "$REPO_ROOT/out/" | tail -n +2
+        exit 0
+    fi
+fi
 
 # Preflight — only sensible on Linux
 if [[ "$(uname -s)" != "Linux" ]]; then
