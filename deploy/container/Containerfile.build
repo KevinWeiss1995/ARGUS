@@ -55,13 +55,15 @@ RUN dnf install -y --setopt=tsflags=nodocs \
         tar \
         gzip \
         findutils \
-        patchelf \
         ca-certificates \
         selinux-policy-devel \
         policycoreutils-python-utils \
         which \
     && dnf clean all \
     && rm -rf /var/cache/dnf
+# (patchelf is EPEL-only on Rocky 8 and we don't use it; removed to avoid
+# pulling in epel-release. If a future build script needs to rewrite ELF
+# RPATHs, re-add it with `dnf install -y epel-release patchelf`.)
 
 # --- Rust via rustup, fully isolated under /opt/rust -------------------
 # Avoids the build container's $HOME shenanigans. Targeting bpfel for the

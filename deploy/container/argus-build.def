@@ -59,11 +59,12 @@ From: rockylinux/rockylinux:8
         gzip \
         findutils \
         which \
-        patchelf \
         ca-certificates \
         curl \
         selinux-policy-devel \
         policycoreutils-python-utils
+    # (patchelf is EPEL-only on Rocky 8 and isn't used by our build —
+    # removed to avoid pulling in epel-release.)
 
     dnf clean all
     rm -rf /var/cache/dnf
