@@ -201,7 +201,53 @@ sha256sum /usr/lib/argus/argus-ebpf | awk '{print $1}' > /etc/argus/ebpf.sha256
 systemctl restart argusd
 ```
 
-## 10. None of the above
+## 10. RHEL 8 / Rocky 8 capability problems
+
+If you see `Failed to set capabilities`, `Invalid capability "CAP_BPF"`, or
+`Operation not permitted` from `bpf_prog_load`, the systemd unit and the
+kernel disagree about which capability names exist.
+
+```bash
+# 1. Confirm what systemd thinks the unit asks for
+systemctl show argusd | grep -E 'AmbientCapabilities|CapabilityBoundingSet'
+
+# 2. Check whether the modern-caps drop-in is active
+ls -la /etc/systemd/system/argusd.service.d/
+
+# 3. Check the kernel and systemd versions
+uname -r && systemctl --version | head -1
+```
+
+If you're on RHEL 8 / Rocky 8 (kernel `*.el8*`) and the drop-in is
+present, **remove it** — RHEL 8's systemd 239 does not recognize
+`CAP_BPF` in unit files even though the kernel itself supports CAP_BPF
+syscalls:
+
+```bash
+sudo rm /etc/systemd/system/argusd.service.d/modern-caps.conf
+sudo systemctl daemon-reload
+sudo systemctl restart argusd
+```
+
+The default unit uses `CAP_SYS_ADMIN`, which works on RHEL 8 systemd 239
+and grants every BPF-related kernel call ARGUS needs.
+
+If you're on a non-RHEL-8 distro with kernel < 5.8, you also want the
+default `CAP_SYS_ADMIN` unit — same fix as above.
+
+To explicitly opt in to fine-grained caps on a non-RHEL-8 host with
+kernel >= 5.8:
+
+```bash
+sudo install -m 0644 /usr/share/argus/systemd/modern-caps.conf \
+    /etc/systemd/system/argusd.service.d/modern-caps.conf
+sudo systemctl daemon-reload
+sudo systemctl restart argusd
+journalctl -u argusd -n 20 | grep "effective capabilities"
+# Should show: cap_bpf, cap_perfmon, cap_dac_read_search, cap_syslog
+```
+
+## 11. None of the above
 
 ```bash
 # Collect a bundle for support:
