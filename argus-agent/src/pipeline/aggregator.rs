@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use argus_common::{AggregatedMetrics, ArgusEvent, HardwareCounter};
+use argus_common::{AggregatedMetrics, ArgusEvent, HardwareCounter, IbPortIdle};
 
 use crate::capabilities::sketches::DdSketch;
 
@@ -14,6 +14,14 @@ pub struct Aggregator {
     /// Per-window completion latency sketch — fed by `CqCompletion` events.
     /// Provides p50/p95/p99/p999 to the CompletionLatency capability.
     cq_latency_sketch: DdSketch,
+    /// Per-port idle counter (port_num → seconds idle). Persists across
+    /// window resets — a port with no traffic for 600s reports 600s, not 0.
+    /// Hardware error monitoring continues regardless; idle just means
+    /// "no throughput observed this window."
+    port_idle_seconds: HashMap<u32, u64>,
+    /// Ports that observed any non-zero throughput counter delta this window.
+    /// Cleared by `mark_window_complete`.
+    port_had_traffic_this_window: HashSet<u32>,
 }
 
 fn counter_discriminant(c: &HardwareCounter) -> u8 {
@@ -70,6 +78,8 @@ impl Aggregator {
             num_cpus,
             prev_counters: HashMap::new(),
             cq_latency_sketch: DdSketch::new(0.02, 1024),
+            port_idle_seconds: HashMap::new(),
+            port_had_traffic_this_window: HashSet::new(),
         }
     }
 
@@ -146,6 +156,22 @@ impl Aggregator {
         };
         self.prev_counters.insert(key, current);
 
+        // Any hw counter reading for this port means the port is being polled.
+        // Initialize its idle tracker if we haven't seen it before.
+        self.port_idle_seconds.entry(port).or_insert(0);
+
+        // Mark traffic if a throughput counter shows non-zero delta.
+        let is_throughput = matches!(
+            counter,
+            HardwareCounter::PortRcvData(_)
+                | HardwareCounter::PortXmitData(_)
+                | HardwareCounter::HwRcvPkts(_)
+                | HardwareCounter::HwXmitPkts(_)
+        );
+        if is_throughput && delta > 0 {
+            self.port_had_traffic_this_window.insert(port);
+        }
+
         let d = &mut self.metrics.ib_counter_deltas;
         match counter {
             HardwareCounter::SymbolErrors(_) => d.symbol_error_delta += delta,
@@ -174,6 +200,56 @@ impl Aggregator {
             HardwareCounter::RxeSendError(_) => d.rxe_send_error_delta += delta,
             HardwareCounter::PortXmitWait(_) => d.port_xmit_wait_delta += delta,
         }
+    }
+
+    /// Roll idle counters at window close. Ports with traffic this window
+    /// reset to 0; others accumulate `window_secs`. Call this once per
+    /// window, after the snapshot is taken but before `reset()`.
+    pub fn mark_window_complete(&mut self, window_secs: u64) {
+        for (port, idle) in &mut self.port_idle_seconds {
+            if self.port_had_traffic_this_window.contains(port) {
+                *idle = 0;
+            } else {
+                *idle = idle.saturating_add(window_secs);
+            }
+        }
+        self.port_had_traffic_this_window.clear();
+    }
+
+    /// Read-only access to the per-port idle map (port_num → idle seconds).
+    #[must_use]
+    pub fn port_idle_seconds(&self) -> &HashMap<u32, u64> {
+        &self.port_idle_seconds
+    }
+
+    /// Stamp a fully-annotated per-port idle list onto the current metrics.
+    /// Callers supply (device, port) pairs from `HwCounterReader::discovered_ports`
+    /// so the device names land in the published `AggregatedMetrics`.
+    /// Ports not in the supplied list still get an entry with device name "unknown"
+    /// so cross-device port-number collisions remain visible.
+    pub fn set_ib_port_idle(&mut self, discovered: &[(String, u32)]) {
+        let mut idle_list: Vec<IbPortIdle> = Vec::with_capacity(self.port_idle_seconds.len());
+        for (device, port) in discovered {
+            if let Some(&idle_seconds) = self.port_idle_seconds.get(port) {
+                idle_list.push(IbPortIdle {
+                    device: device.clone(),
+                    port: *port,
+                    idle_seconds,
+                });
+            }
+        }
+        // Catch any ports we tracked but the caller didn't enumerate
+        // (shouldn't happen in normal operation; preserves visibility).
+        for (port, &idle_seconds) in &self.port_idle_seconds {
+            if !discovered.iter().any(|(_, p)| p == port) {
+                idle_list.push(IbPortIdle {
+                    device: "unknown".to_string(),
+                    port: *port,
+                    idle_seconds,
+                });
+            }
+        }
+        self.metrics.ib_port_idle = idle_list;
     }
 
     /// Ingest a BPF map snapshot (per-window deltas from in-kernel counters).
@@ -386,6 +462,122 @@ mod tests {
             agg.current_metrics().ib_counter_deltas.symbol_error_delta,
             5
         );
+    }
+
+    #[test]
+    fn ib_port_idle_zero_when_traffic_present() {
+        let mut agg = Aggregator::new(4);
+
+        // Baseline read for port 1 throughput
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::PortRcvData(0),
+        }));
+        // Second read shows non-zero delta — traffic observed
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 1,
+            counter: HardwareCounter::PortRcvData(4000),
+        }));
+
+        agg.mark_window_complete(3);
+        agg.set_ib_port_idle(&[("mlx5_0".into(), 1)]);
+
+        let idle = &agg.current_metrics().ib_port_idle;
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].device, "mlx5_0");
+        assert_eq!(idle[0].port, 1);
+        assert_eq!(idle[0].idle_seconds, 0);
+        assert!(!agg.current_metrics().ib_fabric_idle());
+    }
+
+    #[test]
+    fn ib_port_idle_accumulates_without_traffic() {
+        let mut agg = Aggregator::new(4);
+
+        // Baseline read so the port is tracked
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::PortRcvData(0),
+        }));
+        agg.mark_window_complete(3);
+
+        // Window 2: no throughput delta but error counters still polled
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 4_000,
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(0),
+        }));
+        agg.mark_window_complete(3);
+
+        // Window 3: still idle
+        agg.mark_window_complete(3);
+
+        agg.set_ib_port_idle(&[("mlx5_0".into(), 1)]);
+
+        let idle = &agg.current_metrics().ib_port_idle;
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].idle_seconds, 9, "3 windows × 3s = 9s idle");
+        assert!(agg.current_metrics().ib_fabric_idle());
+        assert_eq!(agg.current_metrics().ib_max_idle_seconds(), 9);
+    }
+
+    #[test]
+    fn ib_port_idle_resets_when_traffic_returns() {
+        let mut agg = Aggregator::new(4);
+
+        // Establish port + accumulate some idle time
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::HwRcvPkts(0),
+        }));
+        agg.mark_window_complete(3);
+        agg.mark_window_complete(3); // idle += 3
+        agg.mark_window_complete(3); // idle += 3 (total 6)
+
+        // Traffic returns
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 1,
+            counter: HardwareCounter::HwRcvPkts(500),
+        }));
+        agg.mark_window_complete(3);
+        agg.set_ib_port_idle(&[("rxe0".into(), 1)]);
+
+        let idle = &agg.current_metrics().ib_port_idle;
+        assert_eq!(idle[0].idle_seconds, 0, "traffic resets idle counter");
+    }
+
+    #[test]
+    fn ib_fabric_idle_false_when_no_ports_known() {
+        let agg = Aggregator::new(4);
+        // No ports tracked at all
+        assert!(!agg.current_metrics().ib_fabric_idle());
+        assert_eq!(agg.current_metrics().ib_max_idle_seconds(), 0);
+    }
+
+    #[test]
+    fn ib_port_idle_zero_byte_delta_is_idle() {
+        let mut agg = Aggregator::new(4);
+
+        // Two readings at same value — zero delta means no traffic
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            port_num: 1,
+            counter: HardwareCounter::PortRcvData(1000),
+        }));
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            port_num: 1,
+            counter: HardwareCounter::PortRcvData(1000),
+        }));
+        agg.mark_window_complete(3);
+        agg.set_ib_port_idle(&[("mlx5_0".into(), 1)]);
+
+        assert_eq!(agg.current_metrics().ib_port_idle[0].idle_seconds, 3);
     }
 
     #[test]
