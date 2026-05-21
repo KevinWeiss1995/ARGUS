@@ -105,8 +105,14 @@ jobs:
       - name: Verify RPM internals
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD/out:/out" localhost/argus-build:latest \
-              bash -c 'for f in /out/argus-*.rpm; do
+          # Override the image's ENTRYPOINT (which runs build-rpm.sh and
+          # would fail without /src mounted) — we just want to query the
+          # already-built RPMs with rpm -qpi/-qpl/-qpR.
+          docker run --rm \
+              --entrypoint /bin/bash \
+              -v "$PWD/out:/out" \
+              localhost/argus-build:latest \
+              -c 'for f in /out/argus-*.rpm; do
                   echo "─── $f ───"
                   rpm -qpi "$f"
                   echo
