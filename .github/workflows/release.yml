@@ -1,0 +1,221 @@
+name: Build & publish RPM release
+
+# Produces a Rocky 8 / RHEL 8 RPM and attaches it to the GitHub release
+# whenever a v* tag is pushed. Also supports manual triggering for ad-hoc
+# test builds via the Actions UI.
+#
+# Why this exists: HPC sites where `apptainer build --fakeroot` is
+# disabled need a way to get a tested RPM without building locally.
+# This workflow runs the same Containerfile-based build CI uses for
+# verification, but uploads the artifact as a downloadable release
+# binary so operators can `wget && dnf install` directly.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag / version to label the RPM with (e.g. v0.1.0-test1). Required for manual runs.'
+        required: true
+        type: string
+      publish_release:
+        description: 'Attach RPMs to a GitHub release (off = artifacts only)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write  # for release upload
+  packages: write  # for ghcr.io publishing (optional)
+
+jobs:
+  build-rpm:
+    name: Build RPM (Rocky 8 x86_64)
+    runs-on: ubuntu-latest
+
+    # The build container is Rocky 8 with pinned Rust + bpf-linker +
+    # rpm-build, declared in deploy/container/Containerfile.build. We
+    # build the image inside Actions and run the RPM build inside it.
+    # No fakeroot / privileged access needed on the build host (Actions
+    # runners have Docker daemon).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tag info needed for version stamping
+
+      - name: Resolve version and release labels
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              TAG="${{ github.event.inputs.tag }}"
+          else
+              TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading 'v' for the RPM version field
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}"       >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building argus-${VERSION} (tag ${TAG})"
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the ARGUS build container
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/container/Containerfile.build
+          load: true
+          tags: localhost/argus-build:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the RPM inside the container
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # The Containerfile's ENTRYPOINT runs scripts/build-rpm.sh
+          # with anything passed after the image. We deliberately pass
+          # no flags so it does the default cargo build + rpmbuild path.
+          docker run --rm \
+              -v "$PWD:/src" \
+              -v "$PWD/out:/out" \
+              -e ARGUS_IN_BUILD_CONTAINER=1 \
+              localhost/argus-build:latest
+
+          echo "Artifacts in ./out/:"
+          ls -la out/
+          # Sanity: at least one RPM produced
+          test -n "$(ls out/argus-*.rpm 2>/dev/null)"
+
+      - name: Compute SHA256 for each RPM
+        run: |
+          set -euo pipefail
+          cd out
+          for f in argus-*.rpm; do
+              sha256sum "$f" > "$f.sha256"
+          done
+          cat *.sha256
+
+      - name: Verify RPM internals
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/out:/out" localhost/argus-build:latest \
+              bash -c 'for f in /out/argus-*.rpm; do
+                  echo "─── $f ───"
+                  rpm -qpi "$f"
+                  echo
+                  echo "Files:"
+                  rpm -qpl "$f" | head -30
+                  echo
+                  echo "Requires:"
+                  rpm -qpR "$f"
+                  echo
+              done'
+
+      - name: Upload RPMs as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-rpm-${{ steps.version.outputs.version }}
+          path: |
+            out/argus-*.rpm
+            out/argus-*.sha256
+          retention-days: 90
+
+      - name: Create / update GitHub release with RPMs attached
+        if: github.event_name == 'push' || github.event.inputs.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ARGUS ${{ steps.version.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            out/argus-*.rpm
+            out/argus-*.sha256
+          body: |
+            ## Install on Rocky 8 / RHEL 8
+
+            ```bash
+            # Direct install (replace x86_64 with your arch if different):
+            sudo dnf install -y \
+                https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/argus-${{ steps.version.outputs.version }}-1.el8.x86_64.rpm
+
+            # Optional SELinux subpackage if your nodes run Enforcing:
+            sudo dnf install -y \
+                https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/argus-selinux-${{ steps.version.outputs.version }}-1.el8.noarch.rpm
+
+            # Validate, then enable
+            sudo argus-preflight
+            sudo systemctl enable --now argusd
+            curl -s localhost:9100/health
+            ```
+
+            ## Verify the download
+
+            ```bash
+            sha256sum -c argus-${{ steps.version.outputs.version }}-1.el8.x86_64.rpm.sha256
+            ```
+
+            ## What's in this RPM
+
+            - Agent binary built against the workspace pinned to commit `${{ github.sha }}`
+            - Pre-compiled eBPF object with SHA-256 manifest at `/etc/argus/ebpf.sha256`
+            - systemd unit that defaults to `CAP_SYS_ADMIN` (works on RHEL 8.5+ stock kernels including 4.18.0-553.x.el8_10)
+            - argus-preflight, argus-status, argus-tui, argus-discover, argus-scheduler CLI tools
+            - Optional `argus-selinux` subpackage for SELinux Enforcing mode
+
+            Full deployment guide: [`docs/production-deployment.md`](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.tag }}/docs/production-deployment.md)
+
+  # Optional: publish the build container so sites that DO want
+  # reproducible local builds can `apptainer pull` it instead of running
+  # `apptainer build --fakeroot`. Skipped unless the publish_release
+  # input is true or the workflow ran from a real tag push.
+  publish-build-image:
+    name: Publish build container to ghcr.io
+    runs-on: ubuntu-latest
+    needs: build-rpm
+    if: github.event_name == 'push' || github.event.inputs.publish_release == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              TAG="${{ github.event.inputs.tag }}"
+          else
+              TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push build container
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/container/Containerfile.build
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/argus-build:${{ steps.version.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/argus-build:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
