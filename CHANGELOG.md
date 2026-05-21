@@ -4,6 +4,24 @@ All notable changes are recorded here. Versions follow semver.
 
 ## [0.1.0] — 2026-05-21
 
+### Added — Pre-built RPM via GitHub release
+
+- `.github/workflows/release.yml` builds a Rocky 8 RPM (and the
+  optional argus-selinux subpackage) inside the same toolchain
+  container local builds use, then attaches the RPMs and SHA-256
+  attestations to the GitHub release for the tag that was pushed.
+  Triggers on `v*.*.*` tags and on manual workflow_dispatch.
+- Workflow also pushes the build container to
+  `ghcr.io/<owner>/argus-build:<tag>` so sites that DO want
+  reproducible local builds can `apptainer pull` it instead of
+  running `apptainer build --fakeroot` (which is disabled at most
+  HPC sites).
+- Release notes now include the exact `dnf install -y <url>` one-liner
+  the operator can paste, plus the SHA-256 verification command.
+- README and the production runbook lead with "Path 0 — install the
+  published RPM" so sites that can't / don't want to build locally
+  get the fastest path first.
+
 ### Added — HPC-friendly build paths (no bare-metal toolchain)
 
 - **Apptainer build container.** `deploy/container/argus-build.def`
