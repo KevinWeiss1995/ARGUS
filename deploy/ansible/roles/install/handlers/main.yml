@@ -1,0 +1,7 @@
+---
+- name: restart argusd
+  ansible.builtin.systemd:
+    name: argusd
+    state: restarted
+    daemon_reload: true
+  listen: restart argusd
