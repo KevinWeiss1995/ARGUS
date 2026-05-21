@@ -6,6 +6,17 @@
 %{!?_version: %define _version 0.1.0}
 %{!?_release: %define _release 1}
 
+# Disable rpmbuild's automatic -debuginfo / -debugsource subpackage
+# generation. The agent binary is compiled by cargo *outside* the
+# rpmbuild sandbox (in the build container or via scripts/build-rpm.sh)
+# and only the resulting ELF is staged into the source tarball. The
+# debug source paths in that ELF reference the build-container source
+# tree which rpmbuild's debug-extraction machinery can't resolve —
+# producing an empty `debugsourcefiles.list` and aborting.
+# We can revisit debuginfo packaging later if/when someone wants
+# split-debug RPMs; until then the symbols stay embedded in the binary.
+%global debug_package %{nil}
+
 Name:           argus
 Version:        %{_version}
 Release:        %{_release}%{?dist}
