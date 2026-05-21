@@ -45,186 +45,108 @@ Mock mode generates synthetic events through the full pipeline. Try `--profile p
 
 ---
 
-## Deployment
-
-There are three supported deployment paths. Pick one:
-
-| Path                  | When to use                                          | What it gives you                                       |
-| --------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
-| **Pre-built RPM**     | You just want to install + test on Rocky 8 / RHEL 8  | One `dnf install` from the GitHub release URL — no build, no toolchain |
-| **Build the RPM**     | You want to build from source on your own toolchain  | Apptainer / Spack / Podman / bare-metal — see `docs/hpc-build.md` |
-| **Ansible (fleet)**   | A real HPC cluster of more than a couple of nodes    | Preflight + RPM install + config + verify, in parallel  |
-
-The rest of this section walks through each path. The **production runbook** at
-[`docs/production-deployment.md`](docs/production-deployment.md) goes deeper on
-every step.
-
-### Path 0 — Install the published RPM (no build needed)
-
-The fastest path. Every tagged release publishes signed RPMs as GitHub
-release artifacts, built reproducibly by CI in a Rocky 8 container. Use
-this when you don't need to rebuild from source.
+## Deploy on a real node
 
 ```bash
-# Replace v0.1.0 with the release you want. Latest releases:
-#   https://github.com/KevinWeiss1995/ARGUS/releases
+# As root on any Rocky 8 / RHEL 8 node:
+dnf install -y \
+    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-0.1.0-1.el8.x86_64.rpm \
+    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-selinux-0.1.0-1.el8.noarch.rpm
+
+argus-preflight                       # validate the host
+systemctl enable --now argusd         # start the daemon
+curl -s localhost:9100/health         # confirm: {"state":"HEALTHY",...}
+argus-status                          # human-readable health line
+```
+
+That's the whole production install. The `argus-selinux` package is only
+needed if `getenforce` reports `Enforcing` — drop it otherwise.
+
+**Newer releases:** browse <https://github.com/KevinWeiss1995/ARGUS/releases>
+and substitute the tag. Verify the download against the published
+SHA-256 if you care:
+
+```bash
 TAG=v0.1.0
-ARCH=x86_64
 URL=https://github.com/KevinWeiss1995/ARGUS/releases/download/$TAG
-
-# Main package
-sudo dnf install -y $URL/argus-${TAG#v}-1.el8.$ARCH.rpm
-
-# Optional: SELinux policy subpackage (only if your nodes run Enforcing)
-sudo dnf install -y $URL/argus-selinux-${TAG#v}-1.el8.noarch.rpm
-
-# Validate, then enable
-sudo argus-preflight
-sudo systemctl enable --now argusd
-curl -s localhost:9100/health
+wget $URL/argus-${TAG#v}-1.el8.x86_64.rpm.sha256
+sha256sum -c argus-${TAG#v}-1.el8.x86_64.rpm.sha256
 ```
 
-Verify the download against the published SHA-256:
-
-```bash
-wget $URL/argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
-sha256sum -c argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
-```
-
-### 0. Prerequisites (all paths)
+### Prerequisites
 
 | Component         | Requirement                                                                 |
 | ----------------- | --------------------------------------------------------------------------- |
 | Linux kernel      | RHEL/Rocky 8.5+ stock (4.18 with backports), or any upstream ≥ 5.4           |
-| BTF               | Best if present; ARGUS ships compiled-in offset fallbacks for RHEL 8         |
 | InfiniBand stack  | `/sys/class/infiniband` populated (or skip live mode)                        |
 | systemd           | any recent version (RHEL 8's systemd 239 works with the default unit)        |
 | chronyd or ntpd   | active (fleet-wide alert correlation needs it)                               |
 
+`argus-preflight` checks all of these and exits non-zero on FAIL. Run it
+before installing if you want a heads-up.
+
 **RHEL 8 / Rocky 8 stock kernels are fully supported.** RHEL 8.5 onward
 (kernel `4.18.0-348.*` and later) ships every BPF feature ARGUS needs via
 Red Hat backports. The systemd unit defaults to `CAP_SYS_ADMIN` so it
-works across stock RHEL 8 systemd 239 and modern systemd alike. On kernel
-≥ 5.8 outside the RHEL 8 family, the installers auto-activate a
-fine-grained `CAP_BPF` + `CAP_PERFMON` drop-in.
+works across stock RHEL 8 systemd 239 and modern systemd alike. For
+RHEL 8.4 or older, install ELRepo kernel-ml or upgrade the OS.
 
-For RHEL 8.4 or older, either upgrade the OS (recommended) or install
-ELRepo `kernel-ml`. The preflight check will mark these explicitly.
+### Fleet deploy via Ansible
 
-Validate any host with `scripts/argus-preflight` before installing:
-
-```bash
-sudo ./scripts/argus-preflight     # OK / WARN / FAIL per check, exits non-zero on FAIL
-```
-
-### Path 1 — Source install (single host)
-
-For a dev box, lab node, or test cluster you build from git.
-
-```bash
-git clone https://github.com/KevinWeiss1995/ARGUS.git
-cd ARGUS
-sudo ./scripts/install.sh          # installs Rust toolchain if missing, builds, installs
-sudo systemctl enable --now argusd
-argus-status                       # confirm Healthy
-curl localhost:9100/health
-```
-
-The script runs `argus-preflight` first, installs binaries to `/usr/bin/`, the
-eBPF object to `/usr/lib/argus/`, and the systemd unit. On SELinux Enforcing
-hosts it also builds and loads `deploy/selinux/argus.pp` (requires
-`selinux-policy-devel`).
-
-### Path 2 — RPM (single host on Rocky 8 / RHEL 8)
-
-#### Building the RPM
-
-HPC sites typically can't install Rust + LLVM + bpf-linker bare-metal on
-their build hosts. ARGUS supports three professional, dependency-managed
-build paths — pick whichever fits your site (full guide:
-[`docs/hpc-build.md`](docs/hpc-build.md)):
-
-**Apptainer (recommended for HPC):**
-
-```bash
-./scripts/build-rpm.sh --apptainer         # builds SIF on first run; ./out/*.rpm
-```
-
-The SIF is a single relocatable file containing a pinned Rocky 8
-toolchain. Build host needs only `apptainer`. Output: `./out/argus-*.rpm`.
-
-**Spack (sites already using Lmod + Spack):**
-
-```bash
-spack repo add /path/to/ARGUS/deploy/spack
-spack install argus +rpm                   # all build deps materialized via Spack
-```
-
-**Podman / Docker (sites with container runtime but not Apptainer):**
-
-```bash
-./scripts/build-rpm.sh --container podman  # ./out/*.rpm
-```
-
-**Bare-metal (only if you accept Rust installed system-wide):**
-
-```bash
-sudo dnf install -y rpm-build cargo rust clang llvm openssl-devel pkg-config
-just setup-ebpf                            # nightly + bpf-linker (one-time)
-sudo ./scripts/build-rpm.sh                # → ~/rpmbuild/RPMS/$arch/argus-*.rpm
-```
-
-For SELinux Enforcing sites, all four paths produce the optional
-`argus-selinux` subpackage automatically when `selinux-policy-devel` is
-available. To sign for distribution via a yum repo, add `--sign` (with
-`RPM_GPG_KEY_ID` set).
-
-For air-gapped / reproducible builds, layer `--mock rocky-8-x86_64` on
-top of any of the above.
-
-#### Installing the RPM
-
-```bash
-sudo dnf install -y argus-0.1.0-1.x86_64.rpm
-sudo dnf install -y argus-selinux-0.1.0-1.noarch.rpm   # only if Enforcing
-sudo argus-preflight                                    # validate
-sudo systemctl enable --now argusd
-curl localhost:9100/health
-```
-
-The RPM is tracked by `rpm -qa`, declares its runtime requires
-(`systemd`, `chrony`), and is fully removable via `dnf remove`. Nothing
-additional gets installed on cluster nodes outside package management.
-
-### Path 3 — Ansible (HPC fleet)
-
-This is the supported path for a real cluster. The playbook runs preflight
-on every node, aborts if any node fails, then installs the RPM, configures
-firewalld, manages the SELinux module, renders config templates, and
-verifies `/health` returns 200 before declaring success.
+For more than a couple of nodes, use the bundled playbook — preflight on
+every node, RPM install, firewalld, SELinux module if needed, config
+templates, and a verify pass.
 
 ```bash
 cd deploy/ansible
 cp inventory.example.ini inventory.ini
 cp group_vars/all.yml.example group_vars/all.yml
-$EDITOR inventory.ini group_vars/all.yml      # hosts + RPM source + recipients
+$EDITOR inventory.ini group_vars/all.yml      # hosts + RPM URL + recipients
 
-# Sanity-check
-ansible-playbook -i inventory.ini argus.yml --tags preflight
-
-# Full deploy (idempotent — re-run for upgrades)
-ansible-playbook -i inventory.ini argus.yml
+ansible-playbook -i inventory.ini argus.yml --tags preflight    # dry-check
+ansible-playbook -i inventory.ini argus.yml                     # full deploy
 ```
 
-Required `group_vars` keys (defaults in `group_vars/all.yml.example`):
+Required `group_vars` keys:
 
-- `argus_rpm_source` — path on the control host or HTTPS URL the nodes can reach
-- `argus_metrics_addr` — usually `0.0.0.0:9100` for cluster-wide scraping
-- `argus_install_selinux` — `true` on Enforcing-mode clusters
-- `argus_scheduler` — `slurm` to enable SLURM drain/resume, with `argus_scheduler_dry_run: true` for the first rollout
+- `argus_rpm_source` — the same `https://github.com/.../argus-*.rpm` URL, or a local path
+- `argus_metrics_addr` — usually `0.0.0.0:9100`
+- `argus_install_selinux` — `true` on Enforcing clusters
+- `argus_scheduler` — `slurm` to enable SLURM drain/resume
 
-Tags let you re-run subsets without redeploying everything: `--tags preflight`,
-`--tags install`, `--tags verify`. See [`deploy/ansible/README.md`](deploy/ansible/README.md).
+Tags let you re-run subsets: `--tags preflight`, `--tags install`,
+`--tags verify`. See [`deploy/ansible/README.md`](deploy/ansible/README.md).
+
+### Day-2 upgrade
+
+```bash
+TAG=v0.1.1      # whatever's new
+URL=https://github.com/KevinWeiss1995/ARGUS/releases/download/$TAG
+dnf upgrade -y $URL/argus-${TAG#v}-1.el8.x86_64.rpm
+systemctl restart argusd
+argus-preflight && curl -s localhost:9100/health
+```
+
+Or via Ansible: bump `argus_rpm_source` in `group_vars/all.yml` and
+`ansible-playbook ... --tags install,verify`. Config files at
+`/etc/argus/argusd.{conf,toml}` are `%config(noreplace)` — your edits
+survive the upgrade.
+
+### Build your own RPM
+
+Only needed if you want to rebuild from source — the published RPM is
+identical in content to what you'd produce locally. Three professional,
+dependency-managed paths exist that avoid installing the Rust/LLVM
+toolchain bare-metal:
+
+```bash
+./scripts/build-rpm.sh --apptainer        # HPC-friendly; SIF-based
+./scripts/build-rpm.sh --container podman # Podman or Docker
+spack install argus +rpm                  # Spack-managed sites
+```
+
+Full comparison: [`docs/hpc-build.md`](docs/hpc-build.md).
+Production runbook: [`docs/production-deployment.md`](docs/production-deployment.md).
 
 ---
 
