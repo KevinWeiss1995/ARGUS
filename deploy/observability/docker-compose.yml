@@ -16,6 +16,7 @@ services:
       - "9093:9093"
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./templates:/etc/alertmanager/templates:ro
     restart: unless-stopped
   grafana:
     image: grafana/grafana:11.1.0
