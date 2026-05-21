@@ -76,6 +76,15 @@ if ! systemctl --version &>/dev/null; then
     die "systemd not found — this installer requires a systemd-based Linux system"
 fi
 
+# Run preflight readiness checks before we mutate the system. Failures
+# don't abort the install (some hosts intentionally start in a "fix-me"
+# state and the installer is what gets them out of it), but the operator
+# is shown the warnings.
+if [[ -x "$REPO_ROOT/scripts/argus-preflight" ]]; then
+    info "Running argus-preflight..."
+    "$REPO_ROOT/scripts/argus-preflight" || warn "Preflight reported FAIL — install will proceed; review the report above and run 'argus-preflight' again after install."
+fi
+
 # --- System build dependencies ---
 # Cargo crates with build scripts (proc-macro2, etc.) need a C compiler and linker.
 # Install them now so `cargo build` and `cargo install bpf-linker` don't fail.
@@ -232,11 +241,13 @@ install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
 ok "$INSTALL_EBPF"
 
 info "Installing CLI tools to /usr/bin"
-for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
-    install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/bin/$tool"
+for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight; do
+    if [[ -f "$REPO_ROOT/scripts/$tool" ]]; then
+        install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/bin/$tool"
+    fi
 done
 ln -sf /usr/bin/argusd /usr/bin/argus-tui
-ok "argus-status, argus-discover, argus-manage-targets, argus-scheduler, argus-tui"
+ok "argus-status, argus-discover, argus-manage-targets, argus-scheduler, argus-preflight, argus-tui"
 
 # --- Install config (preserve existing) ---
 
@@ -277,6 +288,28 @@ ok "$INSTALL_UNIT (daemon-reload done)"
 info "Computing eBPF artifact hash"
 sha256sum "$INSTALL_EBPF" | awk '{print $1}' > "$INSTALL_CONF_DIR/ebpf.sha256"
 ok "$INSTALL_CONF_DIR/ebpf.sha256"
+
+# --- SELinux policy module (optional) ---
+# Load the argus.pp module if we're on a host running SELinux Enforcing.
+# Skip entirely on Permissive / Disabled — module isn't needed there.
+SELINUX_DIR="$REPO_ROOT/deploy/selinux"
+if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]] \
+   && [[ -d "$SELINUX_DIR" ]]; then
+    info "SELinux is Enforcing — building and loading argus.pp"
+    if command -v make &>/dev/null && [[ -f /usr/share/selinux/devel/Makefile ]]; then
+        if make -C "$SELINUX_DIR" && [[ -f "$SELINUX_DIR/argus.pp" ]]; then
+            mkdir -p /usr/share/argus/selinux
+            install -m 0644 "$SELINUX_DIR/argus.pp" /usr/share/argus/selinux/argus.pp
+            semodule -i /usr/share/argus/selinux/argus.pp
+            restorecon -RFv "$INSTALL_BIN" "$INSTALL_CONF_DIR" /var/lib/argus /run/argus 2>/dev/null || true
+            ok "argus SELinux module loaded"
+        else
+            warn "failed to build argus.pp — install selinux-policy-devel and run 'make -C deploy/selinux && semodule -i argus.pp' manually"
+        fi
+    else
+        warn "selinux-policy-devel not installed; argus may be blocked by SELinux. Install with: dnf install -y selinux-policy-devel policycoreutils-python-utils"
+    fi
+fi
 
 # --- Done ---
 
