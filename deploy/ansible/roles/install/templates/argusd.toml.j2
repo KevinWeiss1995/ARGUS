@@ -1,0 +1,50 @@
+# /etc/argus/argusd.toml — rendered by Ansible.
+#
+# This file is loaded when ARGUS_CONFIG points at it. The companion .conf
+# env file sets that pointer.
+
+[agent]
+mode = "live"
+ebpf_path = "/usr/lib/argus/argus-ebpf"
+log_level = "{{ argus_log_level | default('info') }}"
+window_secs = {{ argus_window_secs | default(3) }}
+
+[metrics]
+addr = "{{ argus_metrics_addr | default('0.0.0.0:9100') }}"
+
+{% if argus_tls_cert_path %}
+[tls]
+cert = "{{ argus_tls_cert_path }}"
+key  = "{{ argus_tls_key_path }}"
+{% endif %}
+
+{% if argus_metrics_token %}
+[auth]
+bearer_token_file = "/etc/argus/token"
+{% endif %}
+
+[detection]
+{% for k, v in (argus_detection | default({})).items() %}
+{{ k }} = {{ v }}
+{% endfor %}
+
+{% for fabric, profile in (argus_detection_profiles | default({})).items() %}
+[detection.profile.{{ fabric }}]
+{% for k, v in profile.items() %}
+{{ k }} = {{ v }}
+{% endfor %}
+
+{% endfor %}
+
+[actions]
+dry_run = {{ argus_action_dry_run | default(false) | string | lower }}
+{% if argus_action_webhook %}
+webhook_url = "{{ argus_action_webhook }}"
+{% endif %}
+
+{% if argus_scheduler %}
+[scheduler]
+backend = "{{ argus_scheduler }}"
+dry_run = {{ argus_scheduler_dry_run | default(true) | string | lower }}
+drain_on_degraded = {{ argus_drain_on_degraded | default(false) | string | lower }}
+{% endif %}
