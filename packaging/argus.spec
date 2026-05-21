@@ -1,9 +1,14 @@
 %global crate_name argus-agent
 %global ebpf_name  argus-ebpf
 
+# Version + release are overridable via rpmbuild --define so build-rpm.sh
+# can rebuild a single spec for multiple tags without editing the file.
+%{!?_version: %define _version 0.1.0}
+%{!?_release: %define _release 1}
+
 Name:           argus
-Version:        0.1.0
-Release:        1%{?dist}
+Version:        %{_version}
+Release:        %{_release}%{?dist}
 Summary:        Adaptive RDMA Guard & Utilization Sentinel — eBPF telemetry agent
 
 License:        Apache-2.0
@@ -20,7 +25,14 @@ BuildRequires:  systemd-rpm-macros
 BuildRequires:  openssl-devel
 BuildRequires:  pkg-config
 
+# CAP_BPF requires kernel >= 5.8. Rocky 8 stock ships 4.18; sites must
+# install ELRepo kernel-ml or use the supported RHEL 8.4+ kernel that
+# backports BPF. This Requires is advisory — RPM will not fail-stop
+# because Rocky's kernel package versioning makes a hard floor brittle —
+# but it's also surfaced by scripts/argus-preflight.
+Requires:       kernel >= 5.4
 Requires:       systemd
+Requires:       chrony
 Requires(pre):  shadow-utils
 
 %description
@@ -29,13 +41,40 @@ behavior related to RDMA networking, interrupt handling, and memory
 allocation in real time. It detects early signs of InfiniBand degradation
 or system imbalance before application performance collapses.
 
+%package selinux
+Summary:        SELinux policy module for ARGUS
+Requires:       %{name} = %{version}-%{release}
+Requires:       selinux-policy-base
+Requires(post): policycoreutils
+Requires(postun): policycoreutils
+BuildArch:      noarch
+
+%description selinux
+SELinux policy module that allows argusd to run under SELinux Enforcing on
+Rocky 8 / RHEL 8. Grants CAP_BPF, sysfs/IB read access, port 9100 bind, and
+write access to /var/lib/argus and /run/argus. Install on hosts where
+`getenforce` reports `Enforcing`; on Permissive/Disabled hosts it is a
+no-op.
+
 %prep
 %autosetup -n %{name}-%{version}
 
 %build
-cargo build --release --workspace
-# eBPF build requires nightly — skipped in RPM; ship pre-built artifact.
-# cargo xtask build-ebpf --release
+# Userspace cargo build. eBPF artifact must be built outside the RPM build
+# (it requires the nightly toolchain + bpf-linker) and shipped in the source
+# tarball under argus-ebpf/target/bpfel-unknown-none/release/. scripts/build-rpm.sh
+# stages it for you.
+if [ -f target/release/%{crate_name} ]; then
+    echo "Pre-built %{crate_name} found in source tarball — skipping cargo build"
+else
+    cargo build --release --workspace
+fi
+
+# Optionally compile the SELinux policy module if selinux-policy-devel is
+# available on the build host. Output lands at deploy/selinux/argus.pp.
+if [ -f /usr/share/selinux/devel/Makefile ]; then
+    %make_build -C deploy/selinux
+fi
 
 %install
 # Binary
@@ -64,7 +103,7 @@ install -Dpm 0644 packaging/tmpfiles.d/argus.conf \
     %{buildroot}%{_tmpfilesdir}/argus.conf
 
 # CLI tools
-for tool in argus-status argus-discover argus-manage-targets argus-scheduler; do
+for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight; do
     install -Dpm 0755 scripts/${tool} %{buildroot}%{_bindir}/${tool}
 done
 ln -sf argusd %{buildroot}%{_bindir}/argus-tui
@@ -72,6 +111,15 @@ ln -sf argusd %{buildroot}%{_bindir}/argus-tui
 # State and runtime directories
 install -dm 0750 %{buildroot}%{_sharedstatedir}/argus
 install -dm 0755 %{buildroot}%{_rundir}/argus
+
+# SELinux policy artifacts (always staged; only installed by argus-selinux)
+install -dm 0755 %{buildroot}%{_datadir}/argus/selinux
+if [ -f deploy/selinux/argus.pp ]; then
+    install -Dpm 0644 deploy/selinux/argus.pp %{buildroot}%{_datadir}/argus/selinux/argus.pp
+fi
+install -Dpm 0644 deploy/selinux/argus.te %{buildroot}%{_datadir}/argus/selinux/argus.te
+install -Dpm 0644 deploy/selinux/argus.fc %{buildroot}%{_datadir}/argus/selinux/argus.fc
+install -Dpm 0644 deploy/selinux/argus.if %{buildroot}%{_datadir}/argus/selinux/argus.if
 
 %pre
 %sysusers_create_compat packaging/sysusers.d/argus.conf
@@ -82,15 +130,36 @@ sha256sum %{_libdir}/argus/%{ebpf_name} | awk '{print $1}' \
     > %{_sysconfdir}/argus/ebpf.sha256 2>/dev/null || :
 %systemd_post argusd.service
 
+# Friendly post-install hint
+if [ -x %{_bindir}/argus-preflight ]; then
+    echo "ARGUS installed. Run 'argus-preflight' to validate this host."
+fi
+
 %preun
 %systemd_preun argusd.service
 
 %postun
 %systemd_postun_with_restart argusd.service
 
+%post selinux
+# Load the policy module on install or upgrade. semodule -i is idempotent.
+if [ -f %{_datadir}/argus/selinux/argus.pp ]; then
+    /usr/sbin/semodule -i %{_datadir}/argus/selinux/argus.pp 2>/dev/null || :
+    # Re-label installed paths so the new types take effect immediately.
+    /usr/sbin/restorecon -RFv %{_bindir}/argusd %{_sysconfdir}/argus \
+        %{_sharedstatedir}/argus %{_rundir}/argus 2>/dev/null || :
+fi
+
+%postun selinux
+# Only unload on full uninstall ($1 == 0), not on upgrade ($1 == 1).
+if [ $1 -eq 0 ]; then
+    /usr/sbin/semodule -r argus 2>/dev/null || :
+fi
+
 %files
 %license LICENSE
 %doc README.md
+%doc CHANGELOG.md
 
 # Binaries
 %{_bindir}/argusd
@@ -99,6 +168,7 @@ sha256sum %{_libdir}/argus/%{ebpf_name} | awk '{print $1}' \
 %{_bindir}/argus-discover
 %{_bindir}/argus-manage-targets
 %{_bindir}/argus-scheduler
+%{_bindir}/argus-preflight
 
 # eBPF artifact
 %dir %{_libdir}/argus
@@ -119,9 +189,21 @@ sha256sum %{_libdir}/argus/%{ebpf_name} | awk '{print $1}' \
 %dir %attr(0750,root,root) %{_sharedstatedir}/argus
 %ghost %dir %{_rundir}/argus
 
+%files selinux
+%dir %{_datadir}/argus
+%dir %{_datadir}/argus/selinux
+%{_datadir}/argus/selinux/argus.te
+%{_datadir}/argus/selinux/argus.fc
+%{_datadir}/argus/selinux/argus.if
+# argus.pp is only present if the build host had selinux-policy-devel.
+%ghost %{_datadir}/argus/selinux/argus.pp
+
 %changelog
-* Mon May 11 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
-- Initial RPM package
-- Production-hardened systemd unit with defense-in-depth
-- Mandatory eBPF hash verification via %%post scriptlet
-- sysusers.d/tmpfiles.d integration
+* Tue May 20 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
+- v0.1.0 production-readiness release for Rocky 8 / RHEL 8 HPC clusters
+- IB fabric idle visibility (argus_ib_port_idle_seconds, argus_ib_fabric_idle)
+- argus-preflight readiness checker
+- Optional argus-selinux subpackage with SELinux policy module
+- Ansible bootstrap playbook
+- Alertmanager email + Zabbix HTTP-agent template
+- Production deployment runbook and troubleshooting docs
