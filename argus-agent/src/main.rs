@@ -344,6 +344,17 @@ fn run_live_mode(
             }
 
             let alerts = pipeline.evaluate();
+
+            // Stamp per-port idle state onto current_metrics so the snapshot
+            // emits argus_ib_port_idle_seconds. Hardware counters keep
+            // firing regardless — this is visibility, not gating.
+            let discovered_ports: Vec<(String, u32)> = hw_reader
+                .discovered_ports()
+                .into_iter()
+                .map(|(d, p, _)| (d, p))
+                .collect();
+            pipeline.finalize_idle_window(&discovered_ports, config.window_secs);
+
             if !alerts.is_empty() {
                 let qp_owners = ebpf_source.read_qp_owners();
                 let blast = process_resolver.resolve_blast_radius(&qp_owners);
@@ -534,6 +545,25 @@ async fn run_event_mode(
             }
 
             let alerts = pipeline.evaluate();
+
+            // Stamp per-port idle state. Mock/replay won't usually have IB
+            // ports discovered, so this list is normally empty — but if the
+            // host *does* have IB and we're scraping its counters in mock
+            // mode, the visibility carries through.
+            #[cfg(target_os = "linux")]
+            let discovered_ports: Vec<(String, u32)> = hw_reader
+                .as_ref()
+                .map(|r| {
+                    r.discovered_ports()
+                        .into_iter()
+                        .map(|(d, p, _)| (d, p))
+                        .collect()
+                })
+                .unwrap_or_default();
+            #[cfg(not(target_os = "linux"))]
+            let discovered_ports: Vec<(String, u32)> = Vec::new();
+            pipeline.finalize_idle_window(&discovered_ports, config.window_secs);
+
             for alert in alerts {
                 if let Ok(exp) = prom_exporter.lock() {
                     exp.record_alert(alert.kind_name(), &alert.severity.to_string());
