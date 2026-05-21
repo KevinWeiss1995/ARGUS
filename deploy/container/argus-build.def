@@ -30,7 +30,8 @@ From: rockylinux/rockylinux:8
 
 %arguments
     RUST_VERSION=1.83.0
-    RUST_NIGHTLY=nightly-2025-01-15
+    # Must match .github/workflows/ci.yml NIGHTLY_TOOLCHAIN
+    RUST_NIGHTLY=nightly-2025-12-01
     BPF_LINKER_VERSION=0.9.13
 
 %post
@@ -91,6 +92,9 @@ From: rockylinux/rockylinux:8
     export RUSTUP_HOME=/opt/rust
     export CARGO_HOME=/opt/cargo
     export PATH=/opt/cargo/bin:$PATH
+    # xtask reads ARGUS_NIGHTLY to pick which dated nightly to invoke via
+    # `cargo +<toolchain>`. Keeps the toolchain with rust-src in scope.
+    export ARGUS_NIGHTLY=nightly-2025-12-01
     # Sentinel: build-rpm.sh sees this and skips its own container wrapper,
     # preventing recursive `apptainer run` calls.
     export ARGUS_IN_BUILD_CONTAINER=1

@@ -54,8 +54,16 @@ fn build_ebpf(release: bool) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&ebpf_dir);
     cmd.env_remove("RUSTUP_TOOLCHAIN");
+
+    // Which nightly to use. Defaults to plain `nightly` for local dev
+    // (matches how the repo's CONTRIBUTING.md tells contributors to set
+    // up their box). The build containers set ARGUS_NIGHTLY to the dated
+    // pin they install with rust-src, so this doesn't fall through to
+    // rustup auto-installing a `nightly` that lacks rust-src.
+    let nightly = std::env::var("ARGUS_NIGHTLY").unwrap_or_else(|_| "nightly".into());
+    let toolchain_arg = format!("+{nightly}");
     cmd.args([
-        "+nightly",
+        toolchain_arg.as_str(),
         "build",
         "--target=bpfel-unknown-none",
         "-Z",

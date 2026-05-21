@@ -30,7 +30,9 @@ FROM rockylinux/rockylinux:8
 #   - LLVM 17: required by bpf-linker; ships in Rocky 8's appstream.
 
 ARG RUST_VERSION=1.83.0
-ARG RUST_NIGHTLY=nightly-2025-01-15
+# Must match .github/workflows/ci.yml NIGHTLY_TOOLCHAIN so the artifacts
+# this container produces are bit-identical to what local CI validates.
+ARG RUST_NIGHTLY=nightly-2025-12-01
 ARG BPF_LINKER_VERSION=0.9.13
 
 # --- System packages ----------------------------------------------------
@@ -91,6 +93,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 WORKDIR /src
 
+# xtask reads ARGUS_NIGHTLY to decide which dated nightly to invoke via
+# `cargo +<toolchain>`. Setting it here ensures cargo uses the same
+# toolchain that has rust-src installed.
+ENV ARGUS_NIGHTLY=${RUST_NIGHTLY}
 ENV ARGUS_IN_BUILD_CONTAINER=1
 
 ENTRYPOINT ["/bin/bash", "-c", "\
