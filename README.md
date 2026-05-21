@@ -50,8 +50,7 @@ Mock mode generates synthetic events through the full pipeline. Try `--profile p
 ```bash
 # As root on any Rocky 8 / RHEL 8 node:
 dnf install -y \
-    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-0.1.0-1.el8.x86_64.rpm \
-    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-selinux-0.1.0-1.el8.noarch.rpm
+    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-0.1.0-1.el8.x86_64.rpm
 
 argus-preflight                       # validate the host
 systemctl enable --now argusd         # start the daemon
@@ -59,8 +58,22 @@ curl -s localhost:9100/health         # confirm: {"state":"HEALTHY",...}
 argus-status                          # human-readable health line
 ```
 
-That's the whole production install. The `argus-selinux` package is only
-needed if `getenforce` reports `Enforcing` — drop it otherwise.
+That's the production install in four commands.
+
+**SELinux subpackage — only if the host is actually running SELinux:**
+
+```bash
+# Check first — output must be "Enforcing" or "Permissive":
+getenforce
+
+# Only then:
+dnf install -y \
+    https://github.com/KevinWeiss1995/ARGUS/releases/download/v0.1.0/argus-selinux-0.1.0-1.el8.noarch.rpm
+```
+
+Do **not** install `argus-selinux` on hosts where `getenforce` says
+`Disabled` or where the command isn't installed — it'll pull in
+~13 MB of `selinux-policy` packages that won't be used.
 
 **Newer releases:** browse <https://github.com/KevinWeiss1995/ARGUS/releases>
 and substitute the tag. Verify the download against the published

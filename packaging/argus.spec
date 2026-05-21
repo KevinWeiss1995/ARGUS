@@ -140,7 +140,18 @@ install -Dpm 0644 deploy/selinux/argus.if %{buildroot}%{_datadir}/argus/selinux/
 install -Dpm 0644 deploy/systemd/modern-caps.conf %{buildroot}%{_datadir}/argus/systemd/modern-caps.conf
 
 %pre
-%sysusers_create_compat packaging/sysusers.d/argus.conf
+# Create the argus system user/group on install if missing. We don't
+# use %sysusers_create_compat because that macro is RHEL 9+ — on Rocky 8
+# the version of systemd-rpm-macros we link against doesn't define it,
+# RPM leaves the literal `%sysusers_create_compat` in the scriptlet,
+# and bash chokes with "fg: no job control" on the leading `%`.
+# The sysusers.d/argus.conf file is still shipped to %{_sysusersdir}
+# so systemd-sysusers picks it up idempotently on next boot.
+getent group argus >/dev/null || /usr/sbin/groupadd -r argus
+getent passwd argus >/dev/null || \
+    /usr/sbin/useradd -r -g argus -d /var/lib/argus -s /usr/sbin/nologin \
+        -c "ARGUS telemetry agent" argus
+exit 0
 
 %post
 # Compute eBPF artifact hash for integrity verification
