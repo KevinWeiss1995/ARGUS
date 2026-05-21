@@ -1,0 +1,16 @@
+# Keep the build context lean — only what build-rpm.sh actually reads.
+# This file is consumed by both `docker build` and `podman build` from
+# the repo root via `-f deploy/container/Containerfile.build`.
+
+target/
+**/target/
+**/*.rpm
+**/*.tar.gz
+**/.DS_Store
+**/__pycache__/
+.git/objects/
+.git/refs/
+.git/logs/
+out/
+docs/*.pdf
+docs/*.log

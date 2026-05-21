@@ -1,0 +1,112 @@
+# ARGUS build container.
+#
+# Produces a Rocky 8 RPM (and matching SELinux subpackage) without
+# requiring the build host to install any Rust toolchain, LLVM, or
+# bpf-linker bare-metal. The build host needs only podman (default on
+# Rocky 8) or docker.
+#
+# Usage from the repo root:
+#
+#   podman build -f deploy/container/Containerfile.build -t argus-build:0.1.0 .
+#   mkdir -p ./out
+#   podman run --rm \
+#       -v $PWD:/src:Z \
+#       -v $PWD/out:/out:Z \
+#       argus-build:0.1.0
+#
+# Or use scripts/build-rpm.sh --container which wraps the above.
+#
+# The build is fully deterministic given pinned versions; see the
+# ARG declarations below. To upgrade, bump the ARG and rebuild the
+# image.
+
+FROM rockylinux/rockylinux:8
+
+# --- Pinned toolchain versions -------------------------------------------
+# These choices are deliberate:
+#   - Rust 1.83 stable: matches the workspace MSRV.
+#   - Rust nightly 2025-01-15: stable enough for aya 0.13 + bpf-linker.
+#   - bpf-linker 0.9: known good against the nightly above.
+#   - LLVM 17: required by bpf-linker; ships in Rocky 8's appstream.
+
+ARG RUST_VERSION=1.83.0
+ARG RUST_NIGHTLY=nightly-2025-01-15
+ARG BPF_LINKER_VERSION=0.9.13
+
+# --- System packages ----------------------------------------------------
+# rpm-build:           rpmbuild for the final artifact
+# clang/llvm-toolset:  required by bpf-linker (LLVM 17)
+# openssl-devel:       cargo crates that link OpenSSL
+# pkg-config:          common dependency-resolving step in cargo builds
+# git:                 some crates read GIT_HEAD via build.rs
+# selinux-policy-devel: for the argus-selinux subpackage build
+# tar/gzip/findutils:  rpmbuild internals
+# patchelf:            in case we ever need to relocate libraries
+
+RUN dnf install -y --setopt=tsflags=nodocs \
+        rpm-build \
+        clang \
+        llvm-toolset \
+        openssl-devel \
+        pkg-config \
+        git \
+        make \
+        gcc \
+        tar \
+        gzip \
+        findutils \
+        patchelf \
+        ca-certificates \
+        selinux-policy-devel \
+        policycoreutils-python-utils \
+        which \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# --- Rust via rustup, fully isolated under /opt/rust -------------------
+# Avoids the build container's $HOME shenanigans. Targeting bpfel for the
+# eBPF crate; rust-src component for cargo nightly's build-std equivalent
+# that aya needs to build its sysroot-free bpf objects.
+
+ENV RUSTUP_HOME=/opt/rust
+ENV CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION} \
+    && rustup toolchain install ${RUST_NIGHTLY} --profile minimal \
+    && rustup component add rust-src --toolchain ${RUST_NIGHTLY} \
+    && rustup component add llvm-tools --toolchain ${RUST_VERSION} \
+    && cargo install --version ${BPF_LINKER_VERSION} --locked bpf-linker \
+    && chmod -R 0755 /opt/rust /opt/cargo
+
+# --- Build script -------------------------------------------------------
+# The entrypoint runs scripts/build-rpm.sh inside the container against
+# a bind-mounted source tree at /src. RPM output lands at /out/.
+#
+# The script auto-detects that it's already in a container and skips its
+# own container wrapper (avoids infinite recursion).
+
+WORKDIR /src
+
+ENV ARGUS_IN_BUILD_CONTAINER=1
+
+ENTRYPOINT ["/bin/bash", "-c", "\
+    set -e; \
+    if [ ! -f /src/Cargo.toml ]; then \
+        echo 'Mount the ARGUS source tree at /src (e.g. -v $PWD:/src:Z)'; \
+        exit 1; \
+    fi; \
+    mkdir -p /out; \
+    cd /src; \
+    bash scripts/build-rpm.sh \"$@\"; \
+    cp /root/rpmbuild/RPMS/*/argus-*.rpm /out/ 2>/dev/null || \
+       cp ~/rpmbuild/RPMS/*/argus-*.rpm /out/ 2>/dev/null || true; \
+    ls -la /out/ \
+", "--"]
+
+# Image metadata
+LABEL org.opencontainers.image.title="ARGUS build environment"
+LABEL org.opencontainers.image.description="Reproducible build container for ARGUS RPMs on Rocky 8"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.source="https://github.com/KevinWeiss1995/ARGUS"
