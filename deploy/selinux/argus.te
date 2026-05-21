@@ -39,7 +39,10 @@ require {
     type var_run_t;
     type var_log_t;
     class bpf { map_create map_read map_write prog_load prog_run };
-    class capability { bpf perfmon dac_read_search dac_override sys_resource };
+    # sys_admin is the fallback path on RHEL 8 / Rocky 8 kernels where
+    # CAP_BPF / CAP_PERFMON aren't recognized by systemd 239 even though
+    # the kernel supports the underlying syscalls via backport.
+    class capability { bpf perfmon dac_read_search dac_override sys_resource sys_admin };
     class capability2 { bpf perfmon };
     class dir { add_name read remove_name search write open };
     class file { create getattr ioctl lock map open read setattr unlink write append };
@@ -77,7 +80,7 @@ corenet_port(argusd_port_t)
 # Capabilities granted to argusd_t
 ########################################
 
-allow argusd_t self:capability { dac_read_search sys_resource };
+allow argusd_t self:capability { dac_read_search sys_resource sys_admin };
 allow argusd_t self:capability2 { bpf perfmon };
 
 # eBPF program/map operations
