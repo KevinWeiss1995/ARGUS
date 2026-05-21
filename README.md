@@ -49,15 +49,47 @@ Mock mode generates synthetic events through the full pipeline. Try `--profile p
 
 There are three supported deployment paths. Pick one:
 
-| Path                | When to use                                          | What it gives you                                       |
-| ------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
-| **Source install**  | Single dev/test host you build from git              | `scripts/install.sh` — compiles + installs + enables    |
-| **RPM (single)**    | One node at a time on Rocky 8 / RHEL 8               | `dnf install argus-<ver>.rpm`                           |
-| **Ansible (fleet)** | A real HPC cluster of more than a couple of nodes    | Preflight + RPM install + config + verify, in parallel  |
+| Path                  | When to use                                          | What it gives you                                       |
+| --------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
+| **Pre-built RPM**     | You just want to install + test on Rocky 8 / RHEL 8  | One `dnf install` from the GitHub release URL — no build, no toolchain |
+| **Build the RPM**     | You want to build from source on your own toolchain  | Apptainer / Spack / Podman / bare-metal — see `docs/hpc-build.md` |
+| **Ansible (fleet)**   | A real HPC cluster of more than a couple of nodes    | Preflight + RPM install + config + verify, in parallel  |
 
 The rest of this section walks through each path. The **production runbook** at
 [`docs/production-deployment.md`](docs/production-deployment.md) goes deeper on
 every step.
+
+### Path 0 — Install the published RPM (no build needed)
+
+The fastest path. Every tagged release publishes signed RPMs as GitHub
+release artifacts, built reproducibly by CI in a Rocky 8 container. Use
+this when you don't need to rebuild from source.
+
+```bash
+# Replace v0.1.0 with the release you want. Latest releases:
+#   https://github.com/KevinWeiss1995/ARGUS/releases
+TAG=v0.1.0
+ARCH=x86_64
+URL=https://github.com/KevinWeiss1995/ARGUS/releases/download/$TAG
+
+# Main package
+sudo dnf install -y $URL/argus-${TAG#v}-1.el8.$ARCH.rpm
+
+# Optional: SELinux policy subpackage (only if your nodes run Enforcing)
+sudo dnf install -y $URL/argus-selinux-${TAG#v}-1.el8.noarch.rpm
+
+# Validate, then enable
+sudo argus-preflight
+sudo systemctl enable --now argusd
+curl -s localhost:9100/health
+```
+
+Verify the download against the published SHA-256:
+
+```bash
+wget $URL/argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
+sha256sum -c argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
+```
 
 ### 0. Prerequisites (all paths)
 
