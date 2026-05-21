@@ -1,0 +1,20 @@
+---
+# Enable and start argusd. Idempotent — only restarts when triggered by
+# the install role's handler.
+
+- name: Enable and start argusd
+  ansible.builtin.systemd:
+    name: argusd
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for /health to return 200
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ argus_metrics_addr.split(':')[1] | default('9100') }}/health"
+    status_code: 200
+    timeout: 5
+  register: argus_health
+  retries: 15
+  delay: 2
+  until: argus_health.status == 200
