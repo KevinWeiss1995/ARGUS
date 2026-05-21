@@ -1,0 +1,22 @@
+---
+# Ensure the metrics port is reachable through firewalld if it's running.
+# No-op on hosts that don't have firewalld installed/active — sites often
+# disable it on internal IB networks.
+
+- name: Detect firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+  register: firewalld_state
+  failed_when: false
+  changed_when: false
+
+- name: Allow argus metrics port through firewalld
+  ansible.posix.firewalld:
+    port: "{{ argus_metrics_addr.split(':')[1] | default('9100') }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+    zone: "{{ argus_firewalld_zone | default(omit) }}"
+  when:
+    - firewalld_state.status is defined
+    - firewalld_state.status.ActiveState == 'active'
