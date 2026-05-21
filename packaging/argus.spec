@@ -25,12 +25,12 @@ BuildRequires:  systemd-rpm-macros
 BuildRequires:  openssl-devel
 BuildRequires:  pkg-config
 
-# CAP_BPF requires kernel >= 5.8. Rocky 8 stock ships 4.18; sites must
-# install ELRepo kernel-ml or use the supported RHEL 8.4+ kernel that
-# backports BPF. This Requires is advisory — RPM will not fail-stop
-# because Rocky's kernel package versioning makes a hard floor brittle —
-# but it's also surfaced by scripts/argus-preflight.
-Requires:       kernel >= 5.4
+# Kernel requirement is intentionally not hard-pinned. RHEL 8.5+ and
+# Rocky 8.5+ stock kernels (which report as 4.18.0-348.* and later)
+# backport CAP_BPF and the BPF features ARGUS needs. ELRepo kernel-ml
+# also works. The systemd unit defaults to CAP_SYS_ADMIN so it works
+# across the full range without per-host tuning; scripts/argus-preflight
+# is the authoritative check at install time.
 Requires:       systemd
 Requires:       chrony
 Requires(pre):  shadow-utils
@@ -121,6 +121,12 @@ install -Dpm 0644 deploy/selinux/argus.te %{buildroot}%{_datadir}/argus/selinux/
 install -Dpm 0644 deploy/selinux/argus.fc %{buildroot}%{_datadir}/argus/selinux/argus.fc
 install -Dpm 0644 deploy/selinux/argus.if %{buildroot}%{_datadir}/argus/selinux/argus.if
 
+# Optional fine-grained capabilities drop-in for kernel >= 5.8 systems.
+# Not enabled by default — operator copies to /etc/systemd/system/argusd.service.d/
+# when they decide to opt in. See deploy/systemd/modern-caps.conf for the
+# activation instructions.
+install -Dpm 0644 deploy/systemd/modern-caps.conf %{buildroot}%{_datadir}/argus/systemd/modern-caps.conf
+
 %pre
 %sysusers_create_compat packaging/sysusers.d/argus.conf
 
@@ -184,6 +190,8 @@ fi
 %{_unitdir}/argusd.service
 %{_sysusersdir}/argus.conf
 %{_tmpfilesdir}/argus.conf
+%dir %{_datadir}/argus/systemd
+%{_datadir}/argus/systemd/modern-caps.conf
 
 # State directories
 %dir %attr(0750,root,root) %{_sharedstatedir}/argus
