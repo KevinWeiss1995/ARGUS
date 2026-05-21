@@ -106,32 +106,28 @@
   when: argus_is_rhel8 and not (argus_force_modern_caps | default(false))
   notify: restart argusd
 
-# --- Optional SELinux policy install ---
+# --- Optional SELinux policy load (opt-in, post-install) ---
+# Mirrors the SLURM pattern: ARGUS imposes no SELinux dep, the policy
+# source files are shipped with the main RPM, and operators opt in
+# fleet-wide via this var. Hosts that don't run SELinux are unaffected
+# either way — `argus-selinux-enable` refuses to run on Disabled hosts.
 
-- name: Build & load argus.pp on SELinux Enforcing hosts
+- name: Enable argus SELinux policy on Enforcing/Permissive hosts
   when: argus_install_selinux | bool
   block:
-    - name: Ensure selinux-policy-devel installed
+    - name: Ensure SELinux policy build tools are installed
       ansible.builtin.dnf:
         name:
           - selinux-policy-devel
           - policycoreutils-python-utils
         state: present
 
-    - name: Check that argus.pp shipped with the RPM
-      ansible.builtin.stat:
-        path: /usr/share/argus/selinux/argus.pp
-      register: argus_pp
-
-    - name: Load argus SELinux module
-      ansible.builtin.command: semodule -i /usr/share/argus/selinux/argus.pp
-      register: semodule_load
-      changed_when: "'reloading' in semodule_load.stdout or semodule_load.rc == 0"
-      when: argus_pp.stat.exists
-
-    - name: Re-label installed paths
-      ansible.builtin.command: >-
-        restorecon -RFv /usr/bin/argusd /etc/argus /var/lib/argus /run/argus
-      register: restorecon_out
-      changed_when: restorecon_out.stdout != ''
-      failed_when: false
+    - name: Run argus-selinux-enable
+      ansible.builtin.command: /usr/bin/argus-selinux-enable
+      register: argus_selinux_enable
+      changed_when: "'Policy module loaded' in argus_selinux_enable.stdout"
+      # Tolerate the Disabled-host case: the script exits non-zero and
+      # we don't want to fail the play on a misconfigured group var.
+      failed_when:
+        - argus_selinux_enable.rc != 0
+        - "'SELinux is Disabled' not in argus_selinux_enable.stderr"
