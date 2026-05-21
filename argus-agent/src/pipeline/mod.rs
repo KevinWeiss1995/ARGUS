@@ -109,6 +109,20 @@ impl Pipeline {
         self.aggregator.current_metrics()
     }
 
+    /// Roll the per-port idle counters for this window and stamp the
+    /// fully-labeled `ib_port_idle` list onto the current metrics so
+    /// telemetry consumers see "(device, port) idle for N seconds."
+    /// Call once per window, after `evaluate()` and before reading
+    /// `current_metrics()` for the snapshot.
+    pub fn finalize_idle_window(
+        &mut self,
+        discovered_ports: &[(String, u32)],
+        window_secs: u64,
+    ) {
+        self.aggregator.mark_window_complete(window_secs);
+        self.aggregator.set_ib_port_idle(discovered_ports);
+    }
+
     pub fn reset_window(&mut self) {
         self.aggregator.reset();
         // Detection engine state (hysteresis, rolling stats) intentionally
