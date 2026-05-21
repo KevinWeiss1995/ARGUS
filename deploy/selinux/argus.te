@@ -1,0 +1,160 @@
+policy_module(argus, 0.1.0)
+
+########################################
+#
+# ARGUS — Adaptive RDMA Guard & Utilization Sentinel
+#
+# This policy lets `argusd` operate under SELinux Enforcing on Rocky 8 /
+# RHEL 8. The agent needs to:
+#   - load BPF programs and maps (CAP_BPF, bpf class)
+#   - read kernel symbols from /proc/kallsyms (proc_kcore_t / kallsyms read)
+#   - read sysfs files under /sys/class/infiniband/* and /sys/kernel/btf/*
+#   - read tracefs format files under /sys/kernel/debug/tracing/events
+#   - bind tcp port 9100 for the Prometheus metrics endpoint
+#   - write under /var/lib/argus and /var/run/argus
+#   - read its /etc/argus configuration
+#
+# Out of scope (operator must add manually):
+#   - port-disable action: needs CAP_NET_ADMIN and write to
+#     /sys/class/infiniband/*/ports/*/admin_state
+#   - scheduler integration: needs scontrol/munge access if SLURM is in use
+#
+########################################
+
+require {
+    type bin_t;
+    type bpf_t;
+    type cert_t;
+    type chronyd_t;
+    type debugfs_t;
+    type etc_t;
+    type kernel_t;
+    type proc_kallsyms_t;
+    type proc_t;
+    type sysctl_kernel_t;
+    type sysfs_t;
+    type tracefs_t;
+    type unreserved_port_t;
+    type var_lib_t;
+    type var_run_t;
+    type var_log_t;
+    class bpf { map_create map_read map_write prog_load prog_run };
+    class capability { bpf perfmon dac_read_search dac_override sys_resource };
+    class capability2 { bpf perfmon };
+    class dir { add_name read remove_name search write open };
+    class file { create getattr ioctl lock map open read setattr unlink write append };
+    class lnk_file { read };
+    class perf_event { open read write };
+    class process { setcap };
+    class tcp_socket { bind create listen accept };
+    class unix_dgram_socket { create connect };
+}
+
+########################################
+# Domain declaration
+########################################
+
+type argusd_t;
+type argusd_exec_t;
+init_daemon_domain(argusd_t, argusd_exec_t)
+
+type argusd_etc_t;
+files_config_file(argusd_etc_t)
+
+type argusd_var_lib_t;
+files_type(argusd_var_lib_t)
+
+type argusd_var_run_t;
+files_pid_file(argusd_var_run_t)
+
+type argusd_log_t;
+logging_log_file(argusd_log_t)
+
+type argusd_port_t;
+corenet_port(argusd_port_t)
+
+########################################
+# Capabilities granted to argusd_t
+########################################
+
+allow argusd_t self:capability { dac_read_search sys_resource };
+allow argusd_t self:capability2 { bpf perfmon };
+
+# eBPF program/map operations
+allow argusd_t self:bpf { map_create map_read map_write prog_load prog_run };
+
+# perf_event_open() for kprobes/tracepoints
+allow argusd_t self:perf_event { open read write };
+
+########################################
+# Filesystem access — kernel surfaces
+########################################
+
+# Read kernel symbols
+allow argusd_t proc_kallsyms_t:file { open read getattr };
+
+# Read sysfs (InfiniBand counters, BTF, tracing)
+allow argusd_t sysfs_t:dir { search read open };
+allow argusd_t sysfs_t:file { open read getattr };
+allow argusd_t sysfs_t:lnk_file { read };
+
+# Read debugfs (tracing event format)
+allow argusd_t debugfs_t:dir { search read open };
+allow argusd_t debugfs_t:file { open read getattr };
+
+# tracefs (kernel tracepoint format files)
+allow argusd_t tracefs_t:dir { search read open };
+allow argusd_t tracefs_t:file { open read getattr };
+
+# /proc/sys/kernel/osrelease
+allow argusd_t sysctl_kernel_t:dir { search };
+allow argusd_t sysctl_kernel_t:file { open read getattr };
+
+########################################
+# Filesystem access — ARGUS state
+########################################
+
+# Configuration
+allow argusd_t argusd_etc_t:dir { search read open };
+allow argusd_t argusd_etc_t:file { open read getattr };
+
+# State directory: /var/lib/argus
+allow argusd_t argusd_var_lib_t:dir { add_name read remove_name search write open };
+allow argusd_t argusd_var_lib_t:file { create getattr open read setattr unlink write append };
+
+# Runtime / PID directory: /var/run/argus
+allow argusd_t argusd_var_run_t:dir { add_name read remove_name search write open };
+allow argusd_t argusd_var_run_t:file { create getattr open read setattr unlink write };
+
+# Log directory (if used)
+allow argusd_t argusd_log_t:dir { add_name read remove_name search write open };
+allow argusd_t argusd_log_t:file { create getattr open read setattr unlink write append };
+
+########################################
+# Network — bind tcp/9100 for metrics
+########################################
+
+allow argusd_t argusd_port_t:tcp_socket { bind create listen accept };
+# Connecting to webhooks / Alertmanager / etc.
+corenet_tcp_connect_all_ports(argusd_t)
+corenet_all_recvfrom_unlabeled(argusd_t)
+
+########################################
+# Misc — TLS certs, hostname, logging
+########################################
+
+# Read TLS cert / key bundles if placed in standard locations
+allow argusd_t cert_t:dir { search read };
+allow argusd_t cert_t:file { open read getattr };
+
+# Send logs to journald
+logging_send_syslog_msg(argusd_t)
+
+# Read its own /proc entries (for capabilities, status)
+allow argusd_t proc_t:dir { search };
+allow argusd_t proc_t:file { open read getattr };
+
+# Don't audit harmless probes for files we don't have access to —
+# e.g. argusd opportunistically reads many sysfs entries to discover
+# kernel capabilities, and a denial there isn't actionable.
+dontaudit argusd_t sysfs_t:file { append };
