@@ -17,10 +17,11 @@ Source0:        %{name}-%{version}.tar.gz
 
 ExclusiveArch:  x86_64 aarch64
 
-BuildRequires:  cargo >= 1.75
-BuildRequires:  rust >= 1.75
-BuildRequires:  clang
-BuildRequires:  llvm
+# BuildRequires intentionally omits cargo / rust / clang / llvm. The
+# Rust toolchain installed by rustup under /opt/cargo is not visible to
+# the RPM dependency solver, and the binary is always compiled outside
+# rpmbuild (in the build container or by scripts/build-rpm.sh) and
+# staged into the source tarball so %build skips cargo entirely.
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  openssl-devel
 BuildRequires:  pkg-config
@@ -207,7 +208,7 @@ fi
 %ghost %{_datadir}/argus/selinux/argus.pp
 
 %changelog
-* Tue May 20 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
+* Wed May 20 2026 ARGUS Maintainers <argus@example.com> - 0.1.0-1
 - v0.1.0 production-readiness release for Rocky 8 / RHEL 8 HPC clusters
 - IB fabric idle visibility (argus_ib_port_idle_seconds, argus_ib_fabric_idle)
 - argus-preflight readiness checker

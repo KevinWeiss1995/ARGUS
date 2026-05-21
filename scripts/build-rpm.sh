@@ -209,20 +209,25 @@ cp -a \
 [[ -f "$REPO_ROOT/LICENSE" ]] && cp -a "$REPO_ROOT/LICENSE" "$STAGE_TOP/"
 [[ -f "$REPO_ROOT/CHANGELOG.md" ]] && cp -a "$REPO_ROOT/CHANGELOG.md" "$STAGE_TOP/"
 
-# Stage pre-built binaries when --no-build was passed
-if $NO_BUILD; then
-    info "Bundling pre-built binaries (--no-build)"
-    if [[ ! -f "$REPO_ROOT/target/release/argus-agent" ]]; then
-        die "pre-built argus-agent missing; drop --no-build or run cargo build --release first"
-    fi
-    if [[ ! -f "$REPO_ROOT/argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf" ]]; then
-        die "pre-built argus-ebpf missing; drop --no-build or run cargo xtask build-ebpf --release first"
-    fi
+# Stage pre-built binaries into the source tarball whenever they exist.
+# The spec's %build checks for target/release/argus-agent and skips
+# cargo when it finds one. Staging unconditionally means rpmbuild never
+# needs cargo / rust as RPM-managed BuildRequires — they're satisfied
+# by the rustup install in the build container that already ran
+# cargo build above.
+AGENT_BIN="$REPO_ROOT/target/release/argus-agent"
+EBPF_BIN="$REPO_ROOT/argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf"
+if [[ -f "$AGENT_BIN" && -f "$EBPF_BIN" ]]; then
+    info "Staging pre-built agent + eBPF into source tarball"
     mkdir -p "$STAGE_TOP/target/release"
-    cp "$REPO_ROOT/target/release/argus-agent" "$STAGE_TOP/target/release/"
+    cp "$AGENT_BIN" "$STAGE_TOP/target/release/"
     mkdir -p "$STAGE_TOP/argus-ebpf/target/bpfel-unknown-none/release"
-    cp "$REPO_ROOT/argus-ebpf/target/bpfel-unknown-none/release/argus-ebpf" \
-        "$STAGE_TOP/argus-ebpf/target/bpfel-unknown-none/release/"
+    cp "$EBPF_BIN" "$STAGE_TOP/argus-ebpf/target/bpfel-unknown-none/release/"
+elif $NO_BUILD; then
+    [[ -f "$AGENT_BIN" ]] || die "pre-built argus-agent missing at $AGENT_BIN — drop --no-build or run cargo build --release first"
+    [[ -f "$EBPF_BIN" ]] || die "pre-built argus-ebpf missing at $EBPF_BIN — drop --no-build or run cargo xtask build-ebpf --release first"
+else
+    warn "No pre-built binaries found — rpmbuild's %build will attempt cargo build inside its sandbox (likely to fail without a managed Rust toolchain)"
 fi
 
 info "Creating $TARBALL"
