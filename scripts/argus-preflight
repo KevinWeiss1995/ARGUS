@@ -95,14 +95,36 @@ check_kernel() {
     IFS=. read -r major minor _ <<< "${release%%-*}"
     major=${major:-0}; minor=${minor:-0}
 
+    # RHEL / Rocky / AlmaLinux 8.x stock kernels report as 4.18.0 but
+    # backport the BPF features we need. The .el8 suffix identifies them
+    # unambiguously. Same for el9 (5.14.0 base).
+    local is_rhel8=false is_rhel9=false
+    if [[ "$release" == *.el8* || "$release" == *.el8_* ]]; then is_rhel8=true; fi
+    if [[ "$release" == *.el9* || "$release" == *.el9_* ]]; then is_rhel9=true; fi
+
     if (( major >= 6 )); then
         emit OK "kernel.version" "$release (≥ 6.0)"
     elif (( major == 5 && minor >= 8 )); then
         emit OK "kernel.version" "$release (CAP_BPF supported)"
+    elif $is_rhel9; then
+        emit OK "kernel.version" "$release (RHEL 9 family — full BPF backports)"
+    elif $is_rhel8; then
+        # Distinguish 8.5+ (CAP_BPF backported) from earlier — the kernel
+        # revision suffix indicates RHEL minor: 4.18.0-553.* is 8.10,
+        # 4.18.0-372.* is 8.6, 4.18.0-348.* is 8.5, 4.18.0-305.* is 8.4.
+        local rev="${release##*-}"     # e.g. "553.89.1.el8_10.x86_64"
+        local rev_major="${rev%%.*}"   # e.g. "553"
+        if [[ "$rev_major" =~ ^[0-9]+$ ]] && (( rev_major >= 348 )); then
+            emit OK "kernel.version" "$release (RHEL 8.5+ — BPF backports complete)"
+        else
+            emit WARN "kernel.version" "$release — RHEL 8 prior to 8.5 may lack BPF backports. Agent will still try; if it fails, upgrade to RHEL 8.5+ or install ELRepo kernel-ml."
+        fi
     elif (( major == 5 && minor >= 4 )); then
-        emit WARN "kernel.version" "$release — CAP_BPF needs 5.8+; unit may need CAP_SYS_ADMIN"
+        emit OK "kernel.version" "$release (BPF + kprobes available; CAP_BPF needs 5.8+, unit defaults to CAP_SYS_ADMIN)"
+    elif (( major == 4 && minor >= 18 )); then
+        emit WARN "kernel.version" "$release — kernel 4.18 outside the RHEL 8 family; BPF may or may not be sufficient. Run the agent in --mode mock first to confirm."
     else
-        emit FAIL "kernel.version" "$release — ARGUS requires kernel ≥ 5.4 (5.8+ recommended). On Rocky 8, install ELRepo kernel-ml or use RHEL 8.4+ kernel with backported BPF features."
+        emit FAIL "kernel.version" "$release — ARGUS requires kernel ≥ 4.18 (with backports) or upstream ≥ 5.4. Older kernels lack the BPF features needed."
     fi
 }
 
@@ -115,9 +137,13 @@ check_btf() {
         sz=$(stat -c%s /sys/kernel/btf/vmlinux 2>/dev/null || echo "?")
         emit OK "kernel.btf" "/sys/kernel/btf/vmlinux present ($sz bytes)"
     elif [[ -e /sys/kernel/btf/vmlinux ]]; then
-        emit WARN "kernel.btf" "BTF present but unreadable for current user"
+        emit WARN "kernel.btf" "BTF present but unreadable for current user — run preflight as root for an authoritative check"
     else
-        emit FAIL "kernel.btf" "/sys/kernel/btf/vmlinux missing — eBPF programs cannot be loaded. Rebuild kernel with CONFIG_DEBUG_INFO_BTF=y or install kernel-devel + a kernel that exports BTF."
+        # BTF improves CO-RE accuracy but is not strictly required: ARGUS
+        # ships a fallback offset table covering RHEL 8 / Rocky 8 in
+        # argus-agent/src/sources/kallsyms.rs. Hard-FAIL is too strong;
+        # WARN with explanation is correct.
+        emit WARN "kernel.btf" "/sys/kernel/btf/vmlinux missing — agent will fall back to compiled-in struct offsets (RHEL 8 is in the fallback table). For best CO-RE coverage, install a kernel built with CONFIG_DEBUG_INFO_BTF=y."
     fi
 }
 
