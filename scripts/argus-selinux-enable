@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# argus-selinux-enable — Build and load the ARGUS SELinux policy module.
+#
+# This is a deliberate post-install opt-in, mirroring how ARGUS handles
+# SLURM: the integration is shipped with the main package, but enabling
+# it is a site decision. ARGUS imposes no SELinux dependency on hosts
+# that don't need one.
+#
+# Run this script on hosts where `getenforce` reports Enforcing or
+# Permissive. On Disabled hosts it refuses to run (the policy module
+# would have no effect anyway).
+#
+# Usage:
+#   sudo argus-selinux-enable             # build + load + relabel
+#   sudo argus-selinux-enable --disable   # unload the module
+#   sudo argus-selinux-enable --status    # show whether loaded
+#
+# Requires (only on the host where you run this script):
+#   selinux-policy-devel        — to compile argus.te → argus.pp
+#   policycoreutils-python-utils — for semodule + restorecon
+
+set -euo pipefail
+
+POLICY_SRC_DIR="${ARGUS_POLICY_DIR:-/usr/share/argus/selinux}"
+MODULE_NAME=argus
+
+info()  { echo -e "\033[1;34m==>\033[0m $*"; }
+ok()    { echo -e "\033[1;32m OK\033[0m $*"; }
+warn()  { echo -e "\033[1;33mWRN\033[0m $*"; }
+die()   { echo -e "\033[1;31mERR\033[0m $*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,22p' "$0"
+    exit 0
+}
+
+ACTION=enable
+for arg in "$@"; do
+    case "$arg" in
+        --disable) ACTION=disable ;;
+        --status)  ACTION=status ;;
+        -h|--help) usage ;;
+        *) die "Unknown option: $arg" ;;
+    esac
+done
+
+# --- Preflight ---
+
+if [[ $EUID -ne 0 ]]; then
+    die "This script must be run as root (sudo $0 $*)"
+fi
+
+if ! command -v getenforce &>/dev/null; then
+    die "SELinux tools not installed — this host doesn't run SELinux. Nothing to enable."
+fi
+
+MODE=$(getenforce)
+case "$MODE" in
+    Enforcing|Permissive) ;;
+    Disabled)
+        die "SELinux is Disabled on this host. The policy module would have no effect. To enable SELinux, edit /etc/selinux/config and reboot — but normally HPC sites either run SELinux Enforcing fleet-wide or not at all."
+        ;;
+    *) die "Unknown SELinux mode: $MODE" ;;
+esac
+
+ok "SELinux mode: $MODE"
+
+# --- Status mode ---
+
+if [[ "$ACTION" == "status" ]]; then
+    if command -v semodule &>/dev/null && semodule -l 2>/dev/null | grep -q "^${MODULE_NAME}"; then
+        ok "argus SELinux module is loaded"
+        exit 0
+    else
+        warn "argus SELinux module is NOT loaded (run: sudo argus-selinux-enable)"
+        exit 1
+    fi
+fi
+
+# --- Disable mode ---
+
+if [[ "$ACTION" == "disable" ]]; then
+    command -v semodule &>/dev/null || die "semodule not found"
+    if ! semodule -l 2>/dev/null | grep -q "^${MODULE_NAME}"; then
+        warn "argus module is not currently loaded; nothing to do"
+        exit 0
+    fi
+    info "Removing argus SELinux module"
+    semodule -r "$MODULE_NAME"
+    ok "argus module removed"
+    exit 0
+fi
+
+# --- Enable mode ---
+
+if [[ ! -d "$POLICY_SRC_DIR" ]]; then
+    die "Policy source dir missing: $POLICY_SRC_DIR. Reinstall the argus RPM."
+fi
+
+# Need policy-devel to compile .te → .pp. Don't auto-install; let the
+# operator make that choice.
+if [[ ! -f /usr/share/selinux/devel/Makefile ]]; then
+    die "selinux-policy-devel not installed. Install with:
+        dnf install -y selinux-policy-devel policycoreutils-python-utils
+    Then re-run: sudo argus-selinux-enable"
+fi
+
+command -v semodule &>/dev/null || die "policycoreutils not installed — dnf install -y policycoreutils-python-utils"
+
+# Compile the policy module in a scratch dir so we never write into
+# /usr/share/argus/selinux (it's owned by the RPM).
+SCRATCH=$(mktemp -d)
+trap 'rm -rf "$SCRATCH"' EXIT
+cp "$POLICY_SRC_DIR"/{argus.te,argus.fc,argus.if} "$SCRATCH/"
+
+info "Building argus.pp (this takes a few seconds)"
+(cd "$SCRATCH" && make -f /usr/share/selinux/devel/Makefile "$MODULE_NAME.pp" >/dev/null)
+[[ -f "$SCRATCH/$MODULE_NAME.pp" ]] || die "build produced no .pp file"
+ok "Built $SCRATCH/$MODULE_NAME.pp"
+
+info "Loading argus policy module via semodule -i"
+semodule -i "$SCRATCH/$MODULE_NAME.pp"
+ok "Policy module loaded"
+
+info "Relabeling installed paths so the new types take effect"
+restorecon -RFv \
+    /usr/bin/argusd \
+    /etc/argus \
+    /var/lib/argus \
+    /run/argus 2>/dev/null || true
+ok "Relabel done"
+
+echo ""
+echo "ARGUS is now SELinux-aware on this host."
+echo "To verify:  argus-selinux-enable --status"
+echo "To disable: sudo argus-selinux-enable --disable"

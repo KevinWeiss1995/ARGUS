@@ -241,7 +241,7 @@ install -m 0644 "$EBPF_BIN" "$INSTALL_EBPF"
 ok "$INSTALL_EBPF"
 
 info "Installing CLI tools to /usr/bin"
-for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight; do
+for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight argus-selinux-enable; do
     if [[ -f "$REPO_ROOT/scripts/$tool" ]]; then
         install -m 0755 "$REPO_ROOT/scripts/$tool" "/usr/bin/$tool"
     fi
@@ -324,25 +324,23 @@ info "Computing eBPF artifact hash"
 sha256sum "$INSTALL_EBPF" | awk '{print $1}' > "$INSTALL_CONF_DIR/ebpf.sha256"
 ok "$INSTALL_CONF_DIR/ebpf.sha256"
 
-# --- SELinux policy module (optional) ---
-# Load the argus.pp module if we're on a host running SELinux Enforcing.
-# Skip entirely on Permissive / Disabled — module isn't needed there.
+# --- SELinux policy artifacts (opt-in, never auto-loaded) ---
+# We stage the policy source files into /usr/share/argus/selinux/ so
+# that operators on Enforcing/Permissive hosts can opt in later via
+# `sudo argus-selinux-enable`. We deliberately do NOT auto-build and
+# load the module here — that would impose an SELinux assumption on
+# sites that don't run it, mirroring how we handle SLURM (code shipped,
+# integration off by default).
 SELINUX_DIR="$REPO_ROOT/deploy/selinux"
-if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]] \
-   && [[ -d "$SELINUX_DIR" ]]; then
-    info "SELinux is Enforcing — building and loading argus.pp"
-    if command -v make &>/dev/null && [[ -f /usr/share/selinux/devel/Makefile ]]; then
-        if make -C "$SELINUX_DIR" && [[ -f "$SELINUX_DIR/argus.pp" ]]; then
-            mkdir -p /usr/share/argus/selinux
-            install -m 0644 "$SELINUX_DIR/argus.pp" /usr/share/argus/selinux/argus.pp
-            semodule -i /usr/share/argus/selinux/argus.pp
-            restorecon -RFv "$INSTALL_BIN" "$INSTALL_CONF_DIR" /var/lib/argus /run/argus 2>/dev/null || true
-            ok "argus SELinux module loaded"
-        else
-            warn "failed to build argus.pp — install selinux-policy-devel and run 'make -C deploy/selinux && semodule -i argus.pp' manually"
-        fi
-    else
-        warn "selinux-policy-devel not installed; argus may be blocked by SELinux. Install with: dnf install -y selinux-policy-devel policycoreutils-python-utils"
+if [[ -d "$SELINUX_DIR" ]]; then
+    mkdir -p /usr/share/argus/selinux
+    for f in argus.te argus.fc argus.if; do
+        [[ -f "$SELINUX_DIR/$f" ]] && install -m 0644 "$SELINUX_DIR/$f" /usr/share/argus/selinux/$f
+    done
+    ok "Staged SELinux policy sources at /usr/share/argus/selinux/"
+    if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then
+        info "SELinux is $(getenforce) — to load the argus policy module, run:"
+        info "    sudo argus-selinux-enable"
     fi
 fi
 
