@@ -52,32 +52,58 @@ sudo dnf install -y kernel-ml      # ELRepo mainline kernel; reboot to activate
 For test-only sites with no IB hardware, `--mode mock` runs the full
 detection pipeline on any kernel with no eBPF requirement.
 
-## 2. Build the RPM
+## 2. Get the RPM
 
-On any Rocky 8 build host with the Rust toolchain installed:
+You can either **download the published RPM** (recommended — no
+toolchain, no privileges) or **build it yourself** if your site
+requires reproducible local builds.
+
+### Option A: Download the published RPM
+
+Every tagged release at <https://github.com/KevinWeiss1995/ARGUS/releases>
+publishes signed RPMs and SHA-256 attestations.
 
 ```bash
-git clone https://github.com/KevinWeiss1995/ARGUS.git
-cd ARGUS
-sudo dnf install -y rpm-build rust cargo clang llvm openssl-devel pkg-config
-just setup-ebpf                          # nightly + bpf-linker
-sudo ./scripts/build-rpm.sh              # produces ~/rpmbuild/RPMS/$arch/argus-0.1.0-1.*.rpm
+TAG=v0.1.0
+ARCH=x86_64
+URL=https://github.com/KevinWeiss1995/ARGUS/releases/download/$TAG
+
+# Fetch + verify
+wget $URL/argus-${TAG#v}-1.el8.$ARCH.rpm \
+     $URL/argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
+sha256sum -c argus-${TAG#v}-1.el8.$ARCH.rpm.sha256
 ```
 
-For SELinux Enforcing sites, also build `deploy/selinux/argus.pp` first
-so the `argus-selinux` subpackage gets bundled:
+The RPM is built by CI in the same Rocky 8 + pinned-toolchain container
+that local Apptainer builds use, so it's bit-identical to what a
+fakeroot-enabled site would produce locally.
+
+### Option B: Build the RPM locally
+
+Build paths in order of HPC suitability:
 
 ```bash
-sudo dnf install -y selinux-policy-devel policycoreutils-python-utils
-make -C deploy/selinux
+# Apptainer SIF (HPC default; needs fakeroot or admin-built SIF)
+./scripts/build-rpm.sh --apptainer
+
+# Spack (sites already using Lmod + Spack)
+spack install argus +rpm
+
+# Podman / Docker (sites with OCI runtime but not Apptainer)
+./scripts/build-rpm.sh --container podman
+
+# Bare-metal (only if Rust is OK installed system-wide)
+sudo dnf install -y rpm-build rust cargo clang llvm openssl-devel pkg-config
+just setup-ebpf
 sudo ./scripts/build-rpm.sh
 ```
 
-For airgapped / repro builds, use mock:
+Full build comparison: [`docs/hpc-build.md`](hpc-build.md).
 
-```bash
-sudo ./scripts/build-rpm.sh --mock rocky-8-x86_64
-```
+For SELinux Enforcing sites, all paths produce the optional
+`argus-selinux` subpackage automatically when `selinux-policy-devel`
+is available. For airgapped / repro builds, layer `--mock rocky-8-x86_64`
+on top of any local-build path.
 
 To sign the RPM (recommended for repo-deployed installs):
 
