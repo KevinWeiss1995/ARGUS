@@ -1,0 +1,27 @@
+# Logrotate configuration for ARGUS persistent logs.
+#
+# Installed at /etc/logrotate.d/argus by the argus RPM. logrotate runs
+# the standard /etc/cron.daily/logrotate (or systemd-timer-driven
+# equivalent) and rotates files matching this config.
+#
+# What we rotate:
+#   /var/lib/argus/scheduler-audit.jsonl
+#       Append-only JSONL log of every drain/resume/hold/release that
+#       argusd performed against the local scheduler. Useful for
+#       forensic review after an outage. Unbounded growth otherwise.
+
+/var/lib/argus/scheduler-audit.jsonl {
+    weekly
+    rotate 12
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+    # argusd holds the file handle for appends; copytruncate avoids
+    # the need for it to handle SIGHUP-style log rotation. Slight
+    # window where writes can land in the old fd's truncated tail,
+    # but acceptable for an audit log.
+    copytruncate
+}
