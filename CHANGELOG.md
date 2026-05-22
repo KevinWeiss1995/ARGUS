@@ -2,7 +2,57 @@
 
 All notable changes are recorded here. Versions follow semver.
 
-## [0.1.0] — 2026-05-21
+## [0.1.0] — 2026-05-22
+
+### Changed — ThroughputDropRule requires corroborating impairment signal
+
+**Bug:** the rule fired CRITICAL on any ≥80% drop from EWMA baseline,
+regardless of context. On the user-reported `cpu164` (academic HPC
+node, idle between jobs), the rule fired immediately after each
+workload finished because throughput went from ~161 to 0 with no
+hard errors, no link events, nothing else wrong with the node.
+
+This is the classic single-signal failure-detector anti-pattern
+documented in network-monitoring research (Mahimkar et al. SIGCOMM
+2009; Bertier et al. DSN 2002; Google SRE book §6).
+
+**Fix:** the rule now requires at least one corroborating impairment
+signal in the same window before firing at all:
+
+- any hard IB error counter incremented (`total_hard_error_delta > 0`)
+- `link_error_recovery_delta > 0` (the cable-failure predictor)
+- `link_downed_delta > 0` (link physically down)
+- `port_xmit_wait_delta > 0` (credit stall / upstream congestion)
+- `cq_jitter.stall_count > 0` (driver or NIC stuck)
+
+Without corroboration the rule stays silent — other rules
+(`RdmaLinkDegradationRule`, `RisingErrorTrendRule`, `CqJitterRule`,
+etc.) still catch actual-impairment cases independently.
+
+The alert message now cites the specific corroborating counters so
+operators can immediately see WHY the rule fired, not just THAT it
+fired.
+
+Five new unit tests cover the four corroboration paths, the
+quiet-idle case, and the partial-drop+corroboration → Degraded
+case. Tested via `cargo test detection::rules`.
+
+### Fixed — eBPF artifact installed to wrong path on x86_64 (libdir mismatch)
+
+`packaging/argus.spec` installed the eBPF object to `%{_libdir}/argus/`
+which on x86_64 RHEL/Rocky is `/usr/lib64/argus/`. The shipped
+`/etc/argus/argusd.conf` hardcoded `ARGUS_EBPF_PATH=/usr/lib/argus/argus-ebpf`,
+so argusd looked in the wrong place and crash-looped with
+`Error: eBPF artifact not found: /usr/lib/argus/argus-ebpf`.
+
+eBPF objects target `bpfel-unknown-none` and are not host-CPU-specific,
+so `/usr/lib/argus/` is the correct location regardless of arch.
+Spec now installs there explicitly; install.sh already used the same
+path. Existing installs can patch the conf to point at the actual
+location (`sed -i 's|/usr/lib/argus/argus-ebpf|/usr/lib64/argus/argus-ebpf|'
+/etc/argus/argusd.conf`) until they upgrade to a new RPM build.
+
+
 
 ### Changed — SELinux is now opt-in post-install (no separate RPM)
 

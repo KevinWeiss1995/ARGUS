@@ -705,26 +705,64 @@ impl DetectionRule for ThroughputDropRule {
         }
 
         let drop_pct = (1.0 - throughput / ewma) * 100.0;
-        if drop_pct >= self.drop_threshold_pct {
-            Some(Alert {
-                timestamp_ns: metrics.window_end_ns,
-                kind: AlertKind::ThroughputDrop {
-                    current_throughput: throughput as u64,
-                    ewma_throughput: ewma,
-                    drop_pct,
-                },
-                severity: if drop_pct >= 80.0 {
-                    HealthState::Critical
-                } else {
-                    HealthState::Degraded
-                },
-                message: format!(
-                    "Throughput drop: {drop_pct:.0}% below baseline ({throughput:.0} vs {ewma:.0})"
-                ),
-            })
-        } else {
-            None
+        if drop_pct < self.drop_threshold_pct {
+            return None;
         }
+
+        // Corroboration check.
+        //
+        // Throughput drops in isolation are a notoriously high-false-positive
+        // signal in production network monitoring (Mahimkar et al. SIGCOMM
+        // 2009; Bertier et al. DSN 2002). On academic / shared HPC clusters
+        // where most nodes are idle most of the time, "throughput went to 0"
+        // is the *expected* state between jobs — not a node failure.
+        //
+        // We only fire when the drop coincides with at least one signal that
+        // independently indicates real fabric/host impairment:
+        //   - any hard IB error counter incremented this window
+        //   - link_error_recovery_delta > 0 (cable-failure predictor)
+        //   - link_downed_delta > 0 (link physically down)
+        //   - CQ stalls observed (driver / NIC stuck)
+        //   - port_xmit_wait_delta > 0 (credit stall / upstream congestion)
+        //
+        // Without any of these, the rule stays silent; other rules (link
+        // degradation, rising error trend, CQ jitter, etc.) catch the
+        // actual-impairment case independently.
+        let has_corroborating_impairment = d.total_hard_error_delta() > 0
+            || d.link_error_recovery_delta > 0
+            || d.link_downed_delta > 0
+            || d.port_xmit_wait_delta > 0
+            || metrics.cq_jitter.stall_count > 0;
+
+        if !has_corroborating_impairment {
+            return None;
+        }
+
+        let severity = if drop_pct >= 80.0 {
+            HealthState::Critical
+        } else {
+            HealthState::Degraded
+        };
+
+        Some(Alert {
+            timestamp_ns: metrics.window_end_ns,
+            kind: AlertKind::ThroughputDrop {
+                current_throughput: throughput as u64,
+                ewma_throughput: ewma,
+                drop_pct,
+            },
+            severity,
+            message: format!(
+                "Throughput drop {drop_pct:.0}% below baseline ({throughput:.0} vs {ewma:.0}) \
+                 corroborated by: {} hard error(s), {} link-recovery, {} link-down, \
+                 {} xmit-wait, {} CQ stall(s)",
+                d.total_hard_error_delta(),
+                d.link_error_recovery_delta,
+                d.link_downed_delta,
+                d.port_xmit_wait_delta,
+                metrics.cq_jitter.stall_count,
+            ),
+        })
     }
 }
 
@@ -1520,5 +1558,148 @@ mod tests {
         };
         let alert = rule.evaluate(&metrics).unwrap();
         assert_eq!(alert.severity, HealthState::Degraded);
+    }
+
+    // ─── ThroughputDropRule: corroboration tests ─────────────────────────
+    //
+    // The rule MUST NOT fire on bare throughput drops without an
+    // independent impairment signal — that's the false-positive case
+    // on academic clusters where idle nodes are normal. It MUST fire
+    // when a drop coincides with hard errors, link events, or CQ stalls.
+
+    fn throughput_metrics(rx_bytes: u64, xmit_bytes: u64) -> AggregatedMetrics {
+        // Both _delta fields are in IB native 4-byte units; the rule's
+        // throughput_bytes() multiplies by 4 internally.
+        AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_data_delta: rx_bytes / 4,
+                port_xmit_data_delta: xmit_bytes / 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn throughput_drop_alone_does_not_fire() {
+        let mut rule = ThroughputDropRule::default();
+
+        // Warm the rule with high-throughput windows (workload running)
+        for _ in 0..20 {
+            rule.evaluate_mut(&throughput_metrics(1_000_000, 1_000_000));
+        }
+
+        // Workload ends — throughput collapses to zero with NO errors.
+        // This is the bare-drop case the rule must ignore.
+        let idle = throughput_metrics(0, 0);
+        let alert = rule.evaluate_mut(&idle);
+        assert!(
+            alert.is_none(),
+            "bare throughput drop with no corroborating signal must NOT fire — got {:?}",
+            alert.map(|a| (a.severity, a.message))
+        );
+
+        // Sustained idle: still must not fire over many windows.
+        for _ in 0..50 {
+            assert!(
+                rule.evaluate_mut(&idle).is_none(),
+                "sustained idle must keep the rule silent"
+            );
+        }
+    }
+
+    #[test]
+    fn throughput_drop_with_hard_errors_fires_critical() {
+        let mut rule = ThroughputDropRule::default();
+        for _ in 0..20 {
+            rule.evaluate_mut(&throughput_metrics(1_000_000, 1_000_000));
+        }
+
+        let drop_with_errors = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_data_delta: 0,
+                port_xmit_data_delta: 0,
+                symbol_error_delta: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate_mut(&drop_with_errors).expect("must fire");
+        assert_eq!(alert.severity, HealthState::Critical);
+        assert!(
+            alert.message.contains("hard error"),
+            "alert message should cite corroborating evidence; got: {}",
+            alert.message
+        );
+    }
+
+    #[test]
+    fn throughput_drop_with_link_recovery_fires() {
+        let mut rule = ThroughputDropRule::default();
+        for _ in 0..20 {
+            rule.evaluate_mut(&throughput_metrics(1_000_000, 1_000_000));
+        }
+        let drop_with_recovery = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_data_delta: 0,
+                port_xmit_data_delta: 0,
+                link_error_recovery_delta: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate_mut(&drop_with_recovery).expect("must fire");
+        // 100% drop → Critical; corroborated by link-recovery.
+        assert_eq!(alert.severity, HealthState::Critical);
+        assert!(alert.message.contains("link-recovery"));
+    }
+
+    #[test]
+    fn throughput_drop_with_cq_stalls_fires() {
+        let mut rule = ThroughputDropRule::default();
+        for _ in 0..20 {
+            rule.evaluate_mut(&throughput_metrics(1_000_000, 1_000_000));
+        }
+        let drop_with_stalls = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_data_delta: 0,
+                port_xmit_data_delta: 0,
+                ..Default::default()
+            },
+            cq_jitter: argus_common::CqJitterMetrics {
+                completion_count: 100,
+                stall_count: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate_mut(&drop_with_stalls).expect("must fire");
+        assert_eq!(alert.severity, HealthState::Critical);
+    }
+
+    #[test]
+    fn partial_drop_with_corroboration_fires_degraded() {
+        let mut rule = ThroughputDropRule::default();
+        // Warm-up: 2_000_000 bytes per window (rcv 1M + xmit 1M).
+        for _ in 0..20 {
+            rule.evaluate_mut(&throughput_metrics(1_000_000, 1_000_000));
+        }
+        // 60% drop → current = 800_000 bytes. port_*_data_delta is in
+        // 4-byte units, so deltas of 100_000 each → throughput_bytes()
+        // returns (100_000 + 100_000) * 4 = 800_000.
+        let partial = AggregatedMetrics {
+            ib_counter_deltas: IbCounterDeltas {
+                port_rcv_data_delta: 100_000,
+                port_xmit_data_delta: 100_000,
+                symbol_error_delta: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let alert = rule.evaluate_mut(&partial).expect("must fire");
+        assert_eq!(
+            alert.severity, HealthState::Degraded,
+            "60% drop is below the 80% Critical threshold"
+        );
     }
 }
