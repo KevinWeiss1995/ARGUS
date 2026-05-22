@@ -308,6 +308,24 @@ fn run_live_mode(
         reader
     };
 
+    // Host-side NIC health (PCIe lanes + thermal). Independent of IB
+    // protocol — catches NIC hardware degradation that doesn't move
+    // any IB counter.
+    let nic_health = argus_agent::sources::nic_health::NicHealthReader::discover();
+    if nic_health.device_count() > 0 {
+        let thermal_coverage = nic_health.thermal_coverage();
+        let with_thermal: Vec<&String> = thermal_coverage
+            .iter()
+            .filter(|(_, has)| *has)
+            .map(|(d, _)| d)
+            .collect();
+        tracing::info!(
+            ib_devices = nic_health.device_count(),
+            with_thermal = with_thermal.len(),
+            "NIC health reader online"
+        );
+    }
+
     let mut process_resolver = argus_agent::sources::process_resolver::ProcessResolver::new();
     let mut action_engine = argus_agent::actions::ActionEngine::from_config(&config.actions);
 
@@ -414,6 +432,15 @@ fn run_live_mode(
                         dev_type,
                     );
                 }
+                // Publish absolute counter values for long-window slope
+                // analysis (the El-Sayed & Schroeder DSN-2013 / Mellanox
+                // UFM Health-Score pattern for slow IB degradation).
+                exp.update_absolute_counters(&hw_reader.absolute_counters());
+                // Host-side NIC health: PCIe lane state + thermal.
+                // These read /sys/bus/pci/.../current_link_* and
+                // /sys/class/hwmon — independent of IB protocol.
+                exp.update_nic_pcie(&nic_health.read_pcie());
+                exp.update_nic_thermal(&nic_health.read_thermal());
                 exp.update_lru_evictions(snap.cq_lru_misses, snap.slab_lru_misses);
             }
             if let Ok(mut hs) = health_snapshot.lock() {
