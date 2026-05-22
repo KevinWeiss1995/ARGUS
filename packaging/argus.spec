@@ -79,7 +79,7 @@ install -Dpm 0755 target/release/%{crate_name} %{buildroot}%{_bindir}/argusd
 
 # eBPF artifact
 install -Dpm 0644 %{ebpf_name}/target/bpfel-unknown-none/release/%{ebpf_name} \
-    %{buildroot}%{_libdir}/argus/%{ebpf_name}
+    %{buildroot}/usr/lib/argus/%{ebpf_name}
 
 # Systemd unit
 install -Dpm 0644 deploy/argusd.service \
@@ -140,7 +140,7 @@ exit 0
 
 %post
 # Compute eBPF artifact hash for integrity verification
-sha256sum %{_libdir}/argus/%{ebpf_name} | awk '{print $1}' \
+sha256sum /usr/lib/argus/%{ebpf_name} | awk '{print $1}' \
     > %{_sysconfdir}/argus/ebpf.sha256 2>/dev/null || :
 %systemd_post argusd.service
 
@@ -178,8 +178,8 @@ fi
 %{_bindir}/argus-selinux-enable
 
 # eBPF artifact
-%dir %{_libdir}/argus
-%{_libdir}/argus/%{ebpf_name}
+%dir /usr/lib/argus
+/usr/lib/argus/%{ebpf_name}
 
 # Configuration
 %dir %{_sysconfdir}/argus
