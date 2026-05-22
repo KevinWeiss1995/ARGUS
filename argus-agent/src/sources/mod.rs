@@ -6,6 +6,7 @@ pub mod ebpf_parse;
 pub mod hwcounters;
 #[cfg(target_os = "linux")]
 pub mod kallsyms;
+pub mod nic_health;
 pub mod mock;
 pub mod process_resolver;
 pub mod replay;
