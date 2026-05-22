@@ -39,9 +39,36 @@ impl KprobeTargets {
     }
 }
 
-/// Preferred kprobe targets, ordered by priority (mlx5 first, rxe fallback).
-const SUBMIT_CANDIDATES: &[&str] = &["mlx5_ib_post_send", "rxe_post_send"];
-const POLL_CANDIDATES: &[&str] = &["mlx5_ib_poll_cq", "rxe_poll_cq"];
+/// Preferred kprobe targets, ordered by priority. The mlx5 driver has
+/// renamed/inlined these functions multiple times across kernel
+/// versions; we try every variant we know of before falling back to
+/// rxe (Soft-RoCE).
+///
+/// References:
+///   - drivers/infiniband/hw/mlx5/main.c — function naming evolution
+///   - RHEL 8.x backport history — `mlx5_ib_post_send` stable since 8.0
+///   - upstream 5.10+ — some inline aliases added (`_mlx5_ib_*`)
+///   - upstream 6.x — wrapper functions (`mlx5r_*`) appear in some
+///     vendor patchsets
+///
+/// First-match wins. If your kernel has none of these symbols exported
+/// (e.g. CONFIG_KPROBES=n, or inlined under aggressive optimization),
+/// CQ jitter detection degrades to "unavailable" with a WARN log and
+/// the argus_ebpf_cq_kprobes_attached Prometheus gauge reports 0.
+const SUBMIT_CANDIDATES: &[&str] = &[
+    "mlx5_ib_post_send",
+    "_mlx5_ib_post_send",
+    "mlx5r_post_send",
+    "mlx5_ib_post_send_drain",
+    "rxe_post_send",
+];
+
+const POLL_CANDIDATES: &[&str] = &[
+    "mlx5_ib_poll_cq",
+    "_mlx5_ib_poll_cq",
+    "mlx5r_poll_cq",
+    "rxe_poll_cq",
+];
 
 /// Scan /proc/kallsyms and resolve kprobe targets.
 /// Returns targets with the highest-priority available functions.
@@ -61,10 +88,25 @@ pub fn discover_kprobe_targets() -> KprobeTargets {
     if let (Some(ref submit), Some(ref poll)) = (&wr_submit, &cq_poll) {
         tracing::info!(submit, poll, "CQ jitter kprobe targets resolved");
     } else {
-        tracing::info!(
+        // WARN — not INFO. CQ jitter is one of the two non-redundant
+        // slow-degradation signals (the other being long-window symbol
+        // error creep). Losing it silently is a real production gap.
+        // Operators investigating "why is CQ latency always 0?" will
+        // grep for this line.
+        tracing::warn!(
             ?wr_submit,
             ?cq_poll,
-            "CQ jitter kprobes not fully available — micro-stall detection disabled"
+            submit_candidates = ?SUBMIT_CANDIDATES,
+            poll_candidates = ?POLL_CANDIDATES,
+            "CQ jitter kprobes NOT AVAILABLE — micro-stall detection \
+             disabled. None of the candidate kernel symbols were found \
+             in /proc/kallsyms. To check what your kernel exports:\n\
+             \tgrep -E 'mlx5_ib_post_send|mlx5_ib_poll_cq|rxe_post_send|rxe_poll_cq' /proc/kallsyms\n\
+             If those return empty, kprobe targets may be inlined under \
+             aggressive optimization or unavailable on this kernel. The \
+             agent will continue running but cq_jitter metrics will \
+             remain zero — argus_ebpf_cq_kprobes_attached gauge will \
+             report 0."
         );
     }
 

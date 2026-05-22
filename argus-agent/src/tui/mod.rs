@@ -372,16 +372,29 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
         rdma_color,
     );
 
-    let cq_has_data = state.cq_latency_history.last().map_or(false, |&v| v > 0.0);
-    let cq_color = if cq_has_data {
+    // CQ p99 latency is fed by eBPF CQ kprobes. If those didn't attach,
+    // every value is 0 and the sparkline renders as an invisible flat
+    // line — which looks identical to "broken" to an operator. Detect
+    // the all-zero case and tag the title so the operator knows the
+    // data path isn't producing data, not just that nothing's happened.
+    let cq_has_any_data = state
+        .cq_latency_history
+        .iter()
+        .any(|&v| v > 0.0);
+    let cq_color = if cq_has_any_data {
         Color::LightRed
     } else {
         Color::DarkGray
     };
+    let cq_title = if !state.cq_latency_history.is_empty() && !cq_has_any_data {
+        " CQ Latency p99 (us) — no data (kprobes off?) "
+    } else {
+        " CQ Latency p99 (us) "
+    };
     render_sparkline_panel(
         frame,
         chunks[1],
-        " CQ Latency p99 (us) ",
+        cq_title,
         &state.cq_latency_history,
         cq_color,
     );

@@ -84,6 +84,12 @@ mod inner {
         prev_cq_totals: [u64; 4],
         prev_lru_misses: [u64; 2],
         read_count: u32,
+        /// Outcome of CQ kprobe attachment. Surfaced to Prometheus as
+        /// argus_ebpf_cq_kprobes_attached so operators can see at a
+        /// glance whether CQ latency monitoring is alive.
+        pub cq_kprobes_attached: bool,
+        /// Outcome of slab-latency kprobe pair attachment.
+        pub slab_latency_attached: bool,
     }
 
     /// Parse kernel version from /proc/sys/kernel/osrelease and return (major, minor).
@@ -355,6 +361,8 @@ mod inner {
                 prev_cq_totals: [0; 4],
                 prev_lru_misses: [0; 2],
                 read_count: 0,
+                cq_kprobes_attached,
+                slab_latency_attached: slab_latency_ok,
             })
         }
 

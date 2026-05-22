@@ -123,6 +123,12 @@ struct ArgusPrometheusMetrics {
     nic_pcie_max_width: Family<Vec<(String, String)>, Gauge>,
     nic_pcie_degraded: Family<Vec<(String, String)>, Gauge>,
     nic_temperature_celsius: Family<Vec<(String, String)>, Gauge>,
+    // 0/1 gauges that surface which optional eBPF feature paths
+    // actually attached. Operators investigating "why is the CQ
+    // Latency panel always zero?" can confirm here whether the
+    // probes are alive without grepping /proc/kallsyms by hand.
+    ebpf_cq_kprobes_attached: Gauge,
+    ebpf_slab_latency_attached: Gauge,
 }
 
 impl PrometheusExporter {
@@ -674,6 +680,20 @@ impl PrometheusExporter {
             nic_temperature_celsius.clone(),
         );
 
+        let ebpf_cq_kprobes_attached = Gauge::default();
+        registry.register(
+            "argus_ebpf_cq_kprobes_attached",
+            "1 when the eBPF CQ-jitter kprobes (post_send + poll_cq) attached successfully at startup; 0 when one or both failed. Zero means cq_jitter metrics will remain zero regardless of RDMA activity — the data path is dead. Investigate with: grep -E 'mlx5_ib_post_send|mlx5_ib_poll_cq|rxe_post_send|rxe_poll_cq' /proc/kallsyms",
+            ebpf_cq_kprobes_attached.clone(),
+        );
+
+        let ebpf_slab_latency_attached = Gauge::default();
+        registry.register(
+            "argus_ebpf_slab_latency_attached",
+            "1 when the eBPF slab-allocation latency kprobe pair attached successfully at startup; 0 when one or both failed. Zero means slab latency metrics will remain zero — only allocation counts (from tracepoints) will be valid.",
+            ebpf_slab_latency_attached.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -752,6 +772,8 @@ impl PrometheusExporter {
             nic_pcie_max_width,
             nic_pcie_degraded,
             nic_temperature_celsius,
+            ebpf_cq_kprobes_attached,
+            ebpf_slab_latency_attached,
         };
 
         Self {
@@ -929,6 +951,18 @@ impl PrometheusExporter {
             .hw_counter_last_read_secs
             .get_or_create(&labels)
             .set(now_secs);
+    }
+
+    /// Record the eBPF kprobe attachment outcomes once at startup.
+    /// Operators monitoring whether the slow-path eBPF features actually
+    /// went live can alert on these gauges (= 0 means data path dead).
+    pub fn set_ebpf_attachment_status(&self, cq_attached: bool, slab_latency_attached: bool) {
+        self.metrics
+            .ebpf_cq_kprobes_attached
+            .set(i64::from(cq_attached));
+        self.metrics
+            .ebpf_slab_latency_attached
+            .set(i64::from(slab_latency_attached));
     }
 
     /// Publish PCIe link state for every discovered IB NIC. Updates

@@ -4,6 +4,44 @@ All notable changes are recorded here. Versions follow semver.
 
 ## [0.1.0] — 2026-05-22 (slow-degradation detection)
 
+### Fixed — CQ latency p99 silently dead on real Mellanox kernels
+
+`argus_cq_*` metrics and the TUI "CQ Latency p99 (us)" panel were
+showing zero on cpu164. Root cause: the eBPF CQ-jitter kprobes
+target a hardcoded list of two function names (`mlx5_ib_post_send`,
+`mlx5_ib_poll_cq`). On kernels where those are renamed/inlined,
+no kprobe attaches, `completion_count` stays at 0, and
+`estimated_p99_ns()` returns 0 forever. The agent logged one INFO
+line at startup and proceeded silently with no CQ data.
+
+Three coordinated fixes:
+
+  1. Expanded SUBMIT_CANDIDATES and POLL_CANDIDATES in
+     `sources/kallsyms.rs` to cover known kernel variations:
+     `mlx5_ib_post_send`, `_mlx5_ib_post_send`, `mlx5r_post_send`,
+     `mlx5_ib_post_send_drain`, `rxe_post_send` for submit;
+     `mlx5_ib_poll_cq`, `_mlx5_ib_poll_cq`, `mlx5r_poll_cq`,
+     `rxe_poll_cq` for poll.
+
+  2. Promoted the "kprobes not available" log from INFO to WARN
+     with the exact `grep` command operators should run against
+     `/proc/kallsyms` to verify what their kernel exports.
+
+  3. New Prometheus gauges expose attachment status directly:
+       argus_ebpf_cq_kprobes_attached   (0|1)
+       argus_ebpf_slab_latency_attached (0|1)
+     Set once at startup via `set_ebpf_attachment_status()`. An
+     operator alerting on `argus_ebpf_cq_kprobes_attached == 0`
+     knows immediately that the data path is dead — no log
+     grepping required.
+
+  4. TUI: when the `cq_latency_history` contains data but every
+     value is zero (the kprobe-off symptom), the panel title now
+     reads "CQ Latency p99 (us) — no data (kprobes off?)" instead
+     of the misleading silent empty plot.
+
+
+
 ### Added — Mellanox mlx5 extended counters (Fix A)
 
 Eleven new IB hardware counters are now read on every window from

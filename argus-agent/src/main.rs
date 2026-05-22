@@ -290,6 +290,24 @@ fn run_live_mode(
     let mut ebpf_source = argus_agent::sources::ebpf::EbpfEventSource::new(ebpf_path)
         .map_err(|e| anyhow::anyhow!("failed to load eBPF probes: {e}"))?;
 
+    // Publish the kprobe attachment outcomes as Prometheus gauges so
+    // operators can SEE whether CQ latency / slab latency data paths
+    // are alive, instead of having to grep startup logs after the fact.
+    if let Ok(exp) = prom_exporter.lock() {
+        exp.set_ebpf_attachment_status(
+            ebpf_source.cq_kprobes_attached,
+            ebpf_source.slab_latency_attached,
+        );
+    }
+    if !ebpf_source.cq_kprobes_attached {
+        tracing::warn!(
+            "CQ latency monitoring is OFFLINE on this host (kprobes failed \
+             to attach). argus_ebpf_cq_kprobes_attached=0. CQ panel will \
+             show zero. See startup log for the grep command to inspect \
+             /proc/kallsyms."
+        );
+    }
+
     dash_state.source_name = "ebpf/live".into();
 
     argus_agent::security::drop_privileges();
