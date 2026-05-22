@@ -2,7 +2,87 @@
 
 All notable changes are recorded here. Versions follow semver.
 
-## [0.1.0] — 2026-05-22 (production hardening pass)
+## [0.1.0] — 2026-05-22 (slow-degradation detection)
+
+### Added — Mellanox mlx5 extended counters (Fix A)
+
+Eleven new IB hardware counters are now read on every window from
+`/sys/class/infiniband/<mlx5_*>/ports/<n>/hw_counters/`. These are
+the slow-degradation indicators NVIDIA / OFED documentation flags
+as primary for marginal-link diagnosis on Mellanox hardware:
+
+  local_ack_timeout_err     packet_seq_err
+  implied_nak_seq_err       out_of_buffer
+  out_of_sequence           req_cqe_error
+  resp_cqe_error            roce_adp_retrans
+  roce_slow_restart         np_cnp_sent
+  rp_cnp_handled
+
+Each emits a per-port `argus_ib_mlx5_<counter>_delta{device,port}`
+Prometheus gauge. Aggregate convenience methods on `IbCounterDeltas`:
+`mlx5_slow_degradation_signal()` (sum of the four "creep" counters)
+and `mlx5_cqe_error_total()` (RDMA work-request error sum).
+
+### Added — Absolute counter values for long-window slope analysis (Fix B)
+
+`HwCounterReader` now caches the latest absolute (cumulative since
+boot) value of every counter it reads, exposed via `absolute_counters()`.
+The Prometheus exporter publishes them as `argus_ib_counter_total{device,
+port,counter}`. External Prometheus queries can now compute:
+
+    rate(argus_ib_counter_total{counter="symbol_error_count"}[24h]) > N
+
+which is the 24-72h slow-creep detection pattern documented by
+El-Sayed & Schroeder (DSN 2013, "Reading between the lines of
+failure logs") and used by NVIDIA UFM's Health Score. Previously
+only per-window deltas were exposed, making long-window trend
+analysis impossible.
+
+### Added — Long-window slow-degradation detection rule (Fix C)
+
+New `SlowDegradationRule` (`detection/rules.rs`) maintains a rolling
+window of ~1200 samples (≈1 hour at 3s/window) over two signals:
+
+  - Aggregate Mellanox slow-degradation counter (local_ack_timeout
+    + packet_seq_err + implied_nak_seq_err + roce_adp_retrans)
+  - Standard IB `symbol_error_count` delta
+
+Fires DEGRADED — not CRITICAL — when the rolling mean stays above
+the noise threshold for the full window. This is "schedule a
+maintenance window," not "drain now." Catastrophic events still
+trigger CRITICAL via the other rules.
+
+Memory cost: ~10 KB per rule instance. Cooldown of 1200 windows
+between repeat fires prevents alert flooding from sustained
+degradation.
+
+### Added — Host-side NIC health (Fix D + E)
+
+New `sources/nic_health.rs` module reads two signals invisible to
+IB counters:
+
+  - **PCIe lane state**: compares `current_link_width` vs
+    `max_link_width` and `current_link_speed` vs `max_link_speed`
+    from `/sys/bus/pci/devices/<bdf>/`. Catches NIC slot, contact,
+    or thermal throttling that downgrades the host-NIC bus without
+    breaking IB. Exposed as `argus_nic_pcie_current_link_width`,
+    `argus_nic_pcie_max_link_width`, `argus_nic_pcie_degraded`.
+
+  - **NIC thermal**: walks `/sys/class/hwmon/*` to find the temp1
+    sensor linked to each IB device's PCI parent. Mellanox NICs
+    always expose this. Sustained >75°C predicts hardware failure
+    hours-to-days in advance per NVIDIA field data. Exposed as
+    `argus_nic_temperature_celsius{device}`.
+
+### Changed — ebpf bootstrap logging downgraded INFO → DEBUG
+
+The first-three-windows diagnostic logs in `sources/ebpf.rs`
+(`IRQ_COUNTS raw per-cpu values`, `SLAB_STATS summed totals`) were
+emitting at INFO. On 80-CPU nodes the IRQ log dumps an 80-element
+vector per restart — way too noisy for production. Now DEBUG; set
+`ARGUS_LOG_LEVEL=debug` to investigate cold-start behavior.
+
+
 
 ### Added — operator visibility for "is monitoring alive?"
 

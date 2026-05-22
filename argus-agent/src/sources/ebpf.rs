@@ -19,7 +19,7 @@ mod inner {
     use aya::programs::{KProbe, TracePoint};
     use aya::{Ebpf, EbpfLoader, Pod};
     use std::path::Path;
-    use tracing::{info, warn};
+    use tracing::{debug, info, warn};
 
     use crate::sources::kallsyms;
     use crate::sources::tracepoint_format;
@@ -484,7 +484,11 @@ mod inner {
                 Ok(percpu_vals) => {
                     let current: Vec<u64> = percpu_vals.iter().copied().collect();
                     if diagnostic {
-                        info!(
+                        // DEBUG, not INFO. On 80-CPU nodes a single line
+                        // dumps a vector of 80 numbers — way too noisy
+                        // at INFO. Operators investigating cold-start
+                        // behavior set ARGUS_LOG_LEVEL=debug to see this.
+                        debug!(
                             read = self.read_count,
                             ?current,
                             "IRQ_COUNTS raw per-cpu values"
@@ -532,7 +536,7 @@ mod inner {
                         rearmed.push(zeroed);
                     }
                     if diagnostic {
-                        info!(read = self.read_count, ?totals, "SLAB_STATS summed totals");
+                        debug!(read = self.read_count, ?totals, "SLAB_STATS summed totals");
                     }
 
                     let prev = &self.prev_slab_totals;

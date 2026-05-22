@@ -1,11 +1,12 @@
 ---
 source: argus-agent/tests/tui_snapshot_tests.rs
+assertion_line: 115
 expression: rendered
 ---
 ┌ Adaptive RDMA Guard & Utilization Sentinel ──────────────────────────────────┐
 │ ARGUS | State: ██ HEALTHY | Source: none | Events: 0 | Uptime: 0.0s | RDMA: —│
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ IRQ Distribution ────────────────────────────────────────────────────────────┐
+┌ IRQ Distribution (0 CPUs) ───────────────────────────────────────────────────┐
 │  Waiting for interrupt data...                                               │
 │                                                                              │
 │                                                                              │
