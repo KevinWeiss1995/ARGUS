@@ -2,7 +2,58 @@
 
 All notable changes are recorded here. Versions follow semver.
 
-## [0.1.0] — 2026-05-22
+## [0.1.0] — 2026-05-22 (production hardening pass)
+
+### Added — operator visibility for "is monitoring alive?"
+
+The cpu164 deployment showed all-zero IB error deltas, which was
+correct behaviour on a healthy idle link but indistinguishable from
+"sysfs reader is broken." Adding direct evidence the polling loop
+is running:
+
+- `argus_hw_counter_polls_total{device,port}` — counter that
+  increments once per window per polled IB port. If this stays flat
+  across multiple Prometheus scrapes, polling really is broken.
+  If it climbs, polling is alive and zero deltas are the truth.
+- `argus_hw_counter_last_read_unix_seconds{device,port}` — wall-clock
+  timestamp of the most recent sysfs read. `time() - this` is the
+  freshness of the counter data.
+
+### Changed — detection rules tightened (false-positive prevention)
+
+Same shape as the ThroughputDropRule fix earlier in this release:
+single-signal CRITICAL/DEGRADED firings replaced with stronger gates.
+
+- **`SlabPressureRule`** now requires HARD IB errors (symbol,
+  link_downed, link_error_recovery, integrity, remote_physical,
+  buffer_overrun) instead of any error. Previously a single soft RoCE
+  error coinciding with a slab spike fired DEGRADED. New behaviour
+  ignores soft errors and port_rcv/xmit_discards as triggers — those
+  are workload-dependent noise.
+- **`RisingErrorTrendRule`** now requires both the monotonic-rise
+  criterion AND a magnitude floor (`min_magnitude`, default 10).
+  Previously a 1 → 2 → 3 rise was enough to fire DEGRADED. The
+  consecutive-windows logic catches the trend but doesn't tell you
+  whether the absolute count is actionable.
+
+### Changed — systemd unit cleanup for Rocky 8
+
+Moved `ProtectKernelLogs` (systemd 244+), `ProtectClock` (245+),
+`ProtectHostname` (241+), and `ProtectProc` (247+) out of the default
+unit and into a separately-shipped drop-in at
+`/usr/share/argus/systemd/hardening-modern.conf`. Rocky 8 ships
+systemd 239 which parses these as "Unknown lvalue" and emits warnings
+on every daemon-reload. Sites on modern systemd opt in by copying the
+drop-in into `/etc/systemd/system/argusd.service.d/`.
+
+### Added — scheduler audit log rotation
+
+`/etc/logrotate.d/argus` now shipped with the RPM. Weekly rotation,
+12 generations kept, 50 MB max per file, gzipped after rotation.
+Uses `copytruncate` so argusd doesn't need to handle SIGHUP-style
+log rotation. Previously the audit log grew unbounded.
+
+
 
 ### Changed — ThroughputDropRule requires corroborating impairment signal
 
