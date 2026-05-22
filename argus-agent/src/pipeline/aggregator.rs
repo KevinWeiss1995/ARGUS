@@ -35,14 +35,27 @@ fn counter_discriminant(c: &HardwareCounter) -> u8 {
         HardwareCounter::PortRcvRemotePhysicalErrors(_) => 6,
         HardwareCounter::LocalLinkIntegrityErrors(_) => 7,
         HardwareCounter::ExcessiveBufferOverrunErrors(_) => 8,
-        HardwareCounter::LinkErrorRecovery(_) => 15,
         HardwareCounter::HwRcvPkts(_) => 9,
         HardwareCounter::HwXmitPkts(_) => 10,
         HardwareCounter::RxeDuplicateRequest(_) => 11,
         HardwareCounter::RxeSeqError(_) => 12,
         HardwareCounter::RxeRetryExceeded(_) => 13,
         HardwareCounter::RxeSendError(_) => 14,
+        HardwareCounter::LinkErrorRecovery(_) => 15,
         HardwareCounter::PortXmitWait(_) => 16,
+        // Mellanox mlx5 extended counters — disjoint discriminants
+        // so they get their own slots in the prev_counters map.
+        HardwareCounter::Mlx5LocalAckTimeoutErr(_) => 17,
+        HardwareCounter::Mlx5PacketSeqErr(_) => 18,
+        HardwareCounter::Mlx5ImpliedNakSeqErr(_) => 19,
+        HardwareCounter::Mlx5OutOfBuffer(_) => 20,
+        HardwareCounter::Mlx5OutOfSequence(_) => 21,
+        HardwareCounter::Mlx5ReqCqeError(_) => 22,
+        HardwareCounter::Mlx5RespCqeError(_) => 23,
+        HardwareCounter::Mlx5RoceAdpRetrans(_) => 24,
+        HardwareCounter::Mlx5RoceSlowRestart(_) => 25,
+        HardwareCounter::Mlx5NpCnpSent(_) => 26,
+        HardwareCounter::Mlx5RpCnpHandled(_) => 27,
     }
 }
 
@@ -64,7 +77,18 @@ fn counter_value(c: &HardwareCounter) -> u64 {
         | HardwareCounter::RxeSeqError(v)
         | HardwareCounter::RxeRetryExceeded(v)
         | HardwareCounter::RxeSendError(v)
-        | HardwareCounter::PortXmitWait(v) => *v,
+        | HardwareCounter::PortXmitWait(v)
+        | HardwareCounter::Mlx5LocalAckTimeoutErr(v)
+        | HardwareCounter::Mlx5PacketSeqErr(v)
+        | HardwareCounter::Mlx5ImpliedNakSeqErr(v)
+        | HardwareCounter::Mlx5OutOfBuffer(v)
+        | HardwareCounter::Mlx5OutOfSequence(v)
+        | HardwareCounter::Mlx5ReqCqeError(v)
+        | HardwareCounter::Mlx5RespCqeError(v)
+        | HardwareCounter::Mlx5RoceAdpRetrans(v)
+        | HardwareCounter::Mlx5RoceSlowRestart(v)
+        | HardwareCounter::Mlx5NpCnpSent(v)
+        | HardwareCounter::Mlx5RpCnpHandled(v) => *v,
     }
 }
 
@@ -199,6 +223,21 @@ impl Aggregator {
             HardwareCounter::RxeRetryExceeded(_) => d.rxe_retry_exceeded_delta += delta,
             HardwareCounter::RxeSendError(_) => d.rxe_send_error_delta += delta,
             HardwareCounter::PortXmitWait(_) => d.port_xmit_wait_delta += delta,
+            HardwareCounter::Mlx5LocalAckTimeoutErr(_) => {
+                d.mlx5_local_ack_timeout_err_delta += delta;
+            }
+            HardwareCounter::Mlx5PacketSeqErr(_) => d.mlx5_packet_seq_err_delta += delta,
+            HardwareCounter::Mlx5ImpliedNakSeqErr(_) => {
+                d.mlx5_implied_nak_seq_err_delta += delta;
+            }
+            HardwareCounter::Mlx5OutOfBuffer(_) => d.mlx5_out_of_buffer_delta += delta,
+            HardwareCounter::Mlx5OutOfSequence(_) => d.mlx5_out_of_sequence_delta += delta,
+            HardwareCounter::Mlx5ReqCqeError(_) => d.mlx5_req_cqe_error_delta += delta,
+            HardwareCounter::Mlx5RespCqeError(_) => d.mlx5_resp_cqe_error_delta += delta,
+            HardwareCounter::Mlx5RoceAdpRetrans(_) => d.mlx5_roce_adp_retrans_delta += delta,
+            HardwareCounter::Mlx5RoceSlowRestart(_) => d.mlx5_roce_slow_restart_delta += delta,
+            HardwareCounter::Mlx5NpCnpSent(_) => d.mlx5_np_cnp_sent_delta += delta,
+            HardwareCounter::Mlx5RpCnpHandled(_) => d.mlx5_rp_cnp_handled_delta += delta,
         }
     }
 

@@ -4,9 +4,22 @@
 //! Works on any Linux with IB or Soft-RoCE, no eBPF needed.
 
 use argus_common::{ArgusEvent, HardwareCounter, HardwareCounterEvent};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::info;
+
+/// A single absolute counter reading from sysfs, identified by
+/// (device, port, counter_filename). Returned by
+/// `HwCounterReader::absolute_counters()` for the Prometheus exporter
+/// to publish as `argus_ib_<counter>_total` series.
+#[derive(Debug, Clone)]
+pub struct AbsoluteCounter {
+    pub device: String,
+    pub port: u32,
+    pub counter_name: String,
+    pub value: u64,
+}
 
 /// Classification of the IB device driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +55,12 @@ impl DeviceType {
 /// Discovers and reads InfiniBand hardware counters from sysfs.
 pub struct HwCounterReader {
     ports: Vec<IbPort>,
+    /// Latest absolute counter value observed per (device, port, counter
+    /// filename). Updated on every read. Surfaces the cumulative kernel
+    /// counters so external Prometheus can compute long-window slopes
+    /// (rate(argus_ib_<counter>_total[24h]) > X) — the
+    /// El-Sayed & Schroeder DSN-2013 slow-degradation detection pattern.
+    last_absolute: std::sync::Mutex<HashMap<(String, u32, String), u64>>,
 }
 
 struct IbPort {
@@ -76,15 +95,46 @@ const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
     ("port_xmit_wait", HardwareCounter::PortXmitWait),
 ];
 
-/// hw_counters/ exposed by rxe and other drivers.
-/// These map to their own HardwareCounter variants — NOT to IB error fields.
+/// hw_counters/ exposed by rxe, mlx5, mlx4, and other RDMA drivers.
+///
+/// The list is a flat union of every counter name we know how to read.
+/// We don't gate on driver: read_counter() returns None when the file
+/// doesn't exist, so on rxe hardware the mlx5_* entries silently skip,
+/// and vice versa. This keeps the discovery logic dead simple and
+/// future-proof for drivers we haven't classified yet.
+///
+/// Naming conventions:
+///   - rxe-prefixed variants are for Soft-RoCE (rxe driver) and the
+///     filenames are short, generic ("rcvd_pkts", "duplicate_request").
+///   - Mlx5*-prefixed variants are for Mellanox mlx5 hardware. The
+///     filenames are mlx5-specific ("local_ack_timeout_err",
+///     "roce_adp_retrans"). These are THE primary slow-degradation
+///     indicators per NVIDIA's IB performance optimization docs and
+///     the mlx5_core OFED reference.
 const HW_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
+    // rxe (Soft-RoCE) driver — names match argus-test-scenarios
     ("rcvd_pkts", HardwareCounter::HwRcvPkts),
     ("sent_pkts", HardwareCounter::HwXmitPkts),
     ("duplicate_request", HardwareCounter::RxeDuplicateRequest),
     ("rcvd_seq_err", HardwareCounter::RxeSeqError),
     ("retry_exceeded_err", HardwareCounter::RxeRetryExceeded),
     ("send_err", HardwareCounter::RxeSendError),
+
+    // Mellanox mlx5 (and mostly mlx4) — names taken from the
+    // mlx5_ib_hw_stats_descs[] array in the OFED kernel source. These
+    // exist at /sys/class/infiniband/mlx5_<n>/ports/<p>/hw_counters/
+    // on real Mellanox hardware.
+    ("local_ack_timeout_err",    HardwareCounter::Mlx5LocalAckTimeoutErr),
+    ("packet_seq_err",           HardwareCounter::Mlx5PacketSeqErr),
+    ("implied_nak_seq_err",      HardwareCounter::Mlx5ImpliedNakSeqErr),
+    ("out_of_buffer",            HardwareCounter::Mlx5OutOfBuffer),
+    ("out_of_sequence",          HardwareCounter::Mlx5OutOfSequence),
+    ("req_cqe_error",            HardwareCounter::Mlx5ReqCqeError),
+    ("resp_cqe_error",           HardwareCounter::Mlx5RespCqeError),
+    ("roce_adp_retrans",         HardwareCounter::Mlx5RoceAdpRetrans),
+    ("roce_slow_restart",        HardwareCounter::Mlx5RoceSlowRestart),
+    ("np_cnp_sent",              HardwareCounter::Mlx5NpCnpSent),
+    ("rp_cnp_handled",           HardwareCounter::Mlx5RpCnpHandled),
 ];
 
 fn read_counter(dir: &Path, filename: &str) -> Option<u64> {
@@ -144,7 +194,10 @@ impl HwCounterReader {
             info!("no InfiniBand ports discovered");
         }
 
-        Self { ports }
+        Self {
+            ports,
+            last_absolute: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     /// Read all important counters from all discovered ports.
@@ -155,11 +208,16 @@ impl HwCounterReader {
             .unwrap_or(0);
 
         let mut events = Vec::new();
+        let mut absolute_updates: Vec<((String, u32, String), u64)> = Vec::new();
 
         for port in &self.ports {
             if let Some(dir) = &port.counter_dir {
                 for (filename, make_counter) in STANDARD_COUNTERS {
                     if let Some(val) = read_counter(dir, filename) {
+                        absolute_updates.push((
+                            (port.device.clone(), port.port_num, (*filename).to_string()),
+                            val,
+                        ));
                         events.push(ArgusEvent::HardwareCounter(HardwareCounterEvent {
                             timestamp_ns: ts,
                             port_num: port.port_num,
@@ -172,6 +230,10 @@ impl HwCounterReader {
             if let Some(dir) = &port.hw_counter_dir {
                 for (filename, make_counter) in HW_COUNTERS {
                     if let Some(val) = read_counter(dir, filename) {
+                        absolute_updates.push((
+                            (port.device.clone(), port.port_num, (*filename).to_string()),
+                            val,
+                        ));
                         events.push(ArgusEvent::HardwareCounter(HardwareCounterEvent {
                             timestamp_ns: ts,
                             port_num: port.port_num,
@@ -182,7 +244,42 @@ impl HwCounterReader {
             }
         }
 
+        // Commit all absolute-value updates in one lock acquisition.
+        // Lock acquisition failure (poisoned mutex) is non-fatal — we
+        // skip the absolute-value snapshot for this window and the
+        // delta path keeps working.
+        if let Ok(mut map) = self.last_absolute.lock() {
+            for (key, val) in absolute_updates {
+                map.insert(key, val);
+            }
+        }
+
         events
+    }
+
+    /// Snapshot of every (device, port, counter_filename) → absolute_value
+    /// observed by the most recent successful read. Used by the Prometheus
+    /// exporter to expose `argus_ib_<counter>_total{device,port}` so
+    /// external systems can compute long-window slopes — the standard
+    /// pattern for detecting slow IB degradation per
+    /// El-Sayed & Schroeder (DSN 2013), and what Mellanox UFM uses
+    /// internally for its Health Score.
+    ///
+    /// Returns an empty vec on lock poisoning; emitting stale data is
+    /// strictly worse than briefly omitting it.
+    #[must_use]
+    pub fn absolute_counters(&self) -> Vec<AbsoluteCounter> {
+        let Ok(map) = self.last_absolute.lock() else {
+            return Vec::new();
+        };
+        map.iter()
+            .map(|((device, port, name), value)| AbsoluteCounter {
+                device: device.clone(),
+                port: *port,
+                counter_name: name.clone(),
+                value: *value,
+            })
+            .collect()
     }
 
     #[must_use]

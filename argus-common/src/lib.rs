@@ -149,6 +149,63 @@ pub enum HardwareCounter {
     /// Time spent waiting for credits to send. Non-zero indicates upstream congestion
     /// (the "victim buffer" effect on lossless IB fabrics).
     PortXmitWait(u64),
+
+    // --- Mellanox mlx5-specific RoCE/IB extended counters ---
+    //
+    // These live at /sys/class/infiniband/mlx5_*/ports/<N>/hw_counters/
+    // and are THE primary slow-degradation indicators on Mellanox
+    // hardware per NVIDIA's published IB diagnostics guidance and the
+    // mlx5_core OFED documentation. They have nothing to do with rxe
+    // (which has different filenames in the same directory).
+
+    /// Local ACK timeouts. Climbs when an RC connection's peer fails to
+    /// acknowledge sends within the configured timeout. Slow-creep
+    /// indicator of intermittent peer/path connectivity.
+    Mlx5LocalAckTimeoutErr(u64),
+
+    /// PSN sequence errors. Climbs on small amounts of packet loss /
+    /// reordering. Per NVIDIA, the primary indicator of marginal
+    /// network paths.
+    Mlx5PacketSeqErr(u64),
+
+    /// Implied NAKs from sequence errors. Companion signal to
+    /// packet_seq_err — same root cause, RDMA-stack reaction.
+    Mlx5ImpliedNakSeqErr(u64),
+
+    /// Receive-buffer exhaustion events. Slow creep indicates
+    /// undersized buffers OR sustained over-subscription.
+    Mlx5OutOfBuffer(u64),
+
+    /// Out-of-order packet arrivals. Climbs under adaptive routing /
+    /// path-flap conditions in the fabric.
+    Mlx5OutOfSequence(u64),
+
+    /// Completion-queue errors on RDMA REQUEST work-requests. Direct
+    /// indicator of RDMA-stack-level errors that bypass the IB error
+    /// counters.
+    Mlx5ReqCqeError(u64),
+
+    /// Completion-queue errors on RDMA RESPONSE work-requests.
+    Mlx5RespCqeError(u64),
+
+    /// RoCE adaptive retransmissions. Indicates RoCE-level packet
+    /// recovery activity — climbs when packets are silently dropped
+    /// on the wire and need re-sending at the RoCE layer.
+    Mlx5RoceAdpRetrans(u64),
+
+    /// RoCE slow-restart activations. Climbs when RoCE has to fall
+    /// back from its fast path. Sustained increase is a strong
+    /// indicator of fabric or NIC trouble.
+    Mlx5RoceSlowRestart(u64),
+
+    /// Congestion Notification Packets sent from this Notification
+    /// Point. Visibility into DCQCN congestion-control activity.
+    Mlx5NpCnpSent(u64),
+
+    /// Congestion Notification Packets handled at this Reaction
+    /// Point. The counterpart of NpCnpSent — climbs when upstream
+    /// fabric ECN-marks our traffic.
+    Mlx5RpCnpHandled(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +363,41 @@ pub enum AlertKind {
         slab_pressure: u64,
         ib_errors: u64,
     },
+    /// Long-window slow-degradation signal. Fires when a low-magnitude
+    /// error signal (symbol errors, RoCE retransmissions, etc.) has been
+    /// sustained at a rate above the noise floor for hours. Distinct
+    /// from RisingErrorTrend, which is a short-window per-counter
+    /// monotonic rise. This is the El-Sayed & Schroeder (DSN 2013)
+    /// "creep that predicts a catastrophic failure 24-72 hours later."
+    SlowDegradation {
+        /// Which metric tripped the long-window threshold.
+        signal_name: String,
+        /// Mean rate over the long window (events / window).
+        sustained_rate: f64,
+        /// Number of windows the rate stayed above the threshold.
+        sustained_windows: u32,
+        /// Approximate wall-clock seconds of sustained elevation.
+        sustained_seconds: u64,
+    },
+    /// PCIe link to the IB NIC has downgraded below its negotiated
+    /// max (e.g. x16 → x8, or PCIe 4.0 → PCIe 3.0). Often a hardware
+    /// problem on the NIC or motherboard slot. Not detectable through
+    /// IB error counters.
+    PcieLaneDegradation {
+        device: String,
+        current_speed: String,
+        max_speed: String,
+        current_width: u32,
+        max_width: u32,
+    },
+    /// NIC temperature exceeds a threshold. Climbing temperature
+    /// predicts hardware failure hours-to-days in advance. Read via
+    /// the hwmon link off the Mellanox PCI device.
+    NicThermal {
+        device: String,
+        current_celsius: f64,
+        threshold_celsius: f64,
+    },
 }
 
 impl Alert {
@@ -324,6 +416,9 @@ impl Alert {
             AlertKind::CqJitterStall { .. } => "cq_jitter_stall",
             AlertKind::CongestionSpread { .. } => "congestion_spread",
             AlertKind::PcieBottleneck { .. } => "pcie_bottleneck",
+            AlertKind::SlowDegradation { .. } => "slow_degradation",
+            AlertKind::PcieLaneDegradation { .. } => "pcie_lane_degradation",
+            AlertKind::NicThermal { .. } => "nic_thermal",
         }
     }
 }
@@ -503,6 +598,65 @@ pub struct IbCounterDeltas {
     pub rxe_seq_error_delta: u64,
     pub rxe_retry_exceeded_delta: u64,
     pub rxe_send_error_delta: u64,
+
+    // --- Mellanox mlx5-specific RoCE/IB extended counter deltas ---
+    // See HardwareCounter::Mlx5* variants for documentation of what each
+    // of these means. Tagged #[serde(default)] so older JSON snapshots
+    // (and replay scenarios from prior releases) still load.
+    #[serde(default)]
+    pub mlx5_local_ack_timeout_err_delta: u64,
+    #[serde(default)]
+    pub mlx5_packet_seq_err_delta: u64,
+    #[serde(default)]
+    pub mlx5_implied_nak_seq_err_delta: u64,
+    #[serde(default)]
+    pub mlx5_out_of_buffer_delta: u64,
+    #[serde(default)]
+    pub mlx5_out_of_sequence_delta: u64,
+    #[serde(default)]
+    pub mlx5_req_cqe_error_delta: u64,
+    #[serde(default)]
+    pub mlx5_resp_cqe_error_delta: u64,
+    #[serde(default)]
+    pub mlx5_roce_adp_retrans_delta: u64,
+    #[serde(default)]
+    pub mlx5_roce_slow_restart_delta: u64,
+    #[serde(default)]
+    pub mlx5_np_cnp_sent_delta: u64,
+    #[serde(default)]
+    pub mlx5_rp_cnp_handled_delta: u64,
+}
+
+impl IbCounterDeltas {
+    /// Aggregate Mellanox slow-degradation signal — sum of the four
+    /// counters the literature consistently flags as primary indicators
+    /// of marginal-link / intermittent-connection failure:
+    ///
+    ///   - local_ack_timeout_err  (intermittent peer/path)
+    ///   - packet_seq_err         (small packet loss / reorder)
+    ///   - implied_nak_seq_err    (RDMA-stack reaction to PSN errors)
+    ///   - roce_adp_retrans       (RoCE-level retransmissions)
+    ///
+    /// Used by the slow-trend rule (and any other rule that wants a
+    /// "is this link quietly going bad?" signal). Returns 0 on non-
+    /// Mellanox hardware where these counters don't exist.
+    #[must_use]
+    pub fn mlx5_slow_degradation_signal(&self) -> u64 {
+        self.mlx5_local_ack_timeout_err_delta
+            .saturating_add(self.mlx5_packet_seq_err_delta)
+            .saturating_add(self.mlx5_implied_nak_seq_err_delta)
+            .saturating_add(self.mlx5_roce_adp_retrans_delta)
+    }
+
+    /// Aggregate Mellanox RDMA work-request error signal. Distinct
+    /// from the slow-degradation signal because CQE errors are an
+    /// immediate "this work request failed" report, not a creep
+    /// indicator.
+    #[must_use]
+    pub fn mlx5_cqe_error_total(&self) -> u64 {
+        self.mlx5_req_cqe_error_delta
+            .saturating_add(self.mlx5_resp_cqe_error_delta)
+    }
 }
 
 impl IbCounterDeltas {
