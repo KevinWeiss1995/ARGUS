@@ -69,11 +69,22 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelModules=yes
-ProtectKernelLogs=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
-ProtectClock=yes
-ProtectHostname=yes
+
+# NOTE: ProtectKernelLogs / ProtectClock / ProtectHostname are
+# systemd 241+ directives. Rocky 8 / RHEL 8 ship systemd 239 which
+# parses these as "Unknown lvalue" and warns on every daemon-reload.
+# The warning is noise — systemd ignores unknown keys, the unit
+# still loads and runs correctly — but operators see it and assume
+# the unit is broken.
+#
+# Sites on modern systemd (RHEL 9, Ubuntu 22+, etc.) who DO want
+# the extra hardening can drop in:
+#     /etc/systemd/system/argusd.service.d/hardening-modern.conf
+# with the three directives above. The RPM doesn't auto-install it
+# for the same reason it doesn't auto-load the SELinux module —
+# integrations stay out of the default install.
 
 # Managed directories (systemd creates with correct ownership)
 RuntimeDirectory=argus
@@ -92,10 +103,9 @@ ReadOnlyPaths=/sys/kernel/btf
 ReadOnlyPaths=/proc/kallsyms
 ReadOnlyPaths=/proc/sys/kernel/osrelease
 
-# Hide other processes' /proc/[pid] entries but keep /proc/sys, /proc/kallsyms
-# etc. visible — aya needs /proc/sys/kernel/osrelease and ARGUS reads
-# /proc/kallsyms for kprobe target discovery. ProcSubset=pid is incompatible.
-ProtectProc=invisible
+# ProtectProc=invisible is a systemd 247+ directive. Same Rocky 8
+# systemd 239 noise as the block above — moved out to the optional
+# hardening-modern drop-in to avoid the daemon-reload warning.
 
 # --- Process Isolation ---
 UMask=0077

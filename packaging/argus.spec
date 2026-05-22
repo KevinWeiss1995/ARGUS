@@ -99,6 +99,11 @@ install -Dpm 0644 packaging/sysusers.d/argus.conf \
 install -Dpm 0644 packaging/tmpfiles.d/argus.conf \
     %{buildroot}%{_tmpfilesdir}/argus.conf
 
+# logrotate.d — caps scheduler audit log growth so it doesn't grow
+# unboundedly on long-lived nodes.
+install -Dpm 0644 packaging/logrotate.d/argus \
+    %{buildroot}%{_sysconfdir}/logrotate.d/argus
+
 # CLI tools
 for tool in argus-status argus-discover argus-manage-targets argus-scheduler argus-preflight argus-selinux-enable; do
     install -Dpm 0755 scripts/${tool} %{buildroot}%{_bindir}/${tool}
@@ -123,6 +128,7 @@ install -Dpm 0644 deploy/selinux/argus.if %{buildroot}%{_datadir}/argus/selinux/
 # when they decide to opt in. See deploy/systemd/modern-caps.conf for the
 # activation instructions.
 install -Dpm 0644 deploy/systemd/modern-caps.conf %{buildroot}%{_datadir}/argus/systemd/modern-caps.conf
+install -Dpm 0644 deploy/systemd/hardening-modern.conf %{buildroot}%{_datadir}/argus/systemd/hardening-modern.conf
 
 %pre
 # Create the argus system user/group on install if missing. We don't
@@ -191,8 +197,10 @@ fi
 %{_unitdir}/argusd.service
 %{_sysusersdir}/argus.conf
 %{_tmpfilesdir}/argus.conf
+%config(noreplace) %{_sysconfdir}/logrotate.d/argus
 %dir %{_datadir}/argus/systemd
 %{_datadir}/argus/systemd/modern-caps.conf
+%{_datadir}/argus/systemd/hardening-modern.conf
 
 # Optional SELinux policy artifacts — NOT a separate subpackage, NO
 # Requires on selinux-policy-*. Operators opt in by running
