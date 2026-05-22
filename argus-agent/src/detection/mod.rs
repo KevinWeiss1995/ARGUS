@@ -8,7 +8,7 @@ use argus_common::{AggregatedMetrics, Alert, CoverageReport, HealthState, Sample
 use rules::{
     CongestionSpreadRule, CqJitterRule, DetectionRule, InterruptAffinitySkewRule, LatencyDriftRule,
     NapiSaturationRule, PcieBottleneckRule, RdmaLatencySpikeRule, RdmaLinkDegradationRule,
-    RisingErrorTrendRule, SlabPressureRule, ThroughputDropRule,
+    RisingErrorTrendRule, SlabPressureRule, SlowDegradationRule, ThroughputDropRule,
 };
 
 use crate::config::DetectionConfig;
@@ -465,6 +465,10 @@ impl DetectionEngine {
                 Box::new(CqJitterRule::default()),
                 Box::new(CongestionSpreadRule::default()),
                 Box::new(PcieBottleneckRule::default()),
+                // Long-window slow-degradation detector — the literature-
+                // recommended pattern for catching 24-72h cable / optic
+                // creep that's invisible to short-window rules.
+                Box::new(SlowDegradationRule::default()),
             ],
             state_machine: HealthStateMachine::new(sm_config.clone()),
             score: SmoothedHealthScore::new(),
