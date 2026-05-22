@@ -57,6 +57,19 @@ struct ArgusPrometheusMetrics {
     ib_rxe_seq_error: Family<Vec<(String, String)>, Gauge>,
     ib_rxe_retry_exceeded: Family<Vec<(String, String)>, Gauge>,
     ib_rxe_send_error: Family<Vec<(String, String)>, Gauge>,
+    // Mellanox mlx5-specific extended counters — the slow-degradation
+    // signal set documented by NVIDIA / OFED. Per-port labelled.
+    ib_mlx5_local_ack_timeout_err: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_packet_seq_err: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_implied_nak_seq_err: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_out_of_buffer: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_out_of_sequence: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_req_cqe_error: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_resp_cqe_error: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_roce_adp_retrans: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_roce_slow_restart: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_np_cnp_sent: Family<Vec<(String, String)>, Gauge>,
+    ib_mlx5_rp_cnp_handled: Family<Vec<(String, String)>, Gauge>,
     napi_utilization_pct: Gauge,
     // Smoothed health score components
     health_score_raw: Gauge,
@@ -95,6 +108,21 @@ struct ArgusPrometheusMetrics {
     // "is monitoring actually running? I see all zeros."
     hw_counter_polls_total: Family<Vec<(String, String)>, Counter>,
     hw_counter_last_read_secs: Family<Vec<(String, String)>, Gauge>,
+    // Absolute IB counter values (cumulative since boot). Unlike the
+    // delta gauges, these are monotonically increasing and let external
+    // Prometheus compute long-window slopes:
+    //     rate(argus_ib_counter_total{counter="symbol_error_count"}[24h])
+    // which is the literature-recommended (El-Sayed & Schroeder DSN
+    // 2013; NVIDIA UFM Health Score) pattern for detecting slow IB
+    // degradation that doesn't manifest in per-window deltas.
+    ib_counter_total: Family<Vec<(String, String)>, Gauge>,
+    // NIC host-side health: PCIe link state + thermal. Independent of
+    // IB protocol — catches NIC/slot/thermal failures that don't move
+    // any IB counter.
+    nic_pcie_current_width: Family<Vec<(String, String)>, Gauge>,
+    nic_pcie_max_width: Family<Vec<(String, String)>, Gauge>,
+    nic_pcie_degraded: Family<Vec<(String, String)>, Gauge>,
+    nic_temperature_celsius: Family<Vec<(String, String)>, Gauge>,
 }
 
 impl PrometheusExporter {
@@ -326,6 +354,91 @@ impl PrometheusExporter {
             ib_rxe_send_error.clone(),
         );
 
+        // ----------- Mellanox mlx5 extended counters --------------------
+        // These are the slow-degradation indicators that NVIDIA, OFED, and
+        // El-Sayed & Schroeder (DSN 2013) all flag as the primary signals
+        // for marginal-link diagnosis on Mellanox hardware. Each is per-
+        // port labelled and exposed as a per-window delta gauge. The
+        // absolute (counter-typed) versions are added separately for
+        // long-window slope analysis.
+
+        let ib_mlx5_local_ack_timeout_err = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_local_ack_timeout_err_delta",
+            "Mellanox: RC-connection local ACK timeouts in the labelled port this window. Slow-creep indicator of intermittent peer/path connectivity.",
+            ib_mlx5_local_ack_timeout_err.clone(),
+        );
+
+        let ib_mlx5_packet_seq_err = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_packet_seq_err_delta",
+            "Mellanox: PSN sequence errors in the labelled port this window. Primary marginal-network-path indicator per NVIDIA documentation.",
+            ib_mlx5_packet_seq_err.clone(),
+        );
+
+        let ib_mlx5_implied_nak_seq_err = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_implied_nak_seq_err_delta",
+            "Mellanox: implied NAKs from PSN sequence errors. Companion to packet_seq_err.",
+            ib_mlx5_implied_nak_seq_err.clone(),
+        );
+
+        let ib_mlx5_out_of_buffer = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_out_of_buffer_delta",
+            "Mellanox: receive-buffer exhaustion events in the labelled port this window.",
+            ib_mlx5_out_of_buffer.clone(),
+        );
+
+        let ib_mlx5_out_of_sequence = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_out_of_sequence_delta",
+            "Mellanox: out-of-order packet arrivals. Climbs under adaptive-routing / path-flap conditions.",
+            ib_mlx5_out_of_sequence.clone(),
+        );
+
+        let ib_mlx5_req_cqe_error = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_req_cqe_error_delta",
+            "Mellanox: completion-queue errors on RDMA REQUEST work-requests. Direct RDMA-stack-level error report.",
+            ib_mlx5_req_cqe_error.clone(),
+        );
+
+        let ib_mlx5_resp_cqe_error = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_resp_cqe_error_delta",
+            "Mellanox: completion-queue errors on RDMA RESPONSE work-requests.",
+            ib_mlx5_resp_cqe_error.clone(),
+        );
+
+        let ib_mlx5_roce_adp_retrans = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_roce_adp_retrans_delta",
+            "Mellanox: RoCE adaptive retransmissions. Indicates RoCE-layer packet recovery activity from silent wire drops.",
+            ib_mlx5_roce_adp_retrans.clone(),
+        );
+
+        let ib_mlx5_roce_slow_restart = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_roce_slow_restart_delta",
+            "Mellanox: RoCE slow-restart activations. Strong fabric/NIC trouble indicator when sustained.",
+            ib_mlx5_roce_slow_restart.clone(),
+        );
+
+        let ib_mlx5_np_cnp_sent = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_np_cnp_sent_delta",
+            "Mellanox: Congestion Notification Packets sent from this Notification Point (DCQCN congestion control).",
+            ib_mlx5_np_cnp_sent.clone(),
+        );
+
+        let ib_mlx5_rp_cnp_handled = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_mlx5_rp_cnp_handled_delta",
+            "Mellanox: Congestion Notification Packets handled at this Reaction Point. Climbs when upstream fabric ECN-marks our traffic.",
+            ib_mlx5_rp_cnp_handled.clone(),
+        );
+
         let napi_utilization_pct = Gauge::default();
         registry.register(
             "argus_napi_utilization_pct",
@@ -526,6 +639,41 @@ impl PrometheusExporter {
             hw_counter_last_read_secs.clone(),
         );
 
+        let ib_counter_total = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_ib_counter_total",
+            "Absolute (cumulative since boot) value of an IB hardware counter, as last read from /sys/class/infiniband/<device>/ports/<port>/{counters,hw_counters}/. Labels: device, port, counter. Use rate() over this for long-window slow-degradation detection: rate(argus_ib_counter_total{counter=\"symbol_error_count\"}[24h]) > threshold catches the 24-72h creep documented in El-Sayed & Schroeder DSN 2013 and the NVIDIA UFM Health Score guidance.",
+            ib_counter_total.clone(),
+        );
+
+        let nic_pcie_current_width = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_nic_pcie_current_link_width",
+            "Current negotiated PCIe lane count for the IB NIC. Compare against argus_nic_pcie_max_link_width. A drop from 16 to 8 is a hardware degradation invisible to IB error counters.",
+            nic_pcie_current_width.clone(),
+        );
+
+        let nic_pcie_max_width = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_nic_pcie_max_link_width",
+            "Maximum supported PCIe lane count for the IB NIC. Stable per hardware; ratio of current to max indicates lane degradation.",
+            nic_pcie_max_width.clone(),
+        );
+
+        let nic_pcie_degraded = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_nic_pcie_degraded",
+            "1 when the IB NIC's PCIe link is below its negotiated max (lane count OR generation); 0 when at max. Triggers operator attention to motherboard slot, contacts, or thermal throttling.",
+            nic_pcie_degraded.clone(),
+        );
+
+        let nic_temperature_celsius = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_nic_temperature_celsius",
+            "IB NIC temperature in degrees Celsius, read via the kernel hwmon framework. Sustained values above 75-85°C predict hardware failure hours-to-days in advance per NVIDIA/Mellanox field-failure data.",
+            nic_temperature_celsius.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -559,6 +707,17 @@ impl PrometheusExporter {
             ib_rxe_seq_error,
             ib_rxe_retry_exceeded,
             ib_rxe_send_error,
+            ib_mlx5_local_ack_timeout_err,
+            ib_mlx5_packet_seq_err,
+            ib_mlx5_implied_nak_seq_err,
+            ib_mlx5_out_of_buffer,
+            ib_mlx5_out_of_sequence,
+            ib_mlx5_req_cqe_error,
+            ib_mlx5_resp_cqe_error,
+            ib_mlx5_roce_adp_retrans,
+            ib_mlx5_roce_slow_restart,
+            ib_mlx5_np_cnp_sent,
+            ib_mlx5_rp_cnp_handled,
             napi_utilization_pct,
             health_score_raw,
             health_score_effective,
@@ -588,6 +747,11 @@ impl PrometheusExporter {
             ib_max_idle_seconds,
             hw_counter_polls_total,
             hw_counter_last_read_secs,
+            ib_counter_total,
+            nic_pcie_current_width,
+            nic_pcie_max_width,
+            nic_pcie_degraded,
+            nic_temperature_celsius,
         };
 
         Self {
@@ -767,6 +931,76 @@ impl PrometheusExporter {
             .set(now_secs);
     }
 
+    /// Publish PCIe link state for every discovered IB NIC. Updates
+    /// per-device gauges for current/max widths and a 0/1 degraded
+    /// flag. The IB protocol doesn't reveal PCIe-level degradation —
+    /// this is the only signal that catches it.
+    pub fn update_nic_pcie(
+        &self,
+        readings: &[crate::sources::nic_health::PcieLinkState],
+    ) {
+        for r in readings {
+            let labels = vec![
+                ("device".to_string(), r.ib_device.clone()),
+                ("max_speed".to_string(), r.max_speed.clone()),
+            ];
+            self.metrics.nic_pcie_current_width
+                .get_or_create(&labels).set(i64::from(r.current_width));
+            self.metrics.nic_pcie_max_width
+                .get_or_create(&labels).set(i64::from(r.max_width));
+            self.metrics.nic_pcie_degraded
+                .get_or_create(&labels)
+                .set(if r.is_degraded() { 1 } else { 0 });
+        }
+    }
+
+    /// Publish NIC temperature for every device that has an hwmon
+    /// thermal sensor available.
+    pub fn update_nic_thermal(
+        &self,
+        readings: &[crate::sources::nic_health::NicThermal],
+    ) {
+        for r in readings {
+            let labels = vec![("device".to_string(), r.ib_device.clone())];
+            // Prometheus gauges are i64 internally; we report whole-degree
+            // resolution which is far below the noise floor on NIC
+            // thermals (typically ±2°C measurement variance).
+            self.metrics.nic_temperature_celsius
+                .get_or_create(&labels)
+                .set(r.current_celsius.round() as i64);
+        }
+    }
+
+    /// Publish absolute (cumulative-since-boot) IB counter values from
+    /// the supplied snapshot, as the `argus_ib_counter_total` family.
+    /// Call this once per window after `HwCounterReader::read_all()`.
+    ///
+    /// External Prometheus alerts can then compute long-window slopes,
+    /// e.g.:
+    ///     rate(argus_ib_counter_total{counter="symbol_error_count"}[6h])
+    /// which catches the slow-creep degradation pattern that's
+    /// invisible to single-window delta gauges.
+    pub fn update_absolute_counters(
+        &self,
+        counters: &[crate::sources::hwcounters::AbsoluteCounter],
+    ) {
+        for c in counters {
+            let labels = vec![
+                ("device".to_string(), c.device.clone()),
+                ("port".to_string(), c.port.to_string()),
+                ("counter".to_string(), c.counter_name.clone()),
+            ];
+            // Note: this is a Gauge, not a Counter. We set the value
+            // explicitly to the absolute we read from sysfs. rate()
+            // over a Gauge that grows monotonically works identically
+            // to rate() over a Counter for non-resetting values; the
+            // only loss is Prometheus's auto-reset detection, which
+            // doesn't apply because kernel counters never reset
+            // mid-uptime anyway.
+            self.metrics.ib_counter_total.get_or_create(&labels).set(c.value as i64);
+        }
+    }
+
     pub fn update_ib_counters(
         &self,
         device: &str,
@@ -837,6 +1071,37 @@ impl PrometheusExporter {
                 .ib_rxe_send_error
                 .get_or_create(&labels)
                 .set(deltas.rxe_send_error_delta as i64);
+        }
+
+        // Mellanox mlx5 extended counters — emitted for HardwareIB devices.
+        // On non-mlx5 hardware these deltas are zero (the counter files
+        // don't exist, sysfs reads return None silently, aggregator never
+        // increments). Publishing them unconditionally for HardwareIB
+        // makes the dashboard semantics consistent: "the counter is 0"
+        // means "no errors this window," not "this counter is unsupported."
+        if device_type == crate::sources::hwcounters::DeviceType::HardwareIB {
+            self.metrics.ib_mlx5_local_ack_timeout_err
+                .get_or_create(&labels).set(deltas.mlx5_local_ack_timeout_err_delta as i64);
+            self.metrics.ib_mlx5_packet_seq_err
+                .get_or_create(&labels).set(deltas.mlx5_packet_seq_err_delta as i64);
+            self.metrics.ib_mlx5_implied_nak_seq_err
+                .get_or_create(&labels).set(deltas.mlx5_implied_nak_seq_err_delta as i64);
+            self.metrics.ib_mlx5_out_of_buffer
+                .get_or_create(&labels).set(deltas.mlx5_out_of_buffer_delta as i64);
+            self.metrics.ib_mlx5_out_of_sequence
+                .get_or_create(&labels).set(deltas.mlx5_out_of_sequence_delta as i64);
+            self.metrics.ib_mlx5_req_cqe_error
+                .get_or_create(&labels).set(deltas.mlx5_req_cqe_error_delta as i64);
+            self.metrics.ib_mlx5_resp_cqe_error
+                .get_or_create(&labels).set(deltas.mlx5_resp_cqe_error_delta as i64);
+            self.metrics.ib_mlx5_roce_adp_retrans
+                .get_or_create(&labels).set(deltas.mlx5_roce_adp_retrans_delta as i64);
+            self.metrics.ib_mlx5_roce_slow_restart
+                .get_or_create(&labels).set(deltas.mlx5_roce_slow_restart_delta as i64);
+            self.metrics.ib_mlx5_np_cnp_sent
+                .get_or_create(&labels).set(deltas.mlx5_np_cnp_sent_delta as i64);
+            self.metrics.ib_mlx5_rp_cnp_handled
+                .get_or_create(&labels).set(deltas.mlx5_rp_cnp_handled_delta as i64);
         }
     }
 
