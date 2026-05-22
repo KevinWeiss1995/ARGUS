@@ -772,6 +772,15 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
             match client.get(&status_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(snap) = resp.json::<StatusSnapshot>().await {
+                        // De-dup: only push to the history Vecs when the
+                        // remote actually advanced to a new window. The
+                        // /status poll interval (1s) is faster than the
+                        // agent's window_secs (default 3s), so without this
+                        // check the sparklines would repeat the same value
+                        // 2-3 times before changing.
+                        let advanced =
+                            snap.metrics.window_end_ns != dash_state.metrics.window_end_ns;
+
                         dash_state.health = snap.state;
                         dash_state.metrics = snap.metrics;
                         dash_state.recent_alerts = snap.recent_alerts;
@@ -782,6 +791,14 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
                         } else {
                             format!("attach/{} ({})", addr, snap.source_name)
                         };
+
+                        // Append the freshly-arrived window to the sparkline
+                        // history. Without this every panel renders the
+                        // "Waiting for data..." placeholder forever because
+                        // *_history stays empty.
+                        if advanced {
+                            dash_state.push_metrics_snapshot();
+                        }
                     }
                 }
                 _ => {
