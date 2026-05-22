@@ -723,36 +723,57 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
         .danger_accept_invalid_certs(tls_skip_verify)
         .build()?;
 
-    // Wait for the daemon to become reachable before entering raw terminal mode.
-    // Retries for up to 30 seconds to handle systemd restarts and slow startup.
-    let max_wait = std::time::Duration::from_secs(30);
-    let retry_interval = std::time::Duration::from_secs(2);
-    let started = std::time::Instant::now();
-    loop {
+    // Probe once up front. Most operator-facing failures (daemon not
+    // running, wrong port, missing auth token, TLS mismatch) are
+    // instantly diagnosable from the first failure — don't make the
+    // operator stare at "waiting..." for 30 seconds before getting
+    // anything useful.
+    //
+    // The short retry burst that follows handles the genuinely-transient
+    // case: argus-tui invoked while systemd is mid-restart. Three
+    // attempts at 1s each is enough for that — if the daemon isn't back
+    // by then, it's not coming.
+    let max_attempts = 3;
+    let retry_interval = std::time::Duration::from_secs(1);
+    let mut last_error: Option<String> = None;
+
+    for attempt in 1..=max_attempts {
         match client.get(&status_url).send().await {
-            Ok(resp) if resp.status().is_success() => break,
-            Ok(resp) => {
-                if started.elapsed() >= max_wait {
-                    bail!(
-                        "{} returned {} — is argusd running?",
-                        status_url,
-                        resp.status()
-                    );
-                }
-                eprintln!(
-                    "waiting for argusd ({} returned {})...",
-                    status_url,
-                    resp.status()
-                );
+            Ok(resp) if resp.status().is_success() => {
+                last_error = None;
+                break;
             }
-            Err(_) => {
-                if started.elapsed() >= max_wait {
-                    bail!("cannot reach {status_url} after {max_wait:?} — is argusd running?");
+            Ok(resp) => {
+                let code = resp.status();
+                last_error = Some(match code.as_u16() {
+                    401 => format!(
+                        "{status_url} returned 401 Unauthorized — the daemon requires a bearer token. \
+                         Pass it via env: ARGUS_METRICS_TOKEN=$(sudo cat /etc/argus/token) argus-tui"
+                    ),
+                    503 => format!(
+                        "{status_url} returned 503 Service Unavailable — the daemon is up but not \
+                         ready to serve. Check `journalctl -u argusd -e` for startup errors."
+                    ),
+                    _ => format!("{status_url} returned HTTP {code}"),
+                });
+                if attempt < max_attempts {
+                    eprintln!("retry {attempt}/{max_attempts}: {}", last_error.as_ref().unwrap());
                 }
-                eprintln!("waiting for argusd at {status_url}...");
+            }
+            Err(e) => {
+                last_error = Some(diagnose_connect_error(&status_url, &e));
+                if attempt < max_attempts {
+                    eprintln!("retry {attempt}/{max_attempts}: {}", last_error.as_ref().unwrap());
+                }
             }
         }
-        tokio::time::sleep(retry_interval).await;
+        if attempt < max_attempts {
+            tokio::time::sleep(retry_interval).await;
+        }
+    }
+
+    if let Some(err) = last_error {
+        bail!("{err}");
     }
 
     let mut dashboard = Dashboard::new()?;
@@ -815,6 +836,60 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
 
     dashboard.shutdown()?;
     Ok(())
+}
+
+/// Translate a reqwest connect error into an actionable diagnostic that
+/// names the specific operator action to take. Avoids the
+/// "waiting for argusd..." goose chase by saying exactly what's wrong
+/// the first time the request fails.
+fn diagnose_connect_error(url: &str, err: &reqwest::Error) -> String {
+    let msg = err.to_string();
+    let is_local = url.contains("localhost") || url.contains("127.0.0.1");
+
+    // Connection refused → port not listening → daemon is down or bound elsewhere.
+    if msg.contains("Connection refused") || msg.contains("connection refused") {
+        if is_local {
+            return format!(
+                "{url}: connection refused. The daemon isn't listening here.\n  \
+                 Check:  systemctl status argusd\n  \
+                 Logs:   journalctl -u argusd -e --no-pager | tail -30\n  \
+                 If it's running, confirm the port: ss -tlnp | grep 9100"
+            );
+        }
+        return format!(
+            "{url}: connection refused. Either argusd isn't running on that host, \
+             or its ARGUS_METRICS_ADDR doesn't include this interface. \
+             Check the conf on the target: grep ARGUS_METRICS_ADDR /etc/argus/argusd.conf"
+        );
+    }
+
+    // Timeout → daemon may be running but stuck, or network unreachable.
+    if msg.contains("timed out") || msg.contains("operation timed out") {
+        return format!(
+            "{url}: request timed out. The daemon may be running but unresponsive \
+             (deadlocked main loop), or firewalld is dropping packets silently. \
+             Check:  journalctl -u argusd -e | tail -30  AND  firewall-cmd --list-all"
+        );
+    }
+
+    // DNS / name resolution.
+    if msg.contains("dns") || msg.contains("failed to lookup") {
+        return format!(
+            "{url}: DNS resolution failed. Use an IP address or fix /etc/hosts."
+        );
+    }
+
+    // TLS handshake errors.
+    if msg.contains("certificate") || msg.contains("handshake") {
+        return format!(
+            "{url}: TLS handshake failed. The daemon may be using HTTP not HTTPS, \
+             or the certificate is rejected by your trust store. \
+             Try: argus-tui --tls-skip-verify --attach <host>"
+        );
+    }
+
+    // Fall-through: report the raw error verbatim.
+    format!("{url}: {msg}")
 }
 
 /// Install a panic hook that restores the terminal (if in raw mode) and

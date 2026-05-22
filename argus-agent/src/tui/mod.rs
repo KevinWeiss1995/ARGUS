@@ -223,10 +223,12 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
 
 fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let dist = &state.metrics.interrupt_distribution;
+    let total_cpus = dist.per_cpu_counts.len();
+    let title = format!(" IRQ Distribution ({} CPUs) ", total_cpus);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(" IRQ Distribution ")
+        .title(title)
         .title_style(Style::default().fg(Color::White).bold());
 
     if dist.per_cpu_counts.is_empty() || dist.total_count == 0 {
@@ -237,37 +239,53 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
         return;
     }
 
-    let max_count = dist
-        .per_cpu_counts
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(1)
-        .max(1);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let bar_area_width = inner.width.saturating_sub(16);
-    let num_cpus = dist.per_cpu_counts.len().min(inner.height as usize);
+    // Sort CPUs by descending IRQ count so the hottest are always visible
+    // even on 80-core nodes where a per-index list would hide them. We
+    // keep the original CPU index alongside the count so the label
+    // remains meaningful ("CPU 47" not "row 3").
+    let mut indexed: Vec<(usize, u64)> = dist
+        .per_cpu_counts
+        .iter()
+        .copied()
+        .enumerate()
+        .collect();
+    indexed.sort_by(|a, b| b.1.cmp(&a.1));
 
-    for (i, &count) in dist.per_cpu_counts.iter().take(num_cpus).enumerate() {
+    let max_count = indexed.first().map(|(_, c)| *c).unwrap_or(1).max(1);
+    let active_count = indexed.iter().filter(|(_, c)| *c > 0).count();
+
+    // Reserve the bottom row for a summary line. Show as many CPU bars
+    // as fit above it. On a 13-row panel that's 12 CPUs; on a 30-row
+    // panel that's 29. Always shows the hottest CPUs first.
+    let summary_rows: u16 = 1;
+    let bars_rows = inner.height.saturating_sub(summary_rows);
+    let cpus_shown = (bars_rows as usize).min(indexed.len());
+
+    let bar_area_width = inner.width.saturating_sub(20);
+
+    for (row, (cpu, count)) in indexed.iter().take(cpus_shown).enumerate() {
         let pct = if dist.total_count > 0 {
-            count as f64 / dist.total_count as f64 * 100.0
+            *count as f64 / dist.total_count as f64 * 100.0
         } else {
             0.0
         };
-        let bar_len = ((count as f64 / max_count as f64) * bar_area_width as f64) as u16;
+        let bar_len = ((*count as f64 / max_count as f64) * bar_area_width as f64) as u16;
         let color = if pct >= 70.0 {
             Color::Red
         } else if pct >= 40.0 {
             Color::Yellow
-        } else {
+        } else if *count > 0 {
             Color::Green
+        } else {
+            Color::DarkGray
         };
 
-        let label = format!("  CPU{i:<2}");
+        let label = format!("  CPU{cpu:>3}");
         let bar = "█".repeat(bar_len as usize);
-        let pct_str = format!(" {pct:.0}%");
+        let pct_str = format!(" {pct:>4.1}%");
 
         let line = Line::from(vec![
             Span::styled(label, Style::default().fg(Color::White)),
@@ -276,11 +294,46 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
             Span::styled(pct_str, Style::default().fg(Color::DarkGray)),
         ]);
 
-        let y = inner.y + i as u16;
-        if y < inner.y + inner.height {
+        let y = inner.y + row as u16;
+        if y < inner.y + inner.height.saturating_sub(summary_rows) {
             frame.render_widget(Paragraph::new(line), Rect::new(inner.x, y, inner.width, 1));
         }
     }
+
+    // Summary line at the bottom — always rendered, regardless of panel
+    // size, so operators always see fleet-relevant stats: which CPU
+    // dominates, how skewed, how many CPUs are active, and how many
+    // are off-screen.
+    let dominant_cpu = indexed.first().map(|(c, _)| *c).unwrap_or(0);
+    let dominant_pct = indexed.first().map(|(_, c)| {
+        if dist.total_count > 0 {
+            *c as f64 / dist.total_count as f64 * 100.0
+        } else {
+            0.0
+        }
+    }).unwrap_or(0.0);
+    let perfect_share = 100.0 / total_cpus.max(1) as f64;
+    let skew = if total_cpus > 1 && dominant_pct > perfect_share {
+        ((dominant_pct - perfect_share) / (100.0 - perfect_share) * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let hidden = total_cpus.saturating_sub(cpus_shown);
+    let summary_color = if skew >= 70.0 {
+        Color::Red
+    } else if skew >= 40.0 {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    let summary = format!(
+        "  Active: {active_count}/{total_cpus}  Hottest: CPU{dominant_cpu} ({dominant_pct:.1}%)  Skew: {skew:.0}%  Hidden: {hidden}"
+    );
+    let y = inner.y + inner.height.saturating_sub(summary_rows);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(summary_color)))),
+        Rect::new(inner.x, y, inner.width, 1),
+    );
 }
 
 fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
