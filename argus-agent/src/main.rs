@@ -403,9 +403,13 @@ fn run_live_mode(
                     ("mixed", class == argus_agent::detection::burst::BurstClass::MixedBurstSustained),
                 ]);
                 for (device, port, dev_type) in hw_reader.discovered_ports() {
+                    let port_str = port.to_string();
+                    // Heartbeat first — guarantees operators can see polling
+                    // is alive even when every error counter is legitimately 0.
+                    exp.record_hw_counter_poll(&device, &port_str);
                     exp.update_ib_counters(
                         &device,
-                        &port.to_string(),
+                        &port_str,
                         &pipeline.current_metrics().ib_counter_deltas,
                         dev_type,
                     );

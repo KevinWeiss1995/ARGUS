@@ -89,6 +89,12 @@ struct ArgusPrometheusMetrics {
     ib_port_idle_seconds: Family<Vec<(String, String)>, Gauge>,
     ib_fabric_idle: Gauge,
     ib_max_idle_seconds: Gauge,
+    // Polling heartbeat: proves to operators that the sysfs reader is
+    // actually being invoked each window, even when every counter delta
+    // is legitimately zero. This is what we point at when someone asks
+    // "is monitoring actually running? I see all zeros."
+    hw_counter_polls_total: Family<Vec<(String, String)>, Counter>,
+    hw_counter_last_read_secs: Family<Vec<(String, String)>, Gauge>,
 }
 
 impl PrometheusExporter {
@@ -506,6 +512,20 @@ impl PrometheusExporter {
             ib_max_idle_seconds.clone(),
         );
 
+        let hw_counter_polls_total = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "argus_hw_counter_polls_total",
+            "Number of times the sysfs hardware-counter reader has been invoked for the labelled IB port since argusd started. Increases by 1 per window. If this stays flat, monitoring is NOT polling — the per-port counter deltas reading 0 are just an artifact of an idle link, not an indication of broken sensing.",
+            hw_counter_polls_total.clone(),
+        );
+
+        let hw_counter_last_read_secs = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "argus_hw_counter_last_read_unix_seconds",
+            "Unix timestamp (seconds) of the most recent successful sysfs read for the labelled IB port. (now() - this value) tells you how stale the counter data is.",
+            hw_counter_last_read_secs.clone(),
+        );
+
         let metrics = ArgusPrometheusMetrics {
             health_state,
             health_score,
@@ -566,6 +586,8 @@ impl PrometheusExporter {
             ib_port_idle_seconds,
             ib_fabric_idle,
             ib_max_idle_seconds,
+            hw_counter_polls_total,
+            hw_counter_last_read_secs,
         };
 
         Self {
@@ -723,6 +745,28 @@ impl PrometheusExporter {
     /// Update per-device/port IB counter gauges.
     /// Call once per device per window with the device name, port, and device type.
     /// Soft-RoCE (rxe) metrics are only emitted when `device_type` is `SoftRoCE`.
+    /// Increment the poll-heartbeat for a labelled port and stamp the
+    /// "last read" timestamp. The point of this is operator confidence:
+    /// when every error-delta gauge reads 0 (which is the correct state
+    /// on a healthy idle link), the operator can still see this counter
+    /// climbing window-by-window and confirm the sysfs reader is alive.
+    /// If this stays flat across multiple scrapes, polling is broken.
+    pub fn record_hw_counter_poll(&self, device: &str, port: &str) {
+        let labels = vec![
+            ("device".to_string(), device.to_string()),
+            ("port".to_string(), port.to_string()),
+        ];
+        self.metrics.hw_counter_polls_total.get_or_create(&labels).inc();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.metrics
+            .hw_counter_last_read_secs
+            .get_or_create(&labels)
+            .set(now_secs);
+    }
+
     pub fn update_ib_counters(
         &self,
         device: &str,
