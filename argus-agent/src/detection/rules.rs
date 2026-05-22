@@ -478,23 +478,39 @@ impl DetectionRule for SlabPressureRule {
             return None;
         }
 
-        let ib_errors = metrics.ib_counter_deltas.total_error_delta();
+        let d = &metrics.ib_counter_deltas;
 
-        if slab.alloc_count >= self.alloc_rate_threshold && ib_errors > 0 {
+        // Require HARD errors specifically — symbol, link_downed, integrity,
+        // remote_physical, buffer_overrun, link_error_recovery. The
+        // previous `total_error_delta() > 0` check accepted soft RoCE
+        // errors and standard port_rcv/port_xmit_discards, both of which
+        // can be transient under heavy workload without indicating real
+        // memory-pressure-induced fabric problems. A single such soft
+        // error coinciding with a slab alloc spike was enough to fire
+        // CRITICAL — same false-positive shape we fixed in
+        // ThroughputDropRule.
+        let hard_errors = d.total_hard_error_delta() + d.link_error_recovery_delta;
+
+        if slab.alloc_count >= self.alloc_rate_threshold && hard_errors > 0 {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::SlabPressureCorrelation {
                     slab_alloc_rate: slab.alloc_count,
-                    ib_error_delta: ib_errors,
+                    ib_error_delta: hard_errors,
                 },
-                severity: if ib_errors > 100 {
+                // CRITICAL only if the hard-error count is itself significant.
+                // 100 was the old cutoff against `total_error_delta` (which
+                // included noise); keep the same threshold but against the
+                // narrower hard-error count.
+                severity: if hard_errors > 100 {
                     HealthState::Critical
                 } else {
                     HealthState::Degraded
                 },
                 message: format!(
-                    "Slab pressure correlated with IB errors: {} allocs/window, {} IB errors",
-                    slab.alloc_count, ib_errors
+                    "Slab pressure correlated with IB hard errors: {} allocs/window, \
+                     {} hard error(s) (symbol/link/integrity/recovery)",
+                    slab.alloc_count, hard_errors
                 ),
             })
         } else {
@@ -512,6 +528,13 @@ use super::rolling_stats::{RollingStats, TrendTracker};
 
 pub struct RisingErrorTrendRule {
     pub min_consecutive_windows: u32,
+    /// Floor on the current window's error count. A 1 → 2 → 3 monotonic
+    /// rise satisfies the consecutive-windows criterion but is far below
+    /// any actionable threshold — the rule used to fire DEGRADED on that
+    /// because total > 0 was the only magnitude check. We now require
+    /// the current window's error count to also exceed this floor,
+    /// eliminating the noise-driven false positives.
+    pub min_magnitude: u64,
     trend: TrendTracker,
 }
 
@@ -520,6 +543,7 @@ impl RisingErrorTrendRule {
     pub fn new(min_consecutive_windows: u32) -> Self {
         Self {
             min_consecutive_windows,
+            min_magnitude: 10,
             trend: TrendTracker::new(),
         }
     }
@@ -548,7 +572,9 @@ impl DetectionRule for RisingErrorTrendRule {
         let total = metrics.ib_counter_deltas.total_error_delta();
         let consecutive = self.trend.push(total as f64);
 
-        if consecutive >= self.min_consecutive_windows && total > 0 {
+        // Magnitude gate: 1 → 2 → 3 satisfies consecutive but is noise.
+        // Require both the trend AND a meaningful current count.
+        if consecutive >= self.min_consecutive_windows && total >= self.min_magnitude {
             Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::RisingErrorTrend {
