@@ -120,14 +120,23 @@ StateDirectoryMode=0750
 LogsDirectory=argus
 LogsDirectoryMode=0750
 
-# Explicit filesystem grants (principle of least privilege)
+# Explicit filesystem grants (principle of least privilege).
+# The `-` prefix marks a path as optional: if it doesn't exist on this
+# host (e.g. debugfs not mounted, BTF not built into the kernel) systemd
+# silently skips it rather than failing the unit with status=226/NAMESPACE.
+#
+# /proc/kallsyms and /proc/sys/kernel/osrelease are intentionally NOT
+# listed: they are kernel-generated pseudo-files that cannot be written
+# to regardless of mount flags, and bind-mounting individual files under
+# /proc/sys conflicts with ProtectKernelTunables=no — systemd cannot
+# establish the parent /proc/sys namespace overlay on its own and the
+# child bind fails. Their effective read-only-ness is guaranteed by the
+# kernel itself.
 ReadWritePaths=/run/argus /var/lib/argus
-ReadOnlyPaths=/sys/class/infiniband
-ReadOnlyPaths=/sys/kernel/tracing/events
-ReadOnlyPaths=/sys/kernel/debug/tracing/events
-ReadOnlyPaths=/sys/kernel/btf
-ReadOnlyPaths=/proc/kallsyms
-ReadOnlyPaths=/proc/sys/kernel/osrelease
+ReadOnlyPaths=-/sys/class/infiniband
+ReadOnlyPaths=-/sys/kernel/tracing/events
+ReadOnlyPaths=-/sys/kernel/debug/tracing/events
+ReadOnlyPaths=-/sys/kernel/btf
 
 # ProtectProc=invisible is a systemd 247+ directive. Same Rocky 8
 # systemd 239 noise as the block above — moved out to the optional
