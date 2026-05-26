@@ -114,12 +114,20 @@ pub fn discover_kprobe_targets() -> KprobeTargets {
 }
 
 fn read_kallsyms_functions() -> HashSet<String> {
+    // Entry beacon at WARN level. If this log does NOT appear in
+    // journalctl, the function is never called and the kprobe-resolution
+    // logs upstream are firing for a different reason. If it DOES appear,
+    // the level filter for this target allows WARN but is somehow
+    // suppressing INFO — see argusd.conf RUST_LOG override and the
+    // EnvFilter::from_default_env() interaction in main.rs.
+    tracing::warn!("kallsyms-diag: entering read_kallsyms_functions");
+
     let mut funcs = HashSet::new();
 
     let content = match std::fs::read_to_string("/proc/kallsyms") {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("cannot read /proc/kallsyms: {e}");
+            tracing::warn!("kallsyms-diag: cannot read /proc/kallsyms: {e}");
             return funcs;
         }
     };
@@ -148,22 +156,20 @@ fn read_kallsyms_functions() -> HashSet<String> {
         }
     }
 
-    // Diagnostic: log how much we read and how many symbols we kept.
-    // If text_symbols is suspiciously low (<10000 on a modern kernel)
-    // the kallsyms reader is being short-read or the parser is broken.
-    tracing::info!(
+    // Diagnostic at WARN level so it's always emitted. If text_symbols is
+    // suspiciously low (<10000 on a modern kernel) the read is short or
+    // the parser is broken.
+    tracing::warn!(
         bytes = total_bytes,
         lines = total_lines,
         text_symbols,
         data_symbols,
         other,
         kallsyms_unique_text = funcs.len(),
-        "loaded kernel symbols from /proc/kallsyms"
+        "kallsyms-diag: loaded kernel symbols from /proc/kallsyms"
     );
 
-    // Sample log RDMA-driver symbols for diagnostics. If this is empty
-    // but `grep mlx5_ib_post_send /proc/kallsyms` shows results outside
-    // argusd, the read is being truncated or our parser is missing them.
+    // Sample log RDMA-driver symbols for diagnostics.
     let rdma_samples: Vec<&String> = funcs
         .iter()
         .filter(|s| {
@@ -171,21 +177,19 @@ fn read_kallsyms_functions() -> HashSet<String> {
                 || s.starts_with("mlx5r_")
                 || s.starts_with("rxe_")
         })
-        .take(10)
+        .take(20)
         .collect();
-    if rdma_samples.is_empty() {
-        tracing::warn!(
-            "no mlx5_ib_/mlx5r_/rxe_ symbols found in /proc/kallsyms despite \
-             reading {total_bytes} bytes. Either the read was truncated or \
-             this kernel has no RDMA driver loaded. Verify with: \
-             lsmod | grep -E 'mlx5_ib|rdma_rxe'"
-        );
-    } else {
-        tracing::info!(
-            samples = ?rdma_samples,
-            "sample RDMA driver symbols discovered"
-        );
-    }
+
+    // Explicit existence check for the candidates we'll be looking up.
+    let has_post_send = funcs.contains("mlx5_ib_post_send");
+    let has_poll_cq = funcs.contains("mlx5_ib_poll_cq");
+
+    tracing::warn!(
+        samples = ?rdma_samples,
+        has_mlx5_ib_post_send = has_post_send,
+        has_mlx5_ib_poll_cq = has_poll_cq,
+        "kallsyms-diag: RDMA symbol presence check"
+    );
 
     funcs
 }
