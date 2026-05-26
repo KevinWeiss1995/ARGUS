@@ -78,7 +78,24 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelModules=yes
-ProtectKernelTunables=yes
+# ProtectKernelTunables=yes is INTENTIONALLY DISABLED here.
+#
+# systemd documents that this option, beyond making /proc/sys read-only,
+# also makes /proc/kallsyms AND /proc/kcore *inaccessible to all
+# processes regardless of capabilities*. argusd needs to read
+# /proc/kallsyms at startup to discover which kernel functions are
+# available as kprobe targets (mlx5_ib_post_send, mlx5_ib_poll_cq, etc.)
+# for CQ-jitter micro-stall detection. With ProtectKernelTunables=yes
+# the read fails EACCES even with CAP_SYS_ADMIN+CAP_SYSLOG, and the
+# CQ-jitter data path is silently dead.
+#
+# The security cost is small: argusd does not write to /proc/sys (only
+# reads sysctl values for observability), and the other hardening still
+# in effect (ProtectKernelModules, NoNewPrivileges, SystemCallFilter,
+# MemoryDenyWriteExecute, narrow caps) covers the realistic attack
+# surface. ReadOnlyPaths below restores the read-only enforcement for
+# the few sysfs/proc paths argusd actually touches.
+ProtectKernelTunables=no
 ProtectControlGroups=yes
 
 # NOTE: ProtectKernelLogs / ProtectClock / ProtectHostname are
