@@ -37,11 +37,20 @@ LimitMEMLOCK=67108864
 # and on pre-5.8 kernels (or RHEL 8 prior to the CAP_BPF backport) where
 # those caps don't exist in the kernel.
 #
-# CAP_SYS_ADMIN is a superset that covers:
+# CAP_SYS_ADMIN covers:
 #   - bpf() syscall — load programs, create maps, read/write maps
 #   - perf_event_open() — kprobe / tracepoint attachment
-#   - reads of /proc/kallsyms under kptr_restrict >= 1
 #   - reads of tracefs / debugfs format files
+#
+# We also grant CAP_SYSLOG explicitly. Without it, RHEL 8 kernels with
+# kallsyms-restriction backports (CVE-2017-18017 and successors) return
+# a TRUNCATED /proc/kallsyms to the process: addresses are zeroed AND
+# module-local 't'-typed symbols (including mlx5_ib_post_send,
+# mlx5_ib_poll_cq) are filtered out, even though `cat /proc/kallsyms`
+# as a shell user shows them. The result is that argusd's CQ-jitter
+# kprobes silently fail to attach because their target symbols look
+# missing. CapabilityBoundingSet caps the effective set even for root,
+# so root alone is not enough — the cap must be in the bound.
 #
 # For kernel ≥ 5.8 with modern systemd (≥ 247): drop in the file
 # /usr/lib/systemd/system/argusd.service.d/modern-caps.conf which the
@@ -56,8 +65,8 @@ LimitMEMLOCK=67108864
 #   sudo systemctl restart argusd
 #
 # For --action-port-disable, also grant CAP_NET_ADMIN via a drop-in.
-CapabilityBoundingSet=CAP_SYS_ADMIN
-AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYSLOG
+AmbientCapabilities=CAP_SYS_ADMIN CAP_SYSLOG
 
 # --- Privilege Escalation Prevention ---
 NoNewPrivileges=yes

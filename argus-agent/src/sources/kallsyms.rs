@@ -124,6 +124,12 @@ fn read_kallsyms_functions() -> HashSet<String> {
         }
     };
 
+    let total_bytes = content.len();
+    let total_lines = content.lines().count();
+    let mut text_symbols = 0u64;
+    let mut data_symbols = 0u64;
+    let mut other = 0u64;
+
     for line in content.lines() {
         // Format: "address type name [module]"
         let mut parts = line.split_whitespace();
@@ -134,7 +140,51 @@ fn read_kallsyms_functions() -> HashSet<String> {
         // Only consider text (function) symbols
         if matches!(sym_type, "t" | "T") && !name.is_empty() {
             funcs.insert(name.to_string());
+            text_symbols += 1;
+        } else if matches!(sym_type, "d" | "D" | "b" | "B" | "r" | "R") {
+            data_symbols += 1;
+        } else if !sym_type.is_empty() {
+            other += 1;
         }
+    }
+
+    // Diagnostic: log how much we read and how many symbols we kept.
+    // If text_symbols is suspiciously low (<10000 on a modern kernel)
+    // the kallsyms reader is being short-read or the parser is broken.
+    tracing::info!(
+        bytes = total_bytes,
+        lines = total_lines,
+        text_symbols,
+        data_symbols,
+        other,
+        kallsyms_unique_text = funcs.len(),
+        "loaded kernel symbols from /proc/kallsyms"
+    );
+
+    // Sample log RDMA-driver symbols for diagnostics. If this is empty
+    // but `grep mlx5_ib_post_send /proc/kallsyms` shows results outside
+    // argusd, the read is being truncated or our parser is missing them.
+    let rdma_samples: Vec<&String> = funcs
+        .iter()
+        .filter(|s| {
+            s.starts_with("mlx5_ib_")
+                || s.starts_with("mlx5r_")
+                || s.starts_with("rxe_")
+        })
+        .take(10)
+        .collect();
+    if rdma_samples.is_empty() {
+        tracing::warn!(
+            "no mlx5_ib_/mlx5r_/rxe_ symbols found in /proc/kallsyms despite \
+             reading {total_bytes} bytes. Either the read was truncated or \
+             this kernel has no RDMA driver loaded. Verify with: \
+             lsmod | grep -E 'mlx5_ib|rdma_rxe'"
+        );
+    } else {
+        tracing::info!(
+            samples = ?rdma_samples,
+            "sample RDMA driver symbols discovered"
+        );
     }
 
     funcs
