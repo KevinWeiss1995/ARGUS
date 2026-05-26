@@ -146,7 +146,16 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 # Resolve workspace version from Cargo.toml (workspace.package.version).
-VERSION=$(awk -F\" '/^version[[:space:]]*=/ && !version_seen { print $2; version_seen=1 }' "$REPO_ROOT/Cargo.toml")
+# Version resolution. Priority:
+#   1. $ARGUS_RPM_VERSION (set explicitly by CI from the git tag, so the
+#      RPM filename and metadata match the published release).
+#   2. Workspace Cargo.toml — used for local development builds. This
+#      stays at 0.1.0 between releases; the env-var override is what
+#      bumps it for actual published artifacts.
+# Without (1), every CI run produces argus-0.1.0-1.el8.x86_64.rpm
+# regardless of which tag triggered it — which is exactly the bug
+# that wasted three release cycles before this fix.
+VERSION="${ARGUS_RPM_VERSION:-$(awk -F\" '/^version[[:space:]]*=/ && !version_seen { print $2; version_seen=1 }' "$REPO_ROOT/Cargo.toml")}"
 if [[ -z "$VERSION" ]]; then
     die "could not parse version from Cargo.toml"
 fi

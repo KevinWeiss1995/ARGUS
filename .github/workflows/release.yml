@@ -80,18 +80,28 @@ jobs:
           set -euo pipefail
           mkdir -p out
           # The Containerfile's ENTRYPOINT runs scripts/build-rpm.sh
-          # with anything passed after the image. We deliberately pass
-          # no flags so it does the default cargo build + rpmbuild path.
+          # with anything passed after the image. We pass no flags so
+          # it does the default cargo build + rpmbuild path.
+          #
+          # ARGUS_RPM_VERSION is the critical env var: it overrides the
+          # version build-rpm.sh would otherwise read from Cargo.toml.
+          # Without this, every CI run regardless of tag produces an
+          # argus-0.1.0-1.el8.x86_64.rpm (the workspace Cargo.toml
+          # version), which then 404s on the expected tag-named URL.
           docker run --rm \
               -v "$PWD:/src" \
               -v "$PWD/out:/out" \
               -e ARGUS_IN_BUILD_CONTAINER=1 \
+              -e ARGUS_RPM_VERSION="${{ steps.version.outputs.version }}" \
               localhost/argus-build:latest
 
           echo "Artifacts in ./out/:"
           ls -la out/
-          # Sanity: at least one RPM produced
-          test -n "$(ls out/argus-*.rpm 2>/dev/null)"
+          # Sanity: at least one RPM produced, AND named for the right
+          # version. The grep guards against the version-mismatch bug
+          # ever silently coming back.
+          test -n "$(ls out/argus-${{ steps.version.outputs.version }}-*.rpm 2>/dev/null)" \
+              || { echo "ERROR: no RPM matching argus-${{ steps.version.outputs.version }}-*.rpm in out/" >&2; ls -la out/; exit 1; }
 
       - name: Compute SHA256 for each RPM
         run: |
