@@ -633,7 +633,12 @@ impl PrometheusExporter {
 
         let hw_counter_polls_total = Family::<Vec<(String, String)>, Counter>::default();
         registry.register(
-            "argus_hw_counter_polls_total",
+            // prometheus-client appends "_total" to Counter metric names per
+            // OpenMetrics convention. Register WITHOUT the "_total" suffix
+            // so the emitted name is "argus_hw_counter_polls_total" — not
+            // "argus_hw_counter_polls_total_total" which the previous
+            // registration produced.
+            "argus_hw_counter_polls",
             "Number of times the sysfs hardware-counter reader has been invoked for the labelled IB port since argusd started. Increases by 1 per window. If this stays flat, monitoring is NOT polling — the per-port counter deltas reading 0 are just an artifact of an idle link, not an indication of broken sensing.",
             hw_counter_polls_total.clone(),
         );
@@ -647,8 +652,15 @@ impl PrometheusExporter {
 
         let ib_counter_total = Family::<Vec<(String, String)>, Gauge>::default();
         registry.register(
-            "argus_ib_counter_total",
-            "Absolute (cumulative since boot) value of an IB hardware counter, as last read from /sys/class/infiniband/<device>/ports/<port>/{counters,hw_counters}/. Labels: device, port, counter. Use rate() over this for long-window slow-degradation detection: rate(argus_ib_counter_total{counter=\"symbol_error_count\"}[24h]) > threshold catches the 24-72h creep documented in El-Sayed & Schroeder DSN 2013 and the NVIDIA UFM Health Score guidance.",
+            // The _total suffix is reserved by OpenMetrics for Counter metrics.
+            // prometheus-client may refuse to emit a Gauge with that suffix
+            // (which is exactly the bug that made this metric appear nowhere
+            // in /metrics output despite being correctly registered and
+            // populated). Use _value instead — semantics unchanged, rate()
+            // over a monotonic Gauge works identically to rate() over a
+            // Counter for non-resetting kernel counters.
+            "argus_ib_counter_value",
+            "Absolute (cumulative since boot) value of an IB hardware counter, as last read from /sys/class/infiniband/<device>/ports/<port>/{counters,hw_counters}/. Labels: device, port, counter. Use rate() over this for long-window slow-degradation detection: rate(argus_ib_counter_value{counter=\"symbol_error_count\"}[24h]) > threshold catches the 24-72h creep documented in El-Sayed & Schroeder DSN 2013 and the NVIDIA UFM Health Score guidance.",
             ib_counter_total.clone(),
         );
 
