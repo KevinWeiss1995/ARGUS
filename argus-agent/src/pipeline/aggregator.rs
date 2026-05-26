@@ -152,6 +152,8 @@ impl Aggregator {
                 self.metrics.network_metrics.bytes_received += u64::from(e.len);
             }
             ArgusEvent::CqCompletion(e) => {
+                // RdmaMetrics: the legacy per-event aggregate (kept for
+                // backwards-compat with replay scenarios that key off it).
                 self.metrics.rdma_metrics.completion_count += 1;
                 self.metrics.rdma_metrics.total_latency_ns += e.latency_ns;
                 if e.latency_ns > self.metrics.rdma_metrics.max_latency_ns {
@@ -160,6 +162,31 @@ impl Aggregator {
                 if e.is_error {
                     self.metrics.rdma_metrics.error_count += 1;
                 }
+
+                // CqJitter: the field the TUI panel + detection rules
+                // actually read for CQ latency / micro-stall analysis.
+                // In live mode this is populated from the eBPF
+                // CQ_JITTER_STATS map via ingest_bpf_snapshot — but
+                // mock and replay sources emit individual
+                // CqCompletionEvent records that never reach that
+                // path. Without this mirror, the CQ Latency p99 panel
+                // is permanently blank in mock/replay regardless of
+                // event content. Mirror the same fields here so the
+                // panel works in every mode.
+                let cq = &mut self.metrics.cq_jitter;
+                cq.completion_count += 1;
+                cq.total_latency_ns += e.latency_ns;
+                if e.latency_ns > cq.max_latency_ns {
+                    cq.max_latency_ns = e.latency_ns;
+                }
+                // A latency that exceeds the "stall" threshold counts
+                // for the stall_count signal that CqJitterRule keys
+                // off. 50µs matches the threshold the eBPF probe uses
+                // internally for the same metric.
+                if e.latency_ns >= 50_000 {
+                    cq.stall_count += 1;
+                }
+
                 self.cq_latency_sketch.insert(e.latency_ns as f64);
             }
             ArgusEvent::HardwareCounter(e) => {
