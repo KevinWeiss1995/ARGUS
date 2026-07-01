@@ -101,7 +101,7 @@ if [[ -z "${ARGUS_IN_BUILD_CONTAINER:-}" ]]; then
             "$REPO_ROOT/$APPTAINER_SIF" \
             "${INNER_ARGS[@]:-}"
         ok "RPM(s) in $REPO_ROOT/out/:"
-        ls -la "$REPO_ROOT/out/" | tail -n +2
+        find "$REPO_ROOT/out/" -mindepth 1 -maxdepth 1 -exec ls -la {} +
         exit 0
     fi
 
@@ -135,7 +135,7 @@ if [[ -z "${ARGUS_IN_BUILD_CONTAINER:-}" ]]; then
             -v "$REPO_ROOT/out:/out$z_flag" \
             "$CONTAINER_IMAGE" "${INNER_ARGS[@]:-}"
         ok "RPM(s) in $REPO_ROOT/out/:"
-        ls -la "$REPO_ROOT/out/" | tail -n +2
+        find "$REPO_ROOT/out/" -mindepth 1 -maxdepth 1 -exec ls -la {} +
         exit 0
     fi
 fi

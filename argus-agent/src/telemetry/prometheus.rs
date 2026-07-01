@@ -133,6 +133,7 @@ struct ArgusPrometheusMetrics {
 
 impl PrometheusExporter {
     #[must_use]
+    #[allow(clippy::similar_names)] // p50/p95/p99/p999 quantile gauges are deliberately named alike
     pub fn new() -> Self {
         let mut registry = Registry::default();
 
@@ -172,11 +173,7 @@ impl PrometheusExporter {
         );
 
         let irq_total = Family::<Vec<(String, String)>, Counter>::default();
-        registry.register(
-            "argus_irq",
-            "Total interrupts by CPU",
-            irq_total.clone(),
-        );
+        registry.register("argus_irq", "Total interrupts by CPU", irq_total.clone());
 
         let irq_skew_pct = Gauge::default();
         registry.register(
@@ -898,12 +895,9 @@ impl PrometheusExporter {
             .iter()
             .enumerate()
             .max_by_key(|(_, &c)| c)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
         self.metrics.irq_dominant_cpu.set(dominant_cpu as i64);
-        self.metrics
-            .irq_total_rate
-            .set(dist.total_count as i64);
+        self.metrics.irq_total_rate.set(dist.total_count as i64);
 
         // NAPI utilization
         let napi_util = if metrics.network_metrics.napi_total_budget > 0 {
@@ -929,7 +923,7 @@ impl PrometheusExporter {
         }
         self.metrics
             .ib_fabric_idle
-            .set(if metrics.ib_fabric_idle() { 1 } else { 0 });
+            .set(i64::from(metrics.ib_fabric_idle()));
         self.metrics
             .ib_max_idle_seconds
             .set(metrics.ib_max_idle_seconds() as i64);
@@ -954,7 +948,10 @@ impl PrometheusExporter {
             ("device".to_string(), device.to_string()),
             ("port".to_string(), port.to_string()),
         ];
-        self.metrics.hw_counter_polls_total.get_or_create(&labels).inc();
+        self.metrics
+            .hw_counter_polls_total
+            .get_or_create(&labels)
+            .inc();
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -977,41 +974,41 @@ impl PrometheusExporter {
             .set(i64::from(slab_latency_attached));
     }
 
-    /// Publish PCIe link state for every discovered IB NIC. Updates
+    /// Publish `PCIe` link state for every discovered IB NIC. Updates
     /// per-device gauges for current/max widths and a 0/1 degraded
     /// flag. The IB protocol doesn't reveal PCIe-level degradation —
     /// this is the only signal that catches it.
-    pub fn update_nic_pcie(
-        &self,
-        readings: &[crate::sources::nic_health::PcieLinkState],
-    ) {
+    pub fn update_nic_pcie(&self, readings: &[crate::sources::nic_health::PcieLinkState]) {
         for r in readings {
             let labels = vec![
                 ("device".to_string(), r.ib_device.clone()),
                 ("max_speed".to_string(), r.max_speed.clone()),
             ];
-            self.metrics.nic_pcie_current_width
-                .get_or_create(&labels).set(i64::from(r.current_width));
-            self.metrics.nic_pcie_max_width
-                .get_or_create(&labels).set(i64::from(r.max_width));
-            self.metrics.nic_pcie_degraded
+            self.metrics
+                .nic_pcie_current_width
                 .get_or_create(&labels)
-                .set(if r.is_degraded() { 1 } else { 0 });
+                .set(i64::from(r.current_width));
+            self.metrics
+                .nic_pcie_max_width
+                .get_or_create(&labels)
+                .set(i64::from(r.max_width));
+            self.metrics
+                .nic_pcie_degraded
+                .get_or_create(&labels)
+                .set(i64::from(r.is_degraded()));
         }
     }
 
     /// Publish NIC temperature for every device that has an hwmon
     /// thermal sensor available.
-    pub fn update_nic_thermal(
-        &self,
-        readings: &[crate::sources::nic_health::NicThermal],
-    ) {
+    pub fn update_nic_thermal(&self, readings: &[crate::sources::nic_health::NicThermal]) {
         for r in readings {
             let labels = vec![("device".to_string(), r.ib_device.clone())];
             // Prometheus gauges are i64 internally; we report whole-degree
             // resolution which is far below the noise floor on NIC
             // thermals (typically ±2°C measurement variance).
-            self.metrics.nic_temperature_celsius
+            self.metrics
+                .nic_temperature_celsius
                 .get_or_create(&labels)
                 .set(r.current_celsius.round() as i64);
         }
@@ -1023,7 +1020,7 @@ impl PrometheusExporter {
     ///
     /// External Prometheus alerts can then compute long-window slopes,
     /// e.g.:
-    ///     rate(argus_ib_counter_total{counter="symbol_error_count"}[6h])
+    ///     `rate(argus_ib_counter_total{counter="symbol_error_count`"}[6h])
     /// which catches the slow-creep degradation pattern that's
     /// invisible to single-window delta gauges.
     pub fn update_absolute_counters(
@@ -1043,7 +1040,10 @@ impl PrometheusExporter {
             // only loss is Prometheus's auto-reset detection, which
             // doesn't apply because kernel counters never reset
             // mid-uptime anyway.
-            self.metrics.ib_counter_total.get_or_create(&labels).set(c.value as i64);
+            self.metrics
+                .ib_counter_total
+                .get_or_create(&labels)
+                .set(c.value as i64);
         }
     }
 
@@ -1126,28 +1126,50 @@ impl PrometheusExporter {
         // makes the dashboard semantics consistent: "the counter is 0"
         // means "no errors this window," not "this counter is unsupported."
         if device_type == crate::sources::hwcounters::DeviceType::HardwareIB {
-            self.metrics.ib_mlx5_local_ack_timeout_err
-                .get_or_create(&labels).set(deltas.mlx5_local_ack_timeout_err_delta as i64);
-            self.metrics.ib_mlx5_packet_seq_err
-                .get_or_create(&labels).set(deltas.mlx5_packet_seq_err_delta as i64);
-            self.metrics.ib_mlx5_implied_nak_seq_err
-                .get_or_create(&labels).set(deltas.mlx5_implied_nak_seq_err_delta as i64);
-            self.metrics.ib_mlx5_out_of_buffer
-                .get_or_create(&labels).set(deltas.mlx5_out_of_buffer_delta as i64);
-            self.metrics.ib_mlx5_out_of_sequence
-                .get_or_create(&labels).set(deltas.mlx5_out_of_sequence_delta as i64);
-            self.metrics.ib_mlx5_req_cqe_error
-                .get_or_create(&labels).set(deltas.mlx5_req_cqe_error_delta as i64);
-            self.metrics.ib_mlx5_resp_cqe_error
-                .get_or_create(&labels).set(deltas.mlx5_resp_cqe_error_delta as i64);
-            self.metrics.ib_mlx5_roce_adp_retrans
-                .get_or_create(&labels).set(deltas.mlx5_roce_adp_retrans_delta as i64);
-            self.metrics.ib_mlx5_roce_slow_restart
-                .get_or_create(&labels).set(deltas.mlx5_roce_slow_restart_delta as i64);
-            self.metrics.ib_mlx5_np_cnp_sent
-                .get_or_create(&labels).set(deltas.mlx5_np_cnp_sent_delta as i64);
-            self.metrics.ib_mlx5_rp_cnp_handled
-                .get_or_create(&labels).set(deltas.mlx5_rp_cnp_handled_delta as i64);
+            self.metrics
+                .ib_mlx5_local_ack_timeout_err
+                .get_or_create(&labels)
+                .set(deltas.mlx5_local_ack_timeout_err_delta as i64);
+            self.metrics
+                .ib_mlx5_packet_seq_err
+                .get_or_create(&labels)
+                .set(deltas.mlx5_packet_seq_err_delta as i64);
+            self.metrics
+                .ib_mlx5_implied_nak_seq_err
+                .get_or_create(&labels)
+                .set(deltas.mlx5_implied_nak_seq_err_delta as i64);
+            self.metrics
+                .ib_mlx5_out_of_buffer
+                .get_or_create(&labels)
+                .set(deltas.mlx5_out_of_buffer_delta as i64);
+            self.metrics
+                .ib_mlx5_out_of_sequence
+                .get_or_create(&labels)
+                .set(deltas.mlx5_out_of_sequence_delta as i64);
+            self.metrics
+                .ib_mlx5_req_cqe_error
+                .get_or_create(&labels)
+                .set(deltas.mlx5_req_cqe_error_delta as i64);
+            self.metrics
+                .ib_mlx5_resp_cqe_error
+                .get_or_create(&labels)
+                .set(deltas.mlx5_resp_cqe_error_delta as i64);
+            self.metrics
+                .ib_mlx5_roce_adp_retrans
+                .get_or_create(&labels)
+                .set(deltas.mlx5_roce_adp_retrans_delta as i64);
+            self.metrics
+                .ib_mlx5_roce_slow_restart
+                .get_or_create(&labels)
+                .set(deltas.mlx5_roce_slow_restart_delta as i64);
+            self.metrics
+                .ib_mlx5_np_cnp_sent
+                .get_or_create(&labels)
+                .set(deltas.mlx5_np_cnp_sent_delta as i64);
+            self.metrics
+                .ib_mlx5_rp_cnp_handled
+                .get_or_create(&labels)
+                .set(deltas.mlx5_rp_cnp_handled_delta as i64);
         }
     }
 
@@ -1225,8 +1247,7 @@ impl PrometheusExporter {
         for cap in &report.capabilities {
             let backend = cap
                 .active_backend
-                .map(|b| b.name().to_string())
-                .unwrap_or_else(|| "none".to_string());
+                .map_or_else(|| "none".to_string(), |b| b.name().to_string());
             let labels = vec![
                 ("capability".to_string(), cap.capability.name().to_string()),
                 ("backend".to_string(), backend),
@@ -1254,7 +1275,10 @@ impl PrometheusExporter {
 
     /// Update per-timescale state and score gauges from the multi-timescale
     /// evaluator. Called once per window.
-    pub fn update_timescales(&self, evaluator: &crate::detection::timescale::MultiTimescaleEvaluator) {
+    pub fn update_timescales(
+        &self,
+        evaluator: &crate::detection::timescale::MultiTimescaleEvaluator,
+    ) {
         for (ts, state) in evaluator.states() {
             let val: i64 = match state {
                 argus_common::HealthState::Healthy => 0,
@@ -1282,7 +1306,7 @@ impl PrometheusExporter {
             self.metrics
                 .burst_classification
                 .get_or_create(&vec![("class".to_string(), (*class).to_string())])
-                .set(if *active { 1 } else { 0 });
+                .set(i64::from(*active));
         }
     }
 
@@ -1295,9 +1319,8 @@ impl PrometheusExporter {
             if s.capability != argus_common::Capability::CompletionLatency {
                 continue;
             }
-            let label = match s.device.as_deref() {
-                Some(l) => l,
-                None => continue,
+            let Some(label) = s.device.as_deref() else {
+                continue;
             };
             let value = s.value as i64;
             match label {
@@ -1425,17 +1448,20 @@ pub struct TlsConfig {
     pub key_path: std::path::PathBuf,
 }
 
+/// Maximum concurrent connections to the metrics server.
+const MAX_METRICS_CONNECTIONS: usize = 128;
+
+/// TLS-handshake and per-request header-read timeout (slowloris guard).
+/// Deliberately NOT a whole-connection lifetime cap — keep-alive scrapers
+/// and the attach-mode TUI hold connections open for hours.
+const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Start an HTTP(S) server on `addr` that serves `/metrics`, `/health`, and `/status`.
 ///
 /// When `tls` is `Some`, the server uses TLS (HTTPS). When `auth_token` is
 /// `Some`, every request must include a matching `Authorization: Bearer <token>`
 /// header or receive a 401.
-/// Maximum concurrent connections to the metrics server.
-const MAX_METRICS_CONNECTIONS: usize = 128;
-
-/// Per-connection idle timeout.
-const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
+#[allow(clippy::too_many_arguments)] // one call site; grouping into a struct would not clarify
 pub async fn serve_metrics(
     exporter: SharedExporter,
     health: SharedHealthState,
@@ -1452,17 +1478,17 @@ pub async fn serve_metrics(
 
     let tls_acceptor: Option<Arc<std::sync::RwLock<tokio_rustls::TlsAcceptor>>> =
         if let Some(ref tls_cfg) = tls {
-            Some(Arc::new(std::sync::RwLock::new(build_tls_acceptor(tls_cfg)?)))
+            Some(Arc::new(std::sync::RwLock::new(build_tls_acceptor(
+                tls_cfg,
+            )?)))
         } else {
             None
         };
 
-    // SIGHUP handler for TLS certificate reload
+    // SIGHUP handler for TLS certificate reload (unix only; other platforms
+    // simply never reload).
     #[cfg(unix)]
-    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-        .ok();
-    #[cfg(not(unix))]
-    let mut sighup: Option<futures_core::Never> = None;
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
 
     let listener = TcpListener::bind(addr).await?;
     let scheme = if tls.is_some() { "https" } else { "http" };
@@ -1480,8 +1506,6 @@ pub async fn serve_metrics(
                 return;
             }
             std::future::pending::<()>().await;
-            #[cfg(not(unix))]
-            { std::future::pending::<()>().await; }
         };
 
         tokio::select! {
@@ -1495,19 +1519,14 @@ pub async fn serve_metrics(
                 let auth = auth_token.clone();
                 let sem = semaphore.clone();
 
-                let permit = match sem.try_acquire_owned() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        tracing::warn!(component = "metrics", "connection rejected: max connections reached");
-                        drop(stream);
-                        continue;
-                    }
+                let Ok(permit) = sem.try_acquire_owned() else {
+                    tracing::warn!(component = "metrics", "connection rejected: max connections reached");
+                    drop(stream);
+                    continue;
                 };
 
                 if let Some(ref tls_lock) = tls_acceptor {
-                    let acceptor = tls_lock.read()
-                        .map(|g| g.clone())
-                        .unwrap_or_else(|p| p.into_inner().clone());
+                    let acceptor = tls_lock.read().map_or_else(|p| p.into_inner().clone(), |g| g.clone());
                     tokio::spawn(async move {
                         let _permit = permit;
                         let tls_stream = match tokio::time::timeout(
@@ -1525,23 +1544,19 @@ pub async fn serve_metrics(
                             }
                         };
                         let io = TokioIo::new(tls_stream);
-                        let _ = tokio::time::timeout(
-                            CONNECTION_TIMEOUT,
-                            serve_connection(io, exporter, health, status, reconciler, coverage, auth),
-                        ).await;
+                        serve_connection(io, exporter, health, status, reconciler, coverage, auth)
+                            .await;
                     });
                 } else {
                     let io = TokioIo::new(stream);
                     tokio::spawn(async move {
                         let _permit = permit;
-                        let _ = tokio::time::timeout(
-                            CONNECTION_TIMEOUT,
-                            serve_connection(io, exporter, health, status, reconciler, coverage, auth),
-                        ).await;
+                        serve_connection(io, exporter, health, status, reconciler, coverage, auth)
+                            .await;
                     });
                 }
             }
-            _ = sighup_fut => {
+            () = sighup_fut => {
                 if let Some(ref tls_cfg) = tls {
                     match build_tls_acceptor(tls_cfg) {
                         Ok(new_acceptor) => {
@@ -1609,7 +1624,7 @@ async fn serve_connection<I>(
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.strip_prefix("Bearer "))
-                    .map_or(false, |t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
+                    .is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
                 if !authorized {
                     return Ok::<_, hyper::Error>(
                         Response::builder()
@@ -1638,57 +1653,52 @@ async fn serve_connection<I>(
                             }),
                     )
                 }
-                "/health" => {
-                    match health.lock() {
-                        Ok(snap) => {
-                            let body = format!(
-                                r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
-                                snap.state,
-                                snap.uptime_secs,
-                                snap.events_processed,
-                                snap.last_window_ts,
-                            );
-                            Ok(Response::builder()
-                                .status(StatusCode::OK)
-                                .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(body)))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
-                        }
-                        Err(_) => {
-                            Ok(Response::builder()
-                                .status(StatusCode::SERVICE_UNAVAILABLE)
-                                .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(r#"{"error":"health lock poisoned"}"#)))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
-                        }
+                "/health" => match health.lock() {
+                    Ok(snap) => {
+                        let body = format!(
+                            r#"{{"state":"{}","uptime_secs":{:.1},"events_processed":{},"last_window_ts":{}}}"#,
+                            snap.state,
+                            snap.uptime_secs,
+                            snap.events_processed,
+                            snap.last_window_ts,
+                        );
+                        Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(body)))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
                     }
-                }
-                "/status" => {
-                    match status.lock() {
-                        Ok(snap) => {
-                            let body = serde_json::to_string(&*snap).unwrap_or_else(|_| "{}".into());
-                            Ok(Response::builder()
-                                .status(StatusCode::OK)
-                                .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(body)))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
-                        }
-                        Err(_) => {
-                            Ok(Response::builder()
-                                .status(StatusCode::SERVICE_UNAVAILABLE)
-                                .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(r#"{"error":"status lock poisoned"}"#)))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
-                        }
+                    Err(_) => Ok(Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .header("content-type", "application/json")
+                        .body(Full::new(Bytes::from(
+                            r#"{"error":"health lock poisoned"}"#,
+                        )))
+                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}"))))),
+                },
+                "/status" => match status.lock() {
+                    Ok(snap) => {
+                        let body = serde_json::to_string(&*snap).unwrap_or_else(|_| "{}".into());
+                        Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(body)))
+                            .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}")))))
                     }
-                }
+                    Err(_) => Ok(Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .header("content-type", "application/json")
+                        .body(Full::new(Bytes::from(
+                            r#"{"error":"status lock poisoned"}"#,
+                        )))
+                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("{}"))))),
+                },
                 "/coverage" => {
                     if let Some(ref cov) = coverage {
                         let snap = cov.lock().map(|c| c.clone()).ok();
                         let body = match snap {
-                            Some(report) => {
-                                serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
-                            }
+                            Some(report) => serde_json::to_string_pretty(&report)
+                                .unwrap_or_else(|_| "{}".into()),
                             None => r#"{"error":"coverage lock poisoned"}"#.to_string(),
                         };
                         Ok(Response::builder()
@@ -1709,7 +1719,8 @@ async fn serve_connection<I>(
                     if let Some(ref rc) = reconciler {
                         if let Ok(mut r) = rc.lock() {
                             let event = r.set_operator_hold();
-                            let body = format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
+                            let body =
+                                format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
                             Ok(Response::builder()
                                 .status(StatusCode::OK)
                                 .header("content-type", "application/json")
@@ -1734,7 +1745,8 @@ async fn serve_connection<I>(
                     if let Some(ref rc) = reconciler {
                         if let Ok(mut r) = rc.lock() {
                             let event = r.release_operator_hold();
-                            let body = format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
+                            let body =
+                                format!(r#"{{"status":"ok","message":"{}"}}"#, event.message);
                             Ok(Response::builder()
                                 .status(StatusCode::OK)
                                 .header("content-type", "application/json")
@@ -1758,19 +1770,25 @@ async fn serve_connection<I>(
                 _ => Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(Full::new(Bytes::from("not found")))
-                    .unwrap_or_else(|_| {
-                        Response::new(Full::new(Bytes::from("not found")))
-                    })),
+                    .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("not found"))))),
             }
         }
     });
 
-    if let Err(e) =
-        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-            .serve_connection(io, service)
-            .await
-    {
-        tracing::warn!("metrics server connection error: {e}");
+    // Slowloris protection happens per-request via `header_read_timeout`,
+    // NOT by capping total connection lifetime: Prometheus scrapers and the
+    // attach-mode TUI hold long-lived keep-alive connections, and a
+    // whole-connection timeout would kill them mid-poll every 30s.
+    let mut builder =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    builder
+        .http1()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(CONNECTION_TIMEOUT);
+    if let Err(e) = builder.serve_connection(io, service).await {
+        // Idle keep-alive timeouts and client disconnects land here; they
+        // are routine, not actionable.
+        tracing::debug!("metrics server connection closed: {e}");
     }
 }
 
@@ -1778,13 +1796,10 @@ fn build_tls_acceptor(cfg: &TlsConfig) -> anyhow::Result<tokio_rustls::TlsAccept
     use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
     use tokio_rustls::rustls::ServerConfig;
 
-    let cert_chain: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_file_iter(&cfg.cert_path)
-            .map_err(|e| {
-                anyhow::anyhow!("failed to open TLS cert {}: {e}", cfg.cert_path.display())
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("failed to parse TLS cert chain: {e}"))?;
+    let cert_chain: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cfg.cert_path)
+        .map_err(|e| anyhow::anyhow!("failed to open TLS cert {}: {e}", cfg.cert_path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS cert chain: {e}"))?;
 
     let key = PrivateKeyDer::from_pem_file(&cfg.key_path)
         .map_err(|e| anyhow::anyhow!("failed to parse TLS key {}: {e}", cfg.key_path.display()))?;

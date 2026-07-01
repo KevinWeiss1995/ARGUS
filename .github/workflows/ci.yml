@@ -74,7 +74,12 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck on scripts
-        run: shellcheck scripts/*.sh scripts/argus-manage-targets scripts/argus-discover deploy/observability/scripts/*.sh
+        run: >
+          shellcheck scripts/*.sh
+          scripts/argus-manage-targets scripts/argus-discover
+          scripts/argus-scheduler scripts/argus-status
+          scripts/argus-preflight scripts/argus-selinux-enable
+          deploy/observability/scripts/*.sh
 
   # Security audit (pinned tool versions)
   security:

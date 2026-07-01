@@ -6,8 +6,8 @@ pub mod ebpf_parse;
 pub mod hwcounters;
 #[cfg(target_os = "linux")]
 pub mod kallsyms;
-pub mod nic_health;
 pub mod mock;
+pub mod nic_health;
 pub mod process_resolver;
 pub mod replay;
 #[cfg(target_os = "linux")]
@@ -35,7 +35,7 @@ pub trait EventSource: Send {
     async fn next_event(&mut self) -> Result<ArgusEvent, EventSourceError>;
 
     /// Drain up to `max` events in one call. Returns at least 1 event or an error.
-    /// Default implementation delegates to next_event() one at a time.
+    /// Default implementation delegates to `next_event()` one at a time.
     async fn next_batch(&mut self, max: usize) -> Result<Vec<ArgusEvent>, EventSourceError> {
         let first = self.next_event().await?;
         let mut batch = Vec::with_capacity(max.min(64));
@@ -59,6 +59,9 @@ pub trait EventSource: Send {
 }
 
 /// Enum dispatch for event sources (mock/replay only — live uses BPF maps directly).
+// One instance exists per process and it is never moved after construction,
+// so the size difference between variants has no practical cost.
+#[allow(clippy::large_enum_variant)]
 pub enum AnyEventSource {
     Mock(mock::MockEventSource),
     Replay(replay::ReplayEventSource),

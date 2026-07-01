@@ -23,6 +23,7 @@ pub struct SlurmBackend {
 }
 
 impl SlurmBackend {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             scontrol_path: PathBuf::from("/usr/bin/scontrol"),
@@ -53,15 +54,21 @@ impl SlurmBackend {
         let output = match wait_with_timeout(&mut child, SCONTROL_TIMEOUT) {
             Ok(Some(o)) => o,
             Ok(None) => {
-                warn!("scontrol timed out after {}s, killing", SCONTROL_TIMEOUT.as_secs());
+                warn!(
+                    "scontrol timed out after {}s, killing",
+                    SCONTROL_TIMEOUT.as_secs()
+                );
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(SchedulerError::CommandFailed(
-                    format!("scontrol timed out after {}s", SCONTROL_TIMEOUT.as_secs()),
-                ));
+                return Err(SchedulerError::CommandFailed(format!(
+                    "scontrol timed out after {}s",
+                    SCONTROL_TIMEOUT.as_secs()
+                )));
             }
             Err(e) => {
-                return Err(SchedulerError::CommandFailed(format!("scontrol wait error: {e}")));
+                return Err(SchedulerError::CommandFailed(format!(
+                    "scontrol wait error: {e}"
+                )));
             }
         };
 
@@ -92,7 +99,7 @@ impl Default for SlurmBackend {
 }
 
 impl SchedulerBackend for SlurmBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "slurm"
     }
 
@@ -116,7 +123,7 @@ impl SchedulerBackend for SlurmBackend {
         let state = parse_slurm_state(&state_raw);
         let managed_by_self = reason
             .as_ref()
-            .map_or(false, |r| r.starts_with(ARGUS_REASON_PREFIX));
+            .is_some_and(|r| r.starts_with(ARGUS_REASON_PREFIX));
 
         debug!(
             node,
@@ -190,31 +197,31 @@ fn wait_with_timeout(
     let poll_interval = Duration::from_millis(50);
 
     loop {
-        match child.try_wait()? {
-            Some(status) => {
-                let stdout = child.stdout.take().map_or_else(Vec::new, |mut r| {
-                    let mut buf = Vec::new();
-                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
-                    buf
-                });
-                let stderr = child.stderr.take().map_or_else(Vec::new, |mut r| {
-                    let mut buf = Vec::new();
-                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
-                    buf
-                });
-                return Ok(Some(std::process::Output { status, stdout, stderr }));
-            }
-            None => {
-                if start.elapsed() >= timeout {
-                    return Ok(None);
-                }
-                std::thread::sleep(poll_interval);
-            }
+        if let Some(status) = child.try_wait()? {
+            let stdout = child.stdout.take().map_or_else(Vec::new, |mut r| {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                buf
+            });
+            let stderr = child.stderr.take().map_or_else(Vec::new, |mut r| {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                buf
+            });
+            return Ok(Some(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            }));
         }
+        if start.elapsed() >= timeout {
+            return Ok(None);
+        }
+        std::thread::sleep(poll_interval);
     }
 }
 
-/// Parse SLURM compound state into ObservedNodeState (M3 fix).
+/// Parse SLURM compound state into `ObservedNodeState` (M3 fix).
 ///
 /// Real SLURM states are compound: `IDLE+DRAIN`, `MIXED+DRAIN`, `DOWN*+DRAIN`.
 /// The `*` suffix means "not responding." We split on `+`, check components,
@@ -236,9 +243,9 @@ pub fn parse_slurm_state(raw: &str) -> ObservedNodeState {
     }
 
     if components.contains("DRAIN") {
-        let has_running = components.iter().any(|c| {
-            matches!(*c, "ALLOC" | "ALLOCATED" | "MIXED" | "COMPLETING")
-        });
+        let has_running = components
+            .iter()
+            .any(|c| matches!(*c, "ALLOC" | "ALLOCATED" | "MIXED" | "COMPLETING"));
         return if has_running {
             ObservedNodeState::Draining
         } else {
@@ -278,7 +285,10 @@ mod tests {
 
     #[test]
     fn parse_completing() {
-        assert_eq!(parse_slurm_state("COMPLETING"), ObservedNodeState::Available);
+        assert_eq!(
+            parse_slurm_state("COMPLETING"),
+            ObservedNodeState::Available
+        );
     }
 
     #[test]
@@ -288,12 +298,18 @@ mod tests {
 
     #[test]
     fn parse_mixed_drain() {
-        assert_eq!(parse_slurm_state("MIXED+DRAIN"), ObservedNodeState::Draining);
+        assert_eq!(
+            parse_slurm_state("MIXED+DRAIN"),
+            ObservedNodeState::Draining
+        );
     }
 
     #[test]
     fn parse_alloc_drain() {
-        assert_eq!(parse_slurm_state("ALLOC+DRAIN"), ObservedNodeState::Draining);
+        assert_eq!(
+            parse_slurm_state("ALLOC+DRAIN"),
+            ObservedNodeState::Draining
+        );
     }
 
     #[test]

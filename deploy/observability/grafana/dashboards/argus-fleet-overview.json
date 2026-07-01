@@ -724,9 +724,13 @@
         "overrides": [
           { "matcher": { "id": "byName", "options": "severity" }, "properties": [
             { "id": "mappings", "value": [{ "type": "value", "options": {
-              "critical": { "color": "red", "index": 0, "text": "CRITICAL" },
-              "degraded": { "color": "yellow", "index": 1, "text": "DEGRADED" },
-              "warning": { "color": "yellow", "index": 2, "text": "WARNING" }
+              "CRITICAL": { "color": "red", "index": 0, "text": "CRITICAL" },
+              "DEGRADED": { "color": "yellow", "index": 1, "text": "DEGRADED" },
+              "RECOVERING": { "color": "orange", "index": 2, "text": "RECOVERING" },
+              "HEALTHY": { "color": "green", "index": 3, "text": "HEALTHY" },
+              "critical": { "color": "red", "index": 4, "text": "CRITICAL" },
+              "degraded": { "color": "yellow", "index": 5, "text": "DEGRADED" },
+              "warning": { "color": "yellow", "index": 6, "text": "WARNING" }
             }}]},
             { "id": "custom.cellOptions", "value": { "type": "color-text" } }
           ]},

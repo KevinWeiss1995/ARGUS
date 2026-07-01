@@ -4,7 +4,7 @@ use argus_common::Alert;
 use std::collections::VecDeque;
 
 /// Collects alerts and metrics for external consumption.
-/// Uses a bounded VecDeque so oldest-first eviction is O(1) even at high
+/// Uses a bounded `VecDeque` so oldest-first eviction is O(1) even at high
 /// `max_alerts`, versus the O(N) cost of `Vec::remove(0)`.
 pub struct TelemetryCollector {
     recent_alerts: VecDeque<Alert>,

@@ -1,9 +1,9 @@
-//! CompletionLatency capability.
+//! `CompletionLatency` capability.
 //!
 //! Three tiers, from highest to lowest fidelity:
 //!   1. **eBPF kprobe on CQ post/poll**: provides true per-completion latency.
-//!      Available when CAP_BPF is held *and* a relevant tracepoint/kprobe
-//!      exists on the kernel (mlx5_ib_poll_one, ib_poll_cq, rxe_completer, etc.).
+//!      Available when `CAP_BPF` is held *and* a relevant tracepoint/kprobe
+//!      exists on the kernel (`mlx5_ib_poll_one`, `ib_poll_cq`, `rxe_completer`, etc.).
 //!   2. **`libibverbs` poll-time sampling**: requires linking rdma-core; we
 //!      stub it and mark Unavailable for now (path documented for future).
 //!   3. **Throughput-proxy inference**: derive a *jitter* signal from
@@ -92,7 +92,11 @@ impl CapabilityProvider for EbpfCqLatencyProvider {
         let p999 = self.sketch.quantile(0.999);
         let count = self.sketch.count();
         self.sketch.reset();
-        let confidence = if count >= 100 { 1.0 } else { (count as f64 / 100.0).max(0.05) };
+        let confidence = if count >= 100 {
+            1.0
+        } else {
+            (count as f64 / 100.0).max(0.05)
+        };
         vec![
             ebpf_quantile_sample("p50", p50, confidence, ctx.timestamp_ns),
             ebpf_quantile_sample("p99", p99, confidence, ctx.timestamp_ns),
@@ -116,14 +120,14 @@ fn ebpf_quantile_sample(label: &'static str, value: f64, confidence: f64, ts: u6
     }
 }
 
-/// Inferred / proxy tier: prefer the per-window DDSketch from the
+/// Inferred / proxy tier: prefer the per-window `DDSketch` from the
 /// aggregator (medium quality if any completions arrived this window),
 /// fall back to coarse `cq_jitter` aggregates (low quality).
 pub struct ThroughputProxyLatencyProvider;
 
 impl ThroughputProxyLatencyProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -160,10 +164,34 @@ impl CapabilityProvider for ThroughputProxyLatencyProvider {
                 let count = sk.count();
                 let conf = (count as f64 / 200.0).clamp(0.1, 0.95);
                 return vec![
-                    quantile_sample("p50", sk.quantile(0.50), conf, ctx.timestamp_ns, Quality::Medium),
-                    quantile_sample("p95", sk.quantile(0.95), conf, ctx.timestamp_ns, Quality::Medium),
-                    quantile_sample("p99", sk.quantile(0.99), conf, ctx.timestamp_ns, Quality::Medium),
-                    quantile_sample("p999", sk.quantile(0.999), conf, ctx.timestamp_ns, Quality::Medium),
+                    quantile_sample(
+                        "p50",
+                        sk.quantile(0.50),
+                        conf,
+                        ctx.timestamp_ns,
+                        Quality::Medium,
+                    ),
+                    quantile_sample(
+                        "p95",
+                        sk.quantile(0.95),
+                        conf,
+                        ctx.timestamp_ns,
+                        Quality::Medium,
+                    ),
+                    quantile_sample(
+                        "p99",
+                        sk.quantile(0.99),
+                        conf,
+                        ctx.timestamp_ns,
+                        Quality::Medium,
+                    ),
+                    quantile_sample(
+                        "p999",
+                        sk.quantile(0.999),
+                        conf,
+                        ctx.timestamp_ns,
+                        Quality::Medium,
+                    ),
                 ];
             }
         }
@@ -173,8 +201,8 @@ impl CapabilityProvider for ThroughputProxyLatencyProvider {
         if cq.completion_count == 0 {
             return vec![];
         }
-        let avg = cq.avg_latency_ns() as f64;
-        let p99 = cq.estimated_p99_ns() as f64;
+        let avg = cq.avg_latency_ns();
+        let p99 = cq.estimated_p99_ns();
         let max = cq.max_latency_ns as f64;
         let conf = (cq.completion_count as f64 / 100.0).clamp(0.05, 0.7);
         vec![

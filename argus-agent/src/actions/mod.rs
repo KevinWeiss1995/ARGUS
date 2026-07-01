@@ -56,6 +56,7 @@ pub struct AuditEntry {
 }
 
 impl ActionEngine {
+    #[must_use]
     pub fn from_config(config: &ActionConfig) -> Self {
         let mut handlers: Vec<Box<dyn ActionHandler>> = Vec::new();
 
@@ -156,7 +157,7 @@ impl ActionEngine {
 struct LogAction;
 
 impl ActionHandler for LogAction {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "log"
     }
 
@@ -172,13 +173,13 @@ impl ActionHandler for LogAction {
     }
 }
 
-/// POST alert JSON to a configurable webhook URL (PagerDuty, Slack, custom).
+/// POST alert JSON to a configurable webhook URL (`PagerDuty`, Slack, custom).
 struct WebhookAction {
     url: String,
 }
 
 impl ActionHandler for WebhookAction {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "webhook"
     }
 
@@ -206,10 +207,7 @@ impl ActionHandler for WebhookAction {
             .map_err(|e| format!("webhook POST failed: {e}"))?;
 
         if response.status().as_u16() >= 400 {
-            return Err(format!(
-                "webhook POST returned HTTP {}",
-                response.status()
-            ));
+            return Err(format!("webhook POST returned HTTP {}", response.status()));
         }
 
         info!(component = "actions", url = %self.url, "webhook delivered");
@@ -217,7 +215,7 @@ impl ActionHandler for WebhookAction {
     }
 }
 
-/// Disable an IB port via sysfs admin_state. Requires --action-port-disable.
+/// Disable an IB port via sysfs `admin_state`. Requires --action-port-disable.
 ///
 /// SAFETY: `AlertKind::RdmaLinkDegradation` currently aggregates counter deltas
 /// across all ports on this node and does NOT identify which port degraded.
@@ -227,18 +225,17 @@ impl ActionHandler for WebhookAction {
 struct PortDisableAction;
 
 impl PortDisableAction {
-    /// Return Some(admin_state_path) if exactly one IB port is present.
+    /// Return `Some(admin_state_path)` if exactly one IB port is present.
     fn sole_port() -> Result<std::path::PathBuf, String> {
         let ib_path = std::path::Path::new("/sys/class/infiniband");
-        let devices = std::fs::read_dir(ib_path)
-            .map_err(|e| format!("read /sys/class/infiniband: {e}"))?;
+        let devices =
+            std::fs::read_dir(ib_path).map_err(|e| format!("read /sys/class/infiniband: {e}"))?;
 
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
         for device in devices.flatten() {
             let ports_dir = device.path().join("ports");
-            let ports = match std::fs::read_dir(&ports_dir) {
-                Ok(p) => p,
-                Err(_) => continue,
+            let Ok(ports) = std::fs::read_dir(&ports_dir) else {
+                continue;
             };
             for port in ports.flatten() {
                 let admin_state = port.path().join("admin_state");
@@ -260,7 +257,7 @@ impl PortDisableAction {
 }
 
 impl ActionHandler for PortDisableAction {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "port_disable"
     }
 

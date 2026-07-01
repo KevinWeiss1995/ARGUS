@@ -2,10 +2,10 @@
 //!
 //! No hardcoded mlx5 or kernel symbol assumptions. We probe sysfs, kallsyms,
 //! and capability-bit files to figure out:
-//!   - which fabric type is present (IB / RoCEv1 / RoCEv2 / Soft-RoCE / none)
+//!   - which fabric type is present (IB / `RoCEv1` / `RoCEv2` / Soft-RoCE / none)
 //!   - which RDMA driver (mlx5, mlx4, hfi1, qib, irdma, bnxt, rxe, siw, ...)
 //!   - which kernel tracepoints/kprobes are available for our preferred backends
-//!   - what capabilities the process holds (CAP_BPF, CAP_NET_ADMIN)
+//!   - what capabilities the process holds (`CAP_BPF`, `CAP_NET_ADMIN`)
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,9 +18,9 @@ use tracing::debug;
 pub enum FabricKind {
     /// Real InfiniBand (CBFC, MAD/SMP, no IP layer).
     InfiniBand,
-    /// RoCEv1: IB transport over Ethernet L2 (rare).
+    /// `RoCEv1`: IB transport over Ethernet L2 (rare).
     RoCEv1,
-    /// RoCEv2: IB transport over UDP/IP — modern RoCE deployments.
+    /// `RoCEv2`: IB transport over UDP/IP — modern RoCE deployments.
     RoCEv2,
     /// Software RDMA (rxe, siw) over kernel UDP — testing and some prod.
     SoftRoCE,
@@ -32,7 +32,7 @@ pub enum FabricKind {
 
 impl FabricKind {
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::InfiniBand => "infiniband",
             Self::RoCEv1 => "rocev1",
@@ -94,13 +94,14 @@ pub struct RdmaDevice {
     pub fabric: FabricKind,
     /// Available counter file names under /sys/class/infiniband/<dev>/ports/<n>/counters.
     pub standard_counters: HashSet<String>,
-    /// Available counter file names under .../hw_counters (driver-specific).
+    /// Available counter file names under .../`hw_counters` (driver-specific).
     pub hw_counters: HashSet<String>,
     pub port_count: u32,
 }
 
 /// Capability/permission flags for the running process.
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // independent kernel capability flags, not a state machine
 pub struct PrivilegeProfile {
     pub has_cap_bpf: bool,
     pub has_cap_net_admin: bool,
@@ -111,7 +112,7 @@ pub struct PrivilegeProfile {
 impl PrivilegeProfile {
     /// Cheap heuristic: any of the relevant caps is enough for higher-quality backends.
     #[must_use]
-    pub fn can_run_ebpf(&self) -> bool {
+    pub const fn can_run_ebpf(&self) -> bool {
         self.has_cap_bpf || self.uid_zero
     }
 }
@@ -177,7 +178,9 @@ impl FabricEnv {
     /// True if any discovered device uses the named driver.
     #[must_use]
     pub fn has_driver(&self, drv: &DriverKind) -> bool {
-        self.devices.iter().any(|d| std::mem::discriminant(&d.driver) == std::mem::discriminant(drv))
+        self.devices
+            .iter()
+            .any(|d| std::mem::discriminant(&d.driver) == std::mem::discriminant(drv))
     }
 
     /// True if any discovered device exposes a counter file name matching
@@ -356,7 +359,7 @@ impl KallsymsCache {
     }
 
     /// Load `/proc/kallsyms` once. Subsequent calls are no-ops.
-    /// Returns `false` if reading failed (e.g., kptr_restrict without privilege).
+    /// Returns `false` if reading failed (e.g., `kptr_restrict` without privilege).
     pub fn load(&mut self) -> bool {
         if self.loaded {
             return true;
@@ -367,7 +370,9 @@ impl KallsymsCache {
         for line in content.lines() {
             // Format: <addr> <type> <name> [<module>]
             let mut parts = line.split_whitespace();
-            if let (Some(_addr), Some(_typ), Some(name)) = (parts.next(), parts.next(), parts.next()) {
+            if let (Some(_addr), Some(_typ), Some(name)) =
+                (parts.next(), parts.next(), parts.next())
+            {
                 // Strip kallsyms suffix variants like `.cold`, `.constprop.0`.
                 let base = name.split('.').next().unwrap_or(name);
                 self.symbols.insert(base.to_string());
@@ -387,7 +392,7 @@ impl KallsymsCache {
     /// resolution: e.g., `["mlx5_ib_post_send", "mlx5_ib_post_send_v2"]`.
     #[must_use]
     pub fn contains_any(&self, candidates: &[&str]) -> bool {
-        candidates.iter().any(|s| self.contains(*s))
+        candidates.iter().any(|s| self.contains(s))
     }
 }
 
@@ -397,9 +402,18 @@ mod tests {
 
     #[test]
     fn driver_kind_classifies_known_prefixes() {
-        assert!(matches!(DriverKind::from_device_name("mlx5_0"), DriverKind::Mlx5));
-        assert!(matches!(DriverKind::from_device_name("rxe0"), DriverKind::Rxe));
-        assert!(matches!(DriverKind::from_device_name("hfi1_1"), DriverKind::Hfi1));
+        assert!(matches!(
+            DriverKind::from_device_name("mlx5_0"),
+            DriverKind::Mlx5
+        ));
+        assert!(matches!(
+            DriverKind::from_device_name("rxe0"),
+            DriverKind::Rxe
+        ));
+        assert!(matches!(
+            DriverKind::from_device_name("hfi1_1"),
+            DriverKind::Hfi1
+        ));
         match DriverKind::from_device_name("foobar0") {
             DriverKind::Other(s) => assert_eq!(s, "foobar0"),
             _ => panic!("expected Other"),

@@ -3,25 +3,28 @@
 //! These are extracted from the eBPF event source so they can be unit-tested
 //! and fuzz-tested without a Linux kernel or eBPF programs.
 
-use argus_common::*;
+use argus_common::{ArgusEvent, IrqEntryEvent, NapiPollEvent, SlabAllocEvent, SlabFreeEvent};
 
 pub const EVENT_TYPE_SLAB_ALLOC: u32 = 1;
 pub const EVENT_TYPE_SLAB_FREE: u32 = 2;
 pub const EVENT_TYPE_IRQ_ENTRY: u32 = 3;
 pub const EVENT_TYPE_NAPI_POLL: u32 = 4;
 
+#[must_use]
 pub fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
     data.get(offset..offset + 4)
         .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
 }
 
+#[must_use]
 pub fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
     data.get(offset..offset + 8)
         .map(|b| u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
 /// Parse a slab alloc event from raw ring buffer bytes.
-/// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_req(4) + bytes_alloc(4) + pad2(4) + latency(8) = 40 bytes
+/// Layout: `event_type(4)` + pad(4) + timestamp(8) + cpu(4) + `bytes_req(4)` + `bytes_alloc(4)` + pad2(4) + latency(8) = 40 bytes
+#[must_use]
 pub fn parse_slab_alloc(data: &[u8]) -> Option<ArgusEvent> {
     if data.len() < 40 {
         return None;
@@ -36,7 +39,8 @@ pub fn parse_slab_alloc(data: &[u8]) -> Option<ArgusEvent> {
     }))
 }
 
-/// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + bytes_freed(4) = 24 bytes
+/// Layout: `event_type(4)` + pad(4) + timestamp(8) + cpu(4) + `bytes_freed(4)` = 24 bytes
+#[must_use]
 pub fn parse_slab_free(data: &[u8]) -> Option<ArgusEvent> {
     if data.len() < 24 {
         return None;
@@ -48,7 +52,8 @@ pub fn parse_slab_free(data: &[u8]) -> Option<ArgusEvent> {
     }))
 }
 
-/// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + irq(4) = 24 bytes
+/// Layout: `event_type(4)` + pad(4) + timestamp(8) + cpu(4) + irq(4) = 24 bytes
+#[must_use]
 pub fn parse_irq_entry(data: &[u8]) -> Option<ArgusEvent> {
     if data.len() < 24 {
         return None;
@@ -61,7 +66,8 @@ pub fn parse_irq_entry(data: &[u8]) -> Option<ArgusEvent> {
     }))
 }
 
-/// Layout: event_type(4) + pad(4) + timestamp(8) + cpu(4) + budget(4) + work_done(4) + pad2(4) = 32 bytes
+/// Layout: `event_type(4)` + pad(4) + timestamp(8) + cpu(4) + budget(4) + `work_done(4)` + pad2(4) = 32 bytes
+#[must_use]
 pub fn parse_napi_poll(data: &[u8]) -> Option<ArgusEvent> {
     if data.len() < 32 {
         return None;
@@ -76,6 +82,7 @@ pub fn parse_napi_poll(data: &[u8]) -> Option<ArgusEvent> {
 }
 
 /// Dispatch raw ring buffer data to the appropriate parser based on event type.
+#[must_use]
 pub fn parse_event(data: &[u8]) -> Option<ArgusEvent> {
     if data.len() < 8 {
         return None;

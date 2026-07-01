@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
+// Metric ratios cast u64 counters to f64 throughout. Counters stay far below
+// 2^52 in practice (52 days of nanoseconds), so mantissa precision loss is
+// irrelevant for health scoring.
+#![allow(clippy::cast_precision_loss)]
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -14,7 +18,7 @@ pub use capability::{
 // Event types emitted by eBPF probes (or mock/replay sources)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ArgusEvent {
     SlabAlloc(SlabAllocEvent),
     SlabFree(SlabFreeEvent),
@@ -27,7 +31,7 @@ pub enum ArgusEvent {
 
 impl ArgusEvent {
     #[must_use]
-    pub fn timestamp_ns(&self) -> u64 {
+    pub const fn timestamp_ns(&self) -> u64 {
         match self {
             Self::SlabAlloc(e) => e.timestamp_ns,
             Self::SlabFree(e) => e.timestamp_ns,
@@ -40,7 +44,7 @@ impl ArgusEvent {
     }
 
     #[must_use]
-    pub fn event_type_name(&self) -> &'static str {
+    pub const fn event_type_name(&self) -> &'static str {
         match self {
             Self::SlabAlloc(_) => "slab_alloc",
             Self::SlabFree(_) => "slab_free",
@@ -57,7 +61,7 @@ impl ArgusEvent {
 // Individual event structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlabAllocEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
@@ -67,14 +71,14 @@ pub struct SlabAllocEvent {
     pub numa_node: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlabFreeEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
     pub bytes_freed: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrqEntryEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
@@ -82,7 +86,7 @@ pub struct IrqEntryEvent {
     pub handler_name_hash: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NapiPollEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
@@ -91,7 +95,7 @@ pub struct NapiPollEvent {
     pub dev_name_hash: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetifReceiveEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
@@ -99,7 +103,7 @@ pub struct NetifReceiveEvent {
     pub dev_name_hash: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CqCompletionEvent {
     pub timestamp_ns: u64,
     pub cpu: u32,
@@ -109,14 +113,19 @@ pub struct CqCompletionEvent {
     pub opcode: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HardwareCounterEvent {
     pub timestamp_ns: u64,
+    /// IB device name (e.g. `mlx5_0`). Port numbers restart at 1 on every
+    /// HCA, so multi-rail nodes need the device to disambiguate counters.
+    /// Defaults to empty for replay files recorded before this field existed.
+    #[serde(default)]
+    pub device: String,
     pub port_num: u32,
     pub counter: HardwareCounter,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HardwareCounter {
     // --- Standard IB counters (from counters/) ---
     SymbolErrors(u64),
@@ -130,21 +139,21 @@ pub enum HardwareCounter {
     PortRcvRemotePhysicalErrors(u64),
     LocalLinkIntegrityErrors(u64),
     ExcessiveBufferOverrunErrors(u64),
-    /// Automatic link recovery attempts — increments *before* link_downed.
+    /// Automatic link recovery attempts — increments *before* `link_downed`.
     /// The key early-warning signal for cable faults.
     LinkErrorRecovery(u64),
     // --- hw_counters (rxe/driver-specific) ---
-    /// hw_counters rcvd_pkts — packet count.
+    /// `hw_counters` `rcvd_pkts` — packet count.
     HwRcvPkts(u64),
-    /// hw_counters sent_pkts — packet count.
+    /// `hw_counters` `sent_pkts` — packet count.
     HwXmitPkts(u64),
-    /// rxe hw_counters duplicate_request — operational on Soft-RoCE, NOT a link error.
+    /// rxe `hw_counters` `duplicate_request` — operational on Soft-RoCE, NOT a link error.
     RxeDuplicateRequest(u64),
-    /// rxe hw_counters rcvd_seq_err — operational on Soft-RoCE, NOT a link error.
+    /// rxe `hw_counters` `rcvd_seq_err` — operational on Soft-RoCE, NOT a link error.
     RxeSeqError(u64),
-    /// rxe hw_counters retry_exceeded_err.
+    /// rxe `hw_counters` `retry_exceeded_err`.
     RxeRetryExceeded(u64),
-    /// rxe hw_counters send_err.
+    /// rxe `hw_counters` `send_err`.
     RxeSendError(u64),
     /// Time spent waiting for credits to send. Non-zero indicates upstream congestion
     /// (the "victim buffer" effect on lossless IB fabrics).
@@ -157,7 +166,6 @@ pub enum HardwareCounter {
     // hardware per NVIDIA's published IB diagnostics guidance and the
     // mlx5_core OFED documentation. They have nothing to do with rxe
     // (which has different filenames in the same directory).
-
     /// Local ACK timeouts. Climbs when an RC connection's peer fails to
     /// acknowledge sends within the configured timeout. Slow-creep
     /// indicator of intermittent peer/path connectivity.
@@ -169,7 +177,7 @@ pub enum HardwareCounter {
     Mlx5PacketSeqErr(u64),
 
     /// Implied NAKs from sequence errors. Companion signal to
-    /// packet_seq_err — same root cause, RDMA-stack reaction.
+    /// `packet_seq_err` — same root cause, RDMA-stack reaction.
     Mlx5ImpliedNakSeqErr(u64),
 
     /// Receive-buffer exhaustion events. Slow creep indicates
@@ -203,7 +211,7 @@ pub enum HardwareCounter {
     Mlx5NpCnpSent(u64),
 
     /// Congestion Notification Packets handled at this Reaction
-    /// Point. The counterpart of NpCnpSent — climbs when upstream
+    /// Point. The counterpart of `NpCnpSent` — climbs when upstream
     /// fabric ECN-marks our traffic.
     Mlx5RpCnpHandled(u64),
 }
@@ -234,7 +242,7 @@ impl CqJitterMetrics {
     }
 
     /// Estimated p99 latency. With only count/sum/max available from the BPF
-    /// stats map, we approximate p99 as max_latency * 0.9 when stalls are
+    /// stats map, we approximate p99 as `max_latency` * 0.9 when stalls are
     /// present, or avg * 2 otherwise. This is intentionally conservative —
     /// if we ever add histogram buckets in BPF, we can compute this exactly.
     #[must_use]
@@ -249,7 +257,7 @@ impl CqJitterMetrics {
     }
 
     #[must_use]
-    pub fn has_data(&self) -> bool {
+    pub const fn has_data(&self) -> bool {
         self.completion_count > 0
     }
 }
@@ -273,7 +281,7 @@ pub enum HealthState {
 impl HealthState {
     /// For scheduler integration: Recovering behaves like Degraded.
     #[must_use]
-    pub fn for_scheduler(self) -> Self {
+    pub const fn for_scheduler(self) -> Self {
         match self {
             Self::Recovering => Self::Degraded,
             other => other,
@@ -366,7 +374,7 @@ pub enum AlertKind {
     /// Long-window slow-degradation signal. Fires when a low-magnitude
     /// error signal (symbol errors, RoCE retransmissions, etc.) has been
     /// sustained at a rate above the noise floor for hours. Distinct
-    /// from RisingErrorTrend, which is a short-window per-counter
+    /// from `RisingErrorTrend`, which is a short-window per-counter
     /// monotonic rise. This is the El-Sayed & Schroeder (DSN 2013)
     /// "creep that predicts a catastrophic failure 24-72 hours later."
     SlowDegradation {
@@ -379,8 +387,8 @@ pub enum AlertKind {
         /// Approximate wall-clock seconds of sustained elevation.
         sustained_seconds: u64,
     },
-    /// PCIe link to the IB NIC has downgraded below its negotiated
-    /// max (e.g. x16 → x8, or PCIe 4.0 → PCIe 3.0). Often a hardware
+    /// `PCIe` link to the IB NIC has downgraded below its negotiated
+    /// max (e.g. x16 → x8, or `PCIe` 4.0 → `PCIe` 3.0). Often a hardware
     /// problem on the NIC or motherboard slot. Not detectable through
     /// IB error counters.
     PcieLaneDegradation {
@@ -402,7 +410,7 @@ pub enum AlertKind {
 
 impl Alert {
     #[must_use]
-    pub fn kind_name(&self) -> &'static str {
+    pub const fn kind_name(&self) -> &'static str {
         match &self.kind {
             AlertKind::InterruptAffinitySkew { .. } => "interrupt_affinity_skew",
             AlertKind::RdmaLatencySpike { .. } => "rdma_latency_spike",
@@ -450,8 +458,9 @@ pub struct AggregatedMetrics {
 }
 
 /// Per-port idle snapshot for surfaces like /status and Prometheus gauges.
-/// Hardware error counters (symbol_error_delta, link_error_recovery_delta,
-/// link_downed_delta) continue to fire regardless of idle_seconds — passive
+///
+/// Hardware error counters (`symbol_error_delta`, `link_error_recovery_delta`,
+/// `link_downed_delta`) continue to fire regardless of `idle_seconds` — passive
 /// monitoring of an idle link is still real monitoring.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IbPortIdle {
@@ -480,7 +489,11 @@ impl AggregatedMetrics {
     /// (passive monitoring still active).
     #[must_use]
     pub fn ib_max_idle_seconds(&self) -> u64 {
-        self.ib_port_idle.iter().map(|p| p.idle_seconds).max().unwrap_or(0)
+        self.ib_port_idle
+            .iter()
+            .map(|p| p.idle_seconds)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -506,7 +519,7 @@ impl InterruptDistribution {
             .iter()
             .enumerate()
             .max_by_key(|(_, &count)| count)
-            .map(|(idx, _)| idx as u32)
+            .map(|(idx, _)| u32::try_from(idx).unwrap_or(u32::MAX))
     }
 }
 
@@ -522,7 +535,7 @@ pub struct SlabMetrics {
 
 impl SlabMetrics {
     #[must_use]
-    pub fn avg_latency_ns(&self) -> u64 {
+    pub const fn avg_latency_ns(&self) -> u64 {
         if self.alloc_count == 0 {
             return 0;
         }
@@ -541,7 +554,7 @@ pub struct RdmaMetrics {
 
 impl RdmaMetrics {
     #[must_use]
-    pub fn avg_latency_ns(&self) -> u64 {
+    pub const fn avg_latency_ns(&self) -> u64 {
         if self.completion_count == 0 {
             return 0;
         }
@@ -567,7 +580,7 @@ pub struct NetworkMetrics {
 }
 
 /// Per-window deltas of InfiniBand hardware counters from sysfs.
-/// These are computed as (current_absolute - previous_absolute) each window.
+/// These are computed as (`current_absolute` - `previous_absolute`) each window.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IbCounterDeltas {
     // --- Hard errors (always indicate real problems) ---
@@ -577,7 +590,7 @@ pub struct IbCounterDeltas {
     pub local_link_integrity_errors_delta: u64,
     pub excessive_buffer_overrun_errors_delta: u64,
     /// Link recovery attempts — the key early-warning predictor of cable faults.
-    /// Increments before link_downed; any delta > 0 is significant.
+    /// Increments before `link_downed`; any delta > 0 is significant.
     pub link_error_recovery_delta: u64,
     // --- Standard IB error counters (from counters/) ---
     pub port_rcv_errors_delta: u64,
@@ -587,9 +600,9 @@ pub struct IbCounterDeltas {
     pub port_rcv_data_delta: u64,
     /// Standard IB counter delta — in 4-byte units.
     pub port_xmit_data_delta: u64,
-    /// hw_counters rcvd_pkts delta — packet count (rxe).
+    /// `hw_counters` `rcvd_pkts` delta — packet count (rxe).
     pub hw_rcv_pkts_delta: u64,
-    /// hw_counters sent_pkts delta — packet count (rxe).
+    /// `hw_counters` `sent_pkts` delta — packet count (rxe).
     pub hw_xmit_pkts_delta: u64,
     /// Credit stall time — nonzero means upstream congestion is propagating.
     pub port_xmit_wait_delta: u64,
@@ -632,16 +645,16 @@ impl IbCounterDeltas {
     /// counters the literature consistently flags as primary indicators
     /// of marginal-link / intermittent-connection failure:
     ///
-    ///   - local_ack_timeout_err  (intermittent peer/path)
-    ///   - packet_seq_err         (small packet loss / reorder)
-    ///   - implied_nak_seq_err    (RDMA-stack reaction to PSN errors)
-    ///   - roce_adp_retrans       (RoCE-level retransmissions)
+    ///   - `local_ack_timeout_err`  (intermittent peer/path)
+    ///   - `packet_seq_err`         (small packet loss / reorder)
+    ///   - `implied_nak_seq_err`    (RDMA-stack reaction to PSN errors)
+    ///   - `roce_adp_retrans`       (RoCE-level retransmissions)
     ///
     /// Used by the slow-trend rule (and any other rule that wants a
     /// "is this link quietly going bad?" signal). Returns 0 on non-
     /// Mellanox hardware where these counters don't exist.
     #[must_use]
-    pub fn mlx5_slow_degradation_signal(&self) -> u64 {
+    pub const fn mlx5_slow_degradation_signal(&self) -> u64 {
         self.mlx5_local_ack_timeout_err_delta
             .saturating_add(self.mlx5_packet_seq_err_delta)
             .saturating_add(self.mlx5_implied_nak_seq_err_delta)
@@ -653,7 +666,7 @@ impl IbCounterDeltas {
     /// immediate "this work request failed" report, not a creep
     /// indicator.
     #[must_use]
-    pub fn mlx5_cqe_error_total(&self) -> u64 {
+    pub const fn mlx5_cqe_error_total(&self) -> u64 {
         self.mlx5_req_cqe_error_delta
             .saturating_add(self.mlx5_resp_cqe_error_delta)
     }
@@ -662,7 +675,7 @@ impl IbCounterDeltas {
 impl IbCounterDeltas {
     /// Hard errors: always indicate real link/hardware problems regardless of device type.
     #[must_use]
-    pub fn total_hard_error_delta(&self) -> u64 {
+    pub const fn total_hard_error_delta(&self) -> u64 {
         self.symbol_error_delta
             + self.link_downed_delta
             + self.port_rcv_remote_physical_errors_delta
@@ -670,10 +683,10 @@ impl IbCounterDeltas {
             + self.excessive_buffer_overrun_errors_delta
     }
 
-    /// Soft/operational errors from rxe hw_counters. Normal on Soft-RoCE during
+    /// Soft/operational errors from rxe `hw_counters`. Normal on Soft-RoCE during
     /// active traffic; only concerning when rate deviates from baseline.
     #[must_use]
-    pub fn total_soft_error_delta(&self) -> u64 {
+    pub const fn total_soft_error_delta(&self) -> u64 {
         self.rxe_duplicate_request_delta
             + self.rxe_seq_error_delta
             + self.rxe_retry_exceeded_delta
@@ -682,34 +695,34 @@ impl IbCounterDeltas {
 
     /// All error deltas (hard + standard IB counters). Does NOT include soft/rxe errors.
     #[must_use]
-    pub fn total_error_delta(&self) -> u64 {
+    pub const fn total_error_delta(&self) -> u64 {
         self.total_hard_error_delta() + self.port_rcv_errors_delta + self.port_xmit_discards_delta
     }
 
     /// All error deltas across all device types (hard + standard + soft/rxe).
     /// Used for display — shows any error activity regardless of source.
     #[must_use]
-    pub fn total_all_errors_delta(&self) -> u64 {
+    pub const fn total_all_errors_delta(&self) -> u64 {
         self.total_error_delta() + self.total_soft_error_delta()
     }
 
     /// Throughput in bytes from standard IB counters (4-byte units × 4).
     /// Returns 0 on rxe/Soft-RoCE where these counters don't exist.
     #[must_use]
-    pub fn throughput_bytes(&self) -> u64 {
+    pub const fn throughput_bytes(&self) -> u64 {
         (self.port_rcv_data_delta + self.port_xmit_data_delta) * 4
     }
 
-    /// Throughput in packets from hw_counters (rxe rcvd_pkts + sent_pkts).
+    /// Throughput in packets from `hw_counters` (rxe `rcvd_pkts` + `sent_pkts`).
     /// Returns 0 on real IB where byte counters are used instead.
     #[must_use]
-    pub fn throughput_pkts(&self) -> u64 {
+    pub const fn throughput_pkts(&self) -> u64 {
         self.hw_rcv_pkts_delta + self.hw_xmit_pkts_delta
     }
 
     /// True if any traffic was observed in this window, from either source.
     #[must_use]
-    pub fn has_traffic(&self) -> bool {
+    pub const fn has_traffic(&self) -> bool {
         self.throughput_bytes() > 0 || self.throughput_pkts() > 0
     }
 }

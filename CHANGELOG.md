@@ -2,6 +2,81 @@
 
 All notable changes are recorded here. Versions follow semver.
 
+## [Unreleased] — production stabilization pass
+
+### Fixed — dual-rail counter aliasing (correctness)
+
+`HardwareCounterEvent` now carries the IB device name, and the
+aggregator keys per-counter delta state by *(device, port, counter)*
+instead of *(port, counter)*. Port numbers restart at 1 on every HCA,
+so on dual-rail nodes (`mlx5_0` + `mlx5_1`, both port 1) the old key
+collided: each window diffed one card's counter against the other
+card's previous value, producing phantom error/throughput deltas that
+could feed false health-state transitions. Replay files recorded
+before this change still load (`device` defaults to empty). The
+per-port idle tracker got the same (device, port) keying.
+
+### Fixed — metrics server killed long-lived connections every 30s
+
+The HTTP(S) server wrapped each connection's entire lifetime in a 30s
+timeout. Keep-alive clients — Prometheus scrapers, and `argus-tui
+--attach` polling once per second — had their connections severed
+mid-use every 30 seconds, surfacing as intermittent scrape gaps and
+the TUI flashing "[disconnected]" (the long-standing "occasional TCP
+problems"). Slowloris protection is now per-request
+(`header_read_timeout`) and the TLS handshake keeps its own timeout;
+established connections are no longer killed while active.
+
+### Fixed — attach-mode TUI ignored the bearer token
+
+`argusd --attach` / `argus-tui` never sent `Authorization`, so
+attaching to a token-protected daemon always failed with 401 — while
+the 401 error text told operators to set `ARGUS_METRICS_TOKEN`, which
+was parsed and then dropped. The attach client now sends the
+configured token, fails fast on 4xx instead of retrying, and
+normalizes `https://host` / bracketed-IPv6 attach targets correctly.
+
+### Fixed — CLI tooling
+
+- `argus-scheduler`: global options (`--host`, `--port`, `--conf`) are
+  now accepted after the subcommand, so `argus-scheduler status --host
+  node08` works. `enable` no longer silently no-ops when
+  `ARGUS_EXTRA_ARGS=` is absent from argusd.conf (it appends).
+  `validate` preserves any pre-existing SLURM node Comment. Drain /
+  resume / error counters in `status` sum across label sets.
+- `argus-status`: `--token` was broken (the Authorization header was
+  word-split into separate curl arguments); curl arguments are now
+  passed as an array. RECOVERING nodes are colored and counted in the
+  fleet summary. `--watch` survives unreachable nodes under `set -e`.
+- `argus-manage-targets`: hardened against the deployed
+  `do_verify: command not found` failure class; host/label/path values
+  are passed to Python via argv instead of string interpolation;
+  non-interactive `add --verify` refuses instead of hanging on read.
+- `argus-discover`: new `--enable-slurm` (+ `--ssh-user`, `--ssh-opts`)
+  enables SLURM integration on every discovered node over ssh;
+  validates per-node and reports per-node success. `/31` and `/32`
+  subnets now probe correctly; CIDR input is validated.
+
+### Added — observability completeness for RECOVERING
+
+- `ArgusNodeRecovering` (INFO) Prometheus alert rule for
+  `argus_health_state == 3`.
+- Fleet Overview "Recent Alerts" severity mapping now matches the
+  uppercase severities the agent actually emits (and adds RECOVERING).
+
+### Changed — CI gates actually pass
+
+- Workspace is clean under the CI lint command
+  (`clippy -W pedantic -W nursery -D warnings`) and `cargo fmt --check`.
+  Numeric-conversion and doc-ceremony pedantic lints are allowed
+  crate-wide with documented rationale; ~300 findings fixed by code
+  change.
+- shellcheck now covers `argus-scheduler`, `argus-status`,
+  `argus-preflight`, and `argus-selinux-enable` in CI; all scripts are
+  shellcheck-clean.
+- Removed a `futures_core::Never` reference (not a dependency) that
+  broke compilation on non-Unix targets.
+
 ## [0.1.0] — 2026-05-22 (slow-degradation detection)
 
 ### Fixed — CQ latency p99 silently dead on real Mellanox kernels

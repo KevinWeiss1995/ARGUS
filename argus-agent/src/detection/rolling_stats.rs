@@ -15,9 +15,9 @@ pub struct RollingStats {
     samples: u64,
     /// Baseline captured at the end of warmup. None until warmed up.
     baseline: Option<f64>,
-    /// Upper clamp: EWMA cannot exceed baseline × clamp_factor. None = unclamped.
+    /// Upper clamp: EWMA cannot exceed baseline × `clamp_factor`. None = unclamped.
     clamp_factor: Option<f64>,
-    /// Lower clamp: EWMA cannot drop below baseline × clamp_floor. None = no floor.
+    /// Lower clamp: EWMA cannot drop below baseline × `clamp_floor`. None = no floor.
     clamp_floor: Option<f64>,
 }
 
@@ -25,7 +25,7 @@ impl RollingStats {
     /// Create a new tracker with the given smoothing factor.
     /// `alpha` controls responsiveness: 0.1 = slow adaptation, 0.3 = faster.
     #[must_use]
-    pub fn new(alpha: f64) -> Self {
+    pub const fn new(alpha: f64) -> Self {
         Self {
             ewma: 0.0,
             ewma_var: 0.0,
@@ -42,7 +42,7 @@ impl RollingStats {
     /// Create a tracker with an upper clamp. After warmup, the EWMA cannot
     /// exceed `clamp_factor × baseline`. Use for error rates (e.g., 3.0).
     #[must_use]
-    pub fn with_clamp(alpha: f64, clamp_factor: f64) -> Self {
+    pub const fn with_clamp(alpha: f64, clamp_factor: f64) -> Self {
         Self {
             clamp_factor: Some(clamp_factor),
             ..Self::new(alpha)
@@ -53,7 +53,7 @@ impl RollingStats {
     /// drop below `clamp_floor × baseline`. Use for throughput (e.g., 0.5 = can't
     /// adapt below 50% of initial throughput, keeping drops detectable).
     #[must_use]
-    pub fn with_floor(alpha: f64, clamp_floor: f64) -> Self {
+    pub const fn with_floor(alpha: f64, clamp_floor: f64) -> Self {
         Self {
             clamp_floor: Some(clamp_floor),
             ..Self::new(alpha)
@@ -74,8 +74,8 @@ impl RollingStats {
         self.prev_ewma = self.ewma;
 
         let diff = value - self.ewma;
-        let new_ewma = self.ewma + self.alpha * diff;
-        self.ewma_var = (1.0 - self.alpha) * (self.ewma_var + self.alpha * diff * diff);
+        let new_ewma = self.alpha.mul_add(diff, self.ewma);
+        self.ewma_var = (1.0 - self.alpha) * (self.alpha * diff).mul_add(diff, self.ewma_var);
 
         // Capture baseline at end of warmup
         if self.baseline.is_none() && self.samples == 5 {
@@ -105,13 +105,13 @@ impl RollingStats {
 
     /// The frozen baseline captured at the end of warmup (if any).
     #[must_use]
-    pub fn baseline(&self) -> Option<f64> {
+    pub const fn baseline(&self) -> Option<f64> {
         self.baseline
     }
 
     /// Current EWMA value.
     #[must_use]
-    pub fn mean(&self) -> f64 {
+    pub const fn mean(&self) -> f64 {
         self.ewma
     }
 
@@ -123,7 +123,7 @@ impl RollingStats {
 
     /// Current trend (first derivative: positive = rising, negative = falling).
     #[must_use]
-    pub fn trend(&self) -> f64 {
+    pub const fn trend(&self) -> f64 {
         self.trend
     }
 
@@ -143,13 +143,13 @@ impl RollingStats {
 
     /// Number of observations pushed.
     #[must_use]
-    pub fn samples(&self) -> u64 {
+    pub const fn samples(&self) -> u64 {
         self.samples
     }
 
     /// Whether we have enough data to be meaningful (at least 5 windows).
     #[must_use]
-    pub fn is_warmed_up(&self) -> bool {
+    pub const fn is_warmed_up(&self) -> bool {
         self.samples >= 5
     }
 }
@@ -164,7 +164,7 @@ pub struct TrendTracker {
 
 impl TrendTracker {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             consecutive_rising: 0,
             prev_value: 0.0,
@@ -191,7 +191,7 @@ impl TrendTracker {
     }
 
     #[must_use]
-    pub fn consecutive_rising(&self) -> u32 {
+    pub const fn consecutive_rising(&self) -> u32 {
         self.consecutive_rising
     }
 }

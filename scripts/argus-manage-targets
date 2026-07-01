@@ -74,16 +74,16 @@ normalize_target() {
 
 get_targets() {
     if command -v python3 &>/dev/null; then
-        python3 -c "
+        python3 -c '
 import json, sys
-with open('$TARGETS_FILE') as f:
+with open(sys.argv[1]) as f:
     data = json.load(f)
 for group in data:
-    for t in group.get('targets', []):
+    for t in group.get("targets", []):
         print(t)
-"
+' "$TARGETS_FILE"
     elif command -v jq &>/dev/null; then
-        jq -r '.[].targets[]' "$TARGETS_FILE"
+        jq -r '.[].targets[]?' "$TARGETS_FILE"
     else
         echo "Error: need python3 or jq to parse targets" >&2
         exit 1
@@ -98,7 +98,9 @@ add_target() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --label)  labels+=("$2"); shift 2 ;;
+            --label)
+                [[ $# -ge 2 ]] || { echo "Error: --label requires KEY=VALUE" >&2; exit 1; }
+                labels+=("$2"); shift 2 ;;
             --verify) do_verify=true; shift ;;
             *)        echo "Unknown add option: $1" >&2; exit 1 ;;
         esac
@@ -106,95 +108,107 @@ add_target() {
 
     target=$(normalize_target "$target")
 
-    if $do_verify; then
+    if [[ "$do_verify" == true ]]; then
         local host="${target%:*}"
         local port="${target#*:}"
         echo "Probing ${target}..."
         if ! curl -sf --connect-timeout 3 --max-time 4 "http://${host}:${port}/health" >/dev/null 2>&1; then
-            echo "Warning: ${target} is not responding on /health. Add anyway? [y/N]"
-            read -r ans
-            [[ "$ans" =~ ^[Yy] ]] || exit 1
+            if [[ -t 0 ]]; then
+                echo "Warning: ${target} is not responding on /health. Add anyway? [y/N]"
+                read -r ans || ans=""
+                [[ "$ans" =~ ^[Yy] ]] || exit 1
+            else
+                echo "Error: ${target} is not responding on /health (non-interactive, refusing to add)" >&2
+                exit 1
+            fi
         else
             echo "  OK — ${target} is running ARGUS"
         fi
     fi
 
-    if command -v python3 &>/dev/null; then
-        python3 -c "
+    if ! command -v python3 &>/dev/null; then
+        echo "Error: python3 required for target management" >&2
+        exit 1
+    fi
+
+    # Target, file path, and labels are passed as argv — never interpolated
+    # into the Python source — so quoting in values cannot break the script.
+    python3 -c '
 import json, sys
 
-target = '$target'
-label_args = '''${labels[*]+"${labels[*]}"}'''.split()
+targets_file, target, *label_args = sys.argv[1:]
 
-with open('$TARGETS_FILE') as f:
+with open(targets_file) as f:
     data = json.load(f)
 
 # Check for duplicates
 for group in data:
-    if target in group.get('targets', []):
-        print(f'{target} already in targets file')
+    if target in group.get("targets", []):
+        print(f"{target} already in targets file")
         sys.exit(0)
 
 # Add to first group (or create one)
 if not data:
-    data = [{'targets': [], 'labels': {'job': 'argus'}}]
+    data = [{"targets": [], "labels": {"job": "argus"}}]
 
-data[0]['targets'].append(target)
+data[0].setdefault("targets", []).append(target)
 
 # Add any extra labels
 for lbl in label_args:
-    if '=' in lbl:
-        k, v = lbl.split('=', 1)
-        data[0]['labels'][k] = v
+    if "=" in lbl:
+        k, v = lbl.split("=", 1)
+        data[0].setdefault("labels", {})[k] = v
 
-with open('$TARGETS_FILE', 'w') as f:
+with open(targets_file, "w") as f:
     json.dump(data, f, indent=2)
+    f.write("\n")
 
-print(f'Added {target}')
-"
-    else
-        echo "Error: python3 required for target management" >&2
-        exit 1
-    fi
+print(f"Added {target}")
+' "$TARGETS_FILE" "$target" ${labels[@]+"${labels[@]}"}
 }
 
 remove_target() {
     local target
     target=$(normalize_target "$1")
 
-    python3 -c "
+    if ! command -v python3 &>/dev/null; then
+        echo "Error: python3 required for target management" >&2
+        exit 1
+    fi
+
+    python3 -c '
 import json, sys
 
-target = '$target'
-with open('$TARGETS_FILE') as f:
+targets_file, target = sys.argv[1:3]
+with open(targets_file) as f:
     data = json.load(f)
 
 found = False
 for group in data:
-    targets = group.get('targets', [])
+    targets = group.get("targets", [])
     if target in targets:
         targets.remove(target)
         found = True
 
 if not found:
     # Try matching without port
-    host = target.split(':')[0]
+    host = target.split(":")[0]
     for group in data:
-        targets = group.get('targets', [])
+        targets = group.get("targets", [])
         for t in list(targets):
-            if t.startswith(host + ':'):
+            if t.startswith(host + ":"):
                 targets.remove(t)
                 found = True
 
-with open('$TARGETS_FILE', 'w') as f:
-    json.dump(data, f, indent=2)
-
 if found:
-    print(f'Removed {target}')
+    with open(targets_file, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    print(f"Removed {target}")
 else:
-    print(f'{target} not found in targets', file=sys.stderr)
+    print(f"{target} not found in targets", file=sys.stderr)
     sys.exit(1)
-"
+' "$TARGETS_FILE" "$target"
 }
 
 list_targets() {
@@ -245,10 +259,12 @@ verify_targets() {
 # Parse global options
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --file)    TARGETS_FILE="$2"; shift 2 ;;
+        --file)
+            [[ $# -ge 2 ]] || { echo "Error: --file requires a path" >&2; exit 1; }
+            TARGETS_FILE="$2"; shift 2 ;;
         -h|--help) usage ;;
         add|remove|list|verify) break ;;
-        *)         echo "Unknown command: $1" >&2; usage ;;
+        *)         echo "Unknown command: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -277,6 +293,6 @@ case "$COMMAND" in
         ;;
     *)
         echo "Unknown command: $COMMAND" >&2
-        usage
+        exit 1
         ;;
 esac

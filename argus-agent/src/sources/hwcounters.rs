@@ -1,6 +1,7 @@
 //! Hardware counter reader for InfiniBand ports.
+//!
 //! Reads from both /sys/class/infiniband/*/ports/*/counters/* (standard IB)
-//! and /sys/class/infiniband/*/ports/*/hw_counters/* (rxe, mlx5, etc.).
+//! and /sys/class/infiniband/*/ports/*/`hw_counters`/* (rxe, mlx5, etc.).
 //! Works on any Linux with IB or Soft-RoCE, no eBPF needed.
 
 use argus_common::{ArgusEvent, HardwareCounter, HardwareCounterEvent};
@@ -9,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::info;
 
-/// A single absolute counter reading from sysfs, identified by
-/// (device, port, counter_filename). Returned by
+/// A single absolute counter reading from sysfs.
+///
+/// Identified by (device, port, `counter_filename`). Returned by
 /// `HwCounterReader::absolute_counters()` for the Prometheus exporter
 /// to publish as `argus_ib_<counter>_total` series.
 #[derive(Debug, Clone)]
@@ -58,7 +60,7 @@ pub struct HwCounterReader {
     /// Latest absolute counter value observed per (device, port, counter
     /// filename). Updated on every read. Surfaces the cumulative kernel
     /// counters so external Prometheus can compute long-window slopes
-    /// (rate(argus_ib_<counter>_total[24h]) > X) — the
+    /// (`rate(argus_ib`_<counter>_total[24h]) > X) — the
     /// El-Sayed & Schroeder DSN-2013 slow-degradation detection pattern.
     last_absolute: std::sync::Mutex<HashMap<(String, u32, String), u64>>,
 }
@@ -71,8 +73,11 @@ struct IbPort {
     hw_counter_dir: Option<PathBuf>,
 }
 
+/// Maps a sysfs counter filename to its typed `HardwareCounter` constructor.
+type CounterTable = &'static [(&'static str, fn(u64) -> HardwareCounter)];
+
 /// Standard counters from counters/ (values in IB-native units).
-const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
+const STANDARD_COUNTERS: CounterTable = &[
     ("symbol_error_count", HardwareCounter::SymbolErrors),
     ("link_downed", HardwareCounter::LinkDowned),
     ("port_rcv_errors", HardwareCounter::PortRcvErrors),
@@ -95,23 +100,23 @@ const STANDARD_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
     ("port_xmit_wait", HardwareCounter::PortXmitWait),
 ];
 
-/// hw_counters/ exposed by rxe, mlx5, mlx4, and other RDMA drivers.
+/// `hw_counters`/ exposed by rxe, mlx5, mlx4, and other RDMA drivers.
 ///
 /// The list is a flat union of every counter name we know how to read.
-/// We don't gate on driver: read_counter() returns None when the file
+/// We don't gate on driver: `read_counter()` returns None when the file
 /// doesn't exist, so on rxe hardware the mlx5_* entries silently skip,
 /// and vice versa. This keeps the discovery logic dead simple and
 /// future-proof for drivers we haven't classified yet.
 ///
 /// Naming conventions:
 ///   - rxe-prefixed variants are for Soft-RoCE (rxe driver) and the
-///     filenames are short, generic ("rcvd_pkts", "duplicate_request").
+///     filenames are short, generic ("`rcvd_pkts`", "`duplicate_request`").
 ///   - Mlx5*-prefixed variants are for Mellanox mlx5 hardware. The
-///     filenames are mlx5-specific ("local_ack_timeout_err",
-///     "roce_adp_retrans"). These are THE primary slow-degradation
+///     filenames are mlx5-specific ("`local_ack_timeout_err`",
+///     "`roce_adp_retrans`"). These are THE primary slow-degradation
 ///     indicators per NVIDIA's IB performance optimization docs and
-///     the mlx5_core OFED reference.
-const HW_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
+///     the `mlx5_core` OFED reference.
+const HW_COUNTERS: CounterTable = &[
     // rxe (Soft-RoCE) driver — names match argus-test-scenarios
     ("rcvd_pkts", HardwareCounter::HwRcvPkts),
     ("sent_pkts", HardwareCounter::HwXmitPkts),
@@ -119,22 +124,24 @@ const HW_COUNTERS: &[(&str, fn(u64) -> HardwareCounter)] = &[
     ("rcvd_seq_err", HardwareCounter::RxeSeqError),
     ("retry_exceeded_err", HardwareCounter::RxeRetryExceeded),
     ("send_err", HardwareCounter::RxeSendError),
-
     // Mellanox mlx5 (and mostly mlx4) — names taken from the
     // mlx5_ib_hw_stats_descs[] array in the OFED kernel source. These
     // exist at /sys/class/infiniband/mlx5_<n>/ports/<p>/hw_counters/
     // on real Mellanox hardware.
-    ("local_ack_timeout_err",    HardwareCounter::Mlx5LocalAckTimeoutErr),
-    ("packet_seq_err",           HardwareCounter::Mlx5PacketSeqErr),
-    ("implied_nak_seq_err",      HardwareCounter::Mlx5ImpliedNakSeqErr),
-    ("out_of_buffer",            HardwareCounter::Mlx5OutOfBuffer),
-    ("out_of_sequence",          HardwareCounter::Mlx5OutOfSequence),
-    ("req_cqe_error",            HardwareCounter::Mlx5ReqCqeError),
-    ("resp_cqe_error",           HardwareCounter::Mlx5RespCqeError),
-    ("roce_adp_retrans",         HardwareCounter::Mlx5RoceAdpRetrans),
-    ("roce_slow_restart",        HardwareCounter::Mlx5RoceSlowRestart),
-    ("np_cnp_sent",              HardwareCounter::Mlx5NpCnpSent),
-    ("rp_cnp_handled",           HardwareCounter::Mlx5RpCnpHandled),
+    (
+        "local_ack_timeout_err",
+        HardwareCounter::Mlx5LocalAckTimeoutErr,
+    ),
+    ("packet_seq_err", HardwareCounter::Mlx5PacketSeqErr),
+    ("implied_nak_seq_err", HardwareCounter::Mlx5ImpliedNakSeqErr),
+    ("out_of_buffer", HardwareCounter::Mlx5OutOfBuffer),
+    ("out_of_sequence", HardwareCounter::Mlx5OutOfSequence),
+    ("req_cqe_error", HardwareCounter::Mlx5ReqCqeError),
+    ("resp_cqe_error", HardwareCounter::Mlx5RespCqeError),
+    ("roce_adp_retrans", HardwareCounter::Mlx5RoceAdpRetrans),
+    ("roce_slow_restart", HardwareCounter::Mlx5RoceSlowRestart),
+    ("np_cnp_sent", HardwareCounter::Mlx5NpCnpSent),
+    ("rp_cnp_handled", HardwareCounter::Mlx5RpCnpHandled),
 ];
 
 fn read_counter(dir: &Path, filename: &str) -> Option<u64> {
@@ -220,6 +227,7 @@ impl HwCounterReader {
                         ));
                         events.push(ArgusEvent::HardwareCounter(HardwareCounterEvent {
                             timestamp_ns: ts,
+                            device: port.device.clone(),
                             port_num: port.port_num,
                             counter: make_counter(val),
                         }));
@@ -236,6 +244,7 @@ impl HwCounterReader {
                         ));
                         events.push(ArgusEvent::HardwareCounter(HardwareCounterEvent {
                             timestamp_ns: ts,
+                            device: port.device.clone(),
                             port_num: port.port_num,
                             counter: make_counter(val),
                         }));
@@ -257,7 +266,7 @@ impl HwCounterReader {
         events
     }
 
-    /// Snapshot of every (device, port, counter_filename) → absolute_value
+    /// Snapshot of every (device, port, `counter_filename`) → `absolute_value`
     /// observed by the most recent successful read. Used by the Prometheus
     /// exporter to expose `argus_ib_<counter>_total{device,port}` so
     /// external systems can compute long-window slopes — the standard
@@ -283,12 +292,12 @@ impl HwCounterReader {
     }
 
     #[must_use]
-    pub fn port_count(&self) -> usize {
+    pub const fn port_count(&self) -> usize {
         self.ports.len()
     }
 
     /// Returns the dominant device type across all discovered ports.
-    /// If any port is HardwareIB, returns HardwareIB. Otherwise SoftRoCE if any, else Unknown.
+    /// If any port is `HardwareIB`, returns `HardwareIB`. Otherwise `SoftRoCE` if any, else Unknown.
     #[must_use]
     pub fn device_type(&self) -> DeviceType {
         if self

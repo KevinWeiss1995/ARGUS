@@ -1,15 +1,13 @@
 //! Throughput capability — bytes and packets per window from sysfs port counters.
 
-use crate::capabilities::{
-    CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome,
-};
+use crate::capabilities::{CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome};
 use argus_common::{BackendId, Capability, Quality, Sample};
 
 pub struct SysfsThroughputProvider;
 
 impl SysfsThroughputProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

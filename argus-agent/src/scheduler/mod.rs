@@ -68,7 +68,8 @@ pub struct SchedulingPolicy {
 }
 
 impl SchedulingPolicy {
-    pub fn new(drain_on_degraded: bool) -> Self {
+    #[must_use]
+    pub const fn new(drain_on_degraded: bool) -> Self {
         Self {
             drain_on_degraded,
             desired: DesiredNodeState::Available,
@@ -100,7 +101,7 @@ impl SchedulingPolicy {
         new
     }
 
-    pub fn set_held(&mut self) {
+    pub const fn set_held(&mut self) {
         self.desired = DesiredNodeState::HeldByOperator;
     }
 
@@ -110,7 +111,8 @@ impl SchedulingPolicy {
         }
     }
 
-    pub fn desired(&self) -> DesiredNodeState {
+    #[must_use]
+    pub const fn desired(&self) -> DesiredNodeState {
         self.desired
     }
 }
@@ -163,7 +165,7 @@ struct DrainRateLimiter {
 }
 
 impl DrainRateLimiter {
-    fn new(max_per_hour: u32) -> Self {
+    const fn new(max_per_hour: u32) -> Self {
         Self {
             timestamps: VecDeque::new(),
             max_per_hour,
@@ -196,7 +198,7 @@ struct AuditLogger {
 }
 
 impl AuditLogger {
-    fn new(path: PathBuf, node_name: String) -> Self {
+    const fn new(path: PathBuf, node_name: String) -> Self {
         Self { path, node_name }
     }
 
@@ -213,9 +215,13 @@ impl AuditLogger {
         if let Some(parent) = self.path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        match OpenOptions::new().create(true).append(true).open(&self.path) {
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
             Ok(mut f) => {
-                let _ = writeln!(f, "{}", entry);
+                let _ = writeln!(f, "{entry}");
             }
             Err(e) => {
                 warn!(path = %self.path.display(), "audit log write failed: {e}");
@@ -237,7 +243,7 @@ struct Backoff {
 }
 
 impl Backoff {
-    fn new(max_failures: u32) -> Self {
+    const fn new(max_failures: u32) -> Self {
         Self {
             consecutive_failures: 0,
             max_failures,
@@ -247,14 +253,14 @@ impl Backoff {
         }
     }
 
-    fn record_failure(&mut self) {
+    const fn record_failure(&mut self) {
         self.consecutive_failures += 1;
         if self.consecutive_failures >= self.max_failures {
             self.given_up = true;
         }
     }
 
-    fn reset(&mut self) {
+    const fn reset(&mut self) {
         self.consecutive_failures = 0;
         self.given_up = false;
     }
@@ -324,10 +330,7 @@ impl Reconciler {
 
         let policy = SchedulingPolicy::new(config.drain_on_degraded);
         let rate_limiter = DrainRateLimiter::new(config.max_drains_per_hour);
-        let audit_logger = AuditLogger::new(
-            config.audit_log_path.clone(),
-            node_name.clone(),
-        );
+        let audit_logger = AuditLogger::new(config.audit_log_path.clone(), node_name.clone());
 
         info!(
             component = "scheduler",
@@ -406,7 +409,7 @@ impl Reconciler {
         self.backoff.reset();
 
         // 3. Detect operator intervention (C2 fix: uses NodeStateReport)
-        if self.detect_operator_hold(&report, new_desired) {
+        if Self::detect_operator_hold(&report, new_desired) {
             self.desired = DesiredNodeState::HeldByOperator;
             self.policy.set_held();
             let event = SchedulerActionEvent::operator_hold_detected();
@@ -456,17 +459,13 @@ impl Reconciler {
 
             // Down + unresponsive: don't attempt anything
             (_, ObservedNodeState::Down) if !report.responsive => {
-                let event = SchedulerActionEvent::skipped(
-                    "node unresponsive (DOWN*) — cannot act",
-                );
+                let event = SchedulerActionEvent::skipped("node unresponsive (DOWN*) — cannot act");
                 debug!("node is DOWN* (unresponsive) — skipping");
                 events.push(event);
             }
 
             // Down + responsive but not managed by ARGUS: operator/hardware
-            (DesiredNodeState::Available, ObservedNodeState::Down)
-                if !report.managed_by_self =>
-            {
+            (DesiredNodeState::Available, ObservedNodeState::Down) if !report.managed_by_self => {
                 self.desired = DesiredNodeState::HeldByOperator;
                 self.policy.set_held();
                 let event = SchedulerActionEvent::operator_hold_detected();
@@ -475,13 +474,13 @@ impl Reconciler {
                 self.persist_if_changed();
             }
 
-            // Converged states
-            (DesiredNodeState::Available, ObservedNodeState::Available) => {}
-            (
+            // Converged states (and operator hold — never act on a held node)
+            (DesiredNodeState::Available, ObservedNodeState::Available)
+            | (
                 DesiredNodeState::Draining,
                 ObservedNodeState::Draining | ObservedNodeState::Drained,
-            ) => {}
-            (DesiredNodeState::HeldByOperator, _) => {}
+            )
+            | (DesiredNodeState::HeldByOperator, _) => {}
 
             // Need to resume
             (DesiredNodeState::Available, _) => {
@@ -503,22 +502,35 @@ impl Reconciler {
         events
     }
 
-    fn execute_drain(&mut self, reason: &str, health: HealthState, events: &mut Vec<SchedulerActionEvent>) {
+    fn execute_drain(
+        &mut self,
+        reason: &str,
+        health: HealthState,
+        events: &mut Vec<SchedulerActionEvent>,
+    ) {
         if !self.rate_limiter.try_drain() {
             warn!(
                 max_per_hour = self.config.max_drains_per_hour,
                 rejections = self.rate_limiter.rejections,
                 "drain rejected: rate limit exceeded"
             );
-            self.audit_logger.log_event("drain", reason, &health.to_string(), "rejected:rate_limit");
+            self.audit_logger.log_event(
+                "drain",
+                reason,
+                &health.to_string(),
+                "rejected:rate_limit",
+            );
             events.push(SchedulerActionEvent::skipped("drain rate limit exceeded"));
             return;
         }
 
         if self.config.dry_run {
             info!(reason, "[DRY RUN] would drain node");
-            self.audit_logger.log_event("drain", reason, &health.to_string(), "dry_run");
-            events.push(SchedulerActionEvent::drained(&format!("[dry-run] {reason}")));
+            self.audit_logger
+                .log_event("drain", reason, &health.to_string(), "dry_run");
+            events.push(SchedulerActionEvent::drained(&format!(
+                "[dry-run] {reason}"
+            )));
             return;
         }
 
@@ -532,7 +544,8 @@ impl Reconciler {
                     reason,
                     "scheduler.action=drain_node"
                 );
-                self.audit_logger.log_event("drain", reason, &health.to_string(), "ok");
+                self.audit_logger
+                    .log_event("drain", reason, &health.to_string(), "ok");
                 events.push(event);
                 self.persisted.last_drain_reason = Some(reason.to_string());
                 self.persisted.last_drain_epoch_ms = Some(epoch_ms());
@@ -545,7 +558,12 @@ impl Reconciler {
                     error = %e,
                     "scheduler drain failed"
                 );
-                self.audit_logger.log_event("drain", reason, &health.to_string(), &format!("error:{e}"));
+                self.audit_logger.log_event(
+                    "drain",
+                    reason,
+                    &health.to_string(),
+                    &format!("error:{e}"),
+                );
                 events.push(SchedulerActionEvent::error("drain_node", &e));
             }
         }
@@ -554,7 +572,8 @@ impl Reconciler {
     fn execute_resume(&mut self, events: &mut Vec<SchedulerActionEvent>) {
         if self.config.dry_run {
             info!("[DRY RUN] would resume node");
-            self.audit_logger.log_event("resume", "", "Healthy", "dry_run");
+            self.audit_logger
+                .log_event("resume", "", "Healthy", "dry_run");
             events.push(SchedulerActionEvent::resumed());
             return;
         }
@@ -576,18 +595,15 @@ impl Reconciler {
                     error = %e,
                     "scheduler resume failed"
                 );
-                self.audit_logger.log_event("resume", "", "", &format!("error:{e}"));
+                self.audit_logger
+                    .log_event("resume", "", "", &format!("error:{e}"));
                 events.push(SchedulerActionEvent::error("resume_node", &e));
             }
         }
     }
 
     /// Detect operator intervention: node is drained/down but not by ARGUS.
-    fn detect_operator_hold(
-        &self,
-        report: &NodeStateReport,
-        new_desired: DesiredNodeState,
-    ) -> bool {
+    fn detect_operator_hold(report: &NodeStateReport, new_desired: DesiredNodeState) -> bool {
         if new_desired == DesiredNodeState::HeldByOperator {
             return false; // already held
         }
@@ -659,15 +675,18 @@ impl Reconciler {
         SchedulerActionEvent::hold_released()
     }
 
-    pub fn desired_state(&self) -> DesiredNodeState {
+    #[must_use]
+    pub const fn desired_state(&self) -> DesiredNodeState {
         self.desired
     }
 
-    pub fn last_observed_state(&self) -> ObservedNodeState {
+    #[must_use]
+    pub const fn last_observed_state(&self) -> ObservedNodeState {
         self.last_observed
     }
 
-    pub fn event_ring(&self) -> &SchedulerEventRing {
+    #[must_use]
+    pub const fn event_ring(&self) -> &SchedulerEventRing {
         &self.event_ring
     }
 
@@ -677,19 +696,23 @@ impl Reconciler {
         }
     }
 
+    #[must_use]
     pub fn backend_name(&self) -> &str {
         self.backend.name()
     }
 
-    pub fn last_drain_time(&self) -> Option<Instant> {
+    #[must_use]
+    pub const fn last_drain_time(&self) -> Option<Instant> {
         self.last_drain_time
     }
 
-    pub fn is_dry_run(&self) -> bool {
+    #[must_use]
+    pub const fn is_dry_run(&self) -> bool {
         self.config.dry_run
     }
 
-    pub fn drain_rejections(&self) -> u64 {
+    #[must_use]
+    pub const fn drain_rejections(&self) -> u64 {
         self.rate_limiter.rejections
     }
 }
@@ -704,8 +727,7 @@ fn atomic_write_json<T: serde::Serialize>(path: &PathBuf, data: &T) -> std::io::
         std::fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(data)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let bytes = serde_json::to_vec_pretty(data).map_err(std::io::Error::other)?;
     let mut f = File::create(&tmp)?;
     f.write_all(&bytes)?;
     f.sync_all()?;
@@ -779,6 +801,7 @@ fn epoch_ms() -> u64 {
 }
 
 /// Build a backend from config.
+#[must_use]
 pub fn build_backend(config: &SchedulerConfig) -> Box<dyn SchedulerBackend> {
     match config.backend.as_str() {
         "slurm" => Box::new(slurm::SlurmBackend::new()),
@@ -797,19 +820,28 @@ mod tests {
     #[test]
     fn policy_healthy_returns_available() {
         let mut policy = SchedulingPolicy::new(false);
-        assert_eq!(policy.evaluate(HealthState::Healthy), DesiredNodeState::Available);
+        assert_eq!(
+            policy.evaluate(HealthState::Healthy),
+            DesiredNodeState::Available
+        );
     }
 
     #[test]
     fn policy_critical_returns_draining() {
         let mut policy = SchedulingPolicy::new(false);
-        assert_eq!(policy.evaluate(HealthState::Critical), DesiredNodeState::Draining);
+        assert_eq!(
+            policy.evaluate(HealthState::Critical),
+            DesiredNodeState::Draining
+        );
     }
 
     #[test]
     fn policy_degraded_with_flag_returns_draining() {
         let mut policy = SchedulingPolicy::new(true);
-        assert_eq!(policy.evaluate(HealthState::Degraded), DesiredNodeState::Draining);
+        assert_eq!(
+            policy.evaluate(HealthState::Degraded),
+            DesiredNodeState::Draining
+        );
     }
 
     #[test]
@@ -836,7 +868,10 @@ mod tests {
         let mut policy = SchedulingPolicy::new(false);
         policy.set_held();
         policy.release_hold();
-        assert_eq!(policy.evaluate(HealthState::Healthy), DesiredNodeState::Available);
+        assert_eq!(
+            policy.evaluate(HealthState::Healthy),
+            DesiredNodeState::Available
+        );
     }
 
     #[test]
@@ -898,8 +933,7 @@ mod tests {
             ..Default::default()
         };
         let backend = Box::new(noop::NoopBackend);
-        let mut reconciler =
-            Reconciler::new(backend, config, "testnode".into()).unwrap();
+        let mut reconciler = Reconciler::new(backend, config, "testnode".into()).unwrap();
 
         // Healthy → no action
         let events = reconciler.maybe_reconcile(HealthState::Healthy);

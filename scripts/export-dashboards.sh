@@ -42,7 +42,8 @@ INPUTS_BLOCK='{"name":"DS_PROMETHEUS","label":"Prometheus","description":"Promet
 if [[ -z "$import_url" ]]; then
     mkdir -p "$DIST_DIR"
     for f in "$SRC_DIR"/*.json; do
-        # shellcheck disable=SC2016 -- literal ${DS_PROMETHEUS} is intentional for Grafana
+        # The literal ${DS_PROMETHEUS} is intentional — Grafana resolves it at import.
+        # shellcheck disable=SC2016
         sed 's/"uid": "DS_PROMETHEUS"/"uid": "${DS_PROMETHEUS}"/g' "$f" \
           | jq --argjson inputs "[$INPUTS_BLOCK]" '. + {"__inputs": $inputs}' \
           > "$DIST_DIR/$(basename "$f")"

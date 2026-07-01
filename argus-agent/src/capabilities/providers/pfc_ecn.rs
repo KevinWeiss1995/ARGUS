@@ -1,9 +1,9 @@
-//! PfcPause / EcnMarks / CnpRate capabilities.
+//! `PfcPause` / `EcnMarks` / `CnpRate` capabilities.
 //!
 //! These are **RoCE-only** in their meaningful form:
-//!   - InfiniBand uses CBFC, not PFC; PFC samples report Quality::Absent.
+//!   - InfiniBand uses CBFC, not PFC; PFC samples report `Quality::Absent`.
 //!   - rxe (Soft-RoCE) doesn't run a PFC layer; PFC samples Absent there too.
-//!   - On RoCEv2, ethtool exposes `prio[0..7]_*_xoff` and ECN-related keys
+//!   - On `RoCEv2`, ethtool exposes `prio[0..7]_*_xoff` and ECN-related keys
 //!     in driver-private stats.
 //!
 //! Because this build doesn't yet link `ethtool-rs` or call the IOCTLs
@@ -20,7 +20,7 @@ pub struct EthtoolPfcProvider;
 
 impl EthtoolPfcProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -45,7 +45,10 @@ impl CapabilityProvider for EthtoolPfcProvider {
         // PFC is meaningless on IB / softroce; declare Unavailable so the
         // capability ends up Absent on those fabrics rather than picking
         // up the inferred fallback (which itself probes Unavailable on IB).
-        if matches!(env.fabric, Some(FabricKind::InfiniBand) | Some(FabricKind::SoftRoCE)) {
+        if matches!(
+            env.fabric,
+            Some(FabricKind::InfiniBand | FabricKind::SoftRoCE)
+        ) {
             return ProbeOutcome::Unavailable {
                 reason: "PFC not applicable to IB/softroce".into(),
             };
@@ -64,7 +67,7 @@ pub struct InferredPfcProvider;
 
 impl InferredPfcProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -88,7 +91,10 @@ impl CapabilityProvider for InferredPfcProvider {
     fn probe(&mut self, env: &FabricEnv) -> ProbeOutcome {
         // Only meaningful when PFC could exist. On IB/softroce, PFC is
         // structurally absent — don't pretend to infer it.
-        if matches!(env.fabric, Some(FabricKind::InfiniBand) | Some(FabricKind::SoftRoCE)) {
+        if matches!(
+            env.fabric,
+            Some(FabricKind::InfiniBand | FabricKind::SoftRoCE)
+        ) {
             return ProbeOutcome::Unavailable {
                 reason: "PFC structurally absent on IB/softroce".into(),
             };
@@ -127,7 +133,7 @@ pub struct EthtoolEcnProvider;
 
 impl EthtoolEcnProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -149,7 +155,10 @@ impl CapabilityProvider for EthtoolEcnProvider {
         Quality::High
     }
     fn probe(&mut self, env: &FabricEnv) -> ProbeOutcome {
-        if matches!(env.fabric, Some(FabricKind::InfiniBand) | Some(FabricKind::SoftRoCE)) {
+        if matches!(
+            env.fabric,
+            Some(FabricKind::InfiniBand | FabricKind::SoftRoCE)
+        ) {
             return ProbeOutcome::Unavailable {
                 reason: "ECN/CNP not applicable to IB/softroce".into(),
             };
@@ -167,7 +176,7 @@ pub struct EthtoolCnpProvider;
 
 impl EthtoolCnpProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -189,7 +198,10 @@ impl CapabilityProvider for EthtoolCnpProvider {
         Quality::High
     }
     fn probe(&mut self, env: &FabricEnv) -> ProbeOutcome {
-        if matches!(env.fabric, Some(FabricKind::InfiniBand) | Some(FabricKind::SoftRoCE)) {
+        if matches!(
+            env.fabric,
+            Some(FabricKind::InfiniBand | FabricKind::SoftRoCE)
+        ) {
             return ProbeOutcome::Unavailable {
                 reason: "ECN/CNP not applicable to IB/softroce".into(),
             };

@@ -74,10 +74,7 @@ impl Pipeline {
     /// The detection engine computes the composite health score internally.
     pub fn evaluate(&mut self) -> Vec<Alert> {
         self.window_seq += 1;
-        let timestamp_ns = self
-            .aggregator
-            .current_metrics()
-            .window_end_ns;
+        let timestamp_ns = self.aggregator.current_metrics().window_end_ns;
 
         // Phase 1: collect samples from every active capability provider.
         let metrics_snapshot = self.aggregator.current_metrics();
@@ -90,7 +87,7 @@ impl Pipeline {
             cq_latency_sketch: Some(cq_sketch),
         };
         let samples = self.capabilities.collect_all(&ctx);
-        self.last_samples = samples.clone();
+        self.last_samples.clone_from(&samples);
 
         // Phase 2: feed metrics + samples to the detection engine.
         let coverage = self.capabilities.coverage().clone();
@@ -105,7 +102,7 @@ impl Pipeline {
     }
 
     #[must_use]
-    pub fn current_metrics(&self) -> &AggregatedMetrics {
+    pub const fn current_metrics(&self) -> &AggregatedMetrics {
         self.aggregator.current_metrics()
     }
 
@@ -114,11 +111,7 @@ impl Pipeline {
     /// telemetry consumers see "(device, port) idle for N seconds."
     /// Call once per window, after `evaluate()` and before reading
     /// `current_metrics()` for the snapshot.
-    pub fn finalize_idle_window(
-        &mut self,
-        discovered_ports: &[(String, u32)],
-        window_secs: u64,
-    ) {
+    pub fn finalize_idle_window(&mut self, discovered_ports: &[(String, u32)], window_secs: u64) {
         self.aggregator.mark_window_complete(window_secs);
         self.aggregator.set_ib_port_idle(discovered_ports);
     }
@@ -130,17 +123,17 @@ impl Pipeline {
     }
 
     #[must_use]
-    pub fn detection_engine(&self) -> &DetectionEngine {
+    pub const fn detection_engine(&self) -> &DetectionEngine {
         &self.detection
     }
 
     #[must_use]
-    pub fn fabric(&self) -> &FabricEnv {
+    pub const fn fabric(&self) -> &FabricEnv {
         &self.fabric
     }
 
     #[must_use]
-    pub fn coverage(&self) -> &CoverageReport {
+    pub const fn coverage(&self) -> &CoverageReport {
         self.capabilities.coverage()
     }
 
@@ -206,11 +199,13 @@ mod tests {
             base_dup += 30;
             pipeline.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
                 timestamp_ns: 200_000_000,
+                device: "mlx5_0".into(),
                 port_num: 1,
                 counter: argus_common::HardwareCounter::HwRcvPkts(base_pkts),
             }));
             pipeline.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
                 timestamp_ns: 200_000_000,
+                device: "mlx5_0".into(),
                 port_num: 1,
                 counter: argus_common::HardwareCounter::RxeDuplicateRequest(base_dup),
             }));
@@ -261,8 +256,15 @@ mod tests {
         let pipeline = synthetic_pipeline(4);
         let cov = pipeline.coverage();
         // Synthetic env: at minimum we expect LinkErrors + Throughput active.
-        let active: Vec<_> = cov.capabilities.iter().filter(|c| c.active_backend.is_some()).collect();
-        assert!(!active.is_empty(), "synthetic env should have at least one active provider");
+        let active: Vec<_> = cov
+            .capabilities
+            .iter()
+            .filter(|c| c.active_backend.is_some())
+            .collect();
+        assert!(
+            !active.is_empty(),
+            "synthetic env should have at least one active provider"
+        );
     }
 
     #[test]

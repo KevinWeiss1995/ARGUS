@@ -34,7 +34,7 @@ pub enum BurstClass {
 
 impl BurstClass {
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Quiet => "quiet",
             Self::Burst => "burst",
@@ -93,8 +93,12 @@ impl BurstClassifier {
         let burst_active = bursts >= self.cfg.min_bursts;
 
         let states: std::collections::HashMap<_, _> = evaluator.states().into_iter().collect();
-        let slow = *states.get(&super::timescale::Timescale::Slow).unwrap_or(&HealthState::Healthy);
-        let fast = *states.get(&super::timescale::Timescale::Fast).unwrap_or(&HealthState::Healthy);
+        let slow = *states
+            .get(&super::timescale::Timescale::Slow)
+            .unwrap_or(&HealthState::Healthy);
+        let fast = *states
+            .get(&super::timescale::Timescale::Fast)
+            .unwrap_or(&HealthState::Healthy);
         let sustained = matches!(slow, HealthState::Degraded | HealthState::Critical);
         let fast_active = matches!(fast, HealthState::Degraded | HealthState::Critical);
 
@@ -109,7 +113,7 @@ impl BurstClassifier {
     }
 
     #[must_use]
-    pub fn current(&self) -> BurstClass {
+    pub const fn current(&self) -> BurstClass {
         self.last_class
     }
 
@@ -133,7 +137,7 @@ mod tests {
     #[test]
     fn quiet_starts_quiet() {
         let mut c = BurstClassifier::default();
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         for _ in 0..10 {
             e.evaluate(0.0);
             c.observe(0.0, &e);
@@ -144,7 +148,7 @@ mod tests {
     #[test]
     fn burst_detected_on_repeated_spikes() {
         let mut c = BurstClassifier::default();
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         for _ in 0..3 {
             e.evaluate(0.65);
             c.observe(0.65, &e);
@@ -154,7 +158,10 @@ mod tests {
             c.observe(0.0, &e);
         }
         assert!(
-            matches!(c.current(), BurstClass::Burst | BurstClass::MixedBurstSustained),
+            matches!(
+                c.current(),
+                BurstClass::Burst | BurstClass::MixedBurstSustained
+            ),
             "expected Burst-ish, got {:?}",
             c.current()
         );
@@ -163,7 +170,7 @@ mod tests {
     #[test]
     fn sustained_pure_when_slow_only_escalates() {
         let mut c = BurstClassifier::default();
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         // Long sustained moderate signal — should eventually escalate slow but not produce many bursts above 0.40.
         let raw = 0.32; // above degrade_enter (0.30) but below burst_threshold (0.40)
         for _ in 0..40 {
@@ -173,7 +180,10 @@ mod tests {
         // We may see Sustained or MixedBurstSustained depending on fast threshold.
         let cls = c.current();
         assert!(
-            matches!(cls, BurstClass::Sustained | BurstClass::MixedBurstSustained | BurstClass::Quiet),
+            matches!(
+                cls,
+                BurstClass::Sustained | BurstClass::MixedBurstSustained | BurstClass::Quiet
+            ),
             "got {:?}",
             cls,
         );

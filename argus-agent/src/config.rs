@@ -10,6 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "argus-agent")]
 #[command(about = "ARGUS - Adaptive RDMA Guard & Utilization Sentinel")]
+#[allow(clippy::struct_excessive_bools)] // independent CLI flags, not a state machine
 pub struct Cli {
     /// Path to TOML config file [default: /etc/argus/argusd.toml if it exists]
     #[arg(long, env = "ARGUS_CONFIG")]
@@ -20,7 +21,7 @@ pub struct Cli {
     pub mode: Option<RunMode>,
 
     /// Event file to replay (for replay mode).
-    /// Accepts both raw event arrays and scenario files (with expected_states).
+    /// Accepts both raw event arrays and scenario files (with `expected_states`).
     #[arg(long)]
     pub file: Option<PathBuf>,
 
@@ -246,6 +247,7 @@ pub struct SchedulerSection {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent feature toggles resolved from CLI/env/TOML
 pub struct EffectiveConfig {
     pub mode: RunMode,
     pub file: Option<PathBuf>,
@@ -345,10 +347,7 @@ impl DetectionConfig {
             out.slab_pressure_alloc_rate_threshold = v;
         }
         if let Some(sm) = &profile.state_machine {
-            let base_sm = out
-                .state_machine
-                .clone()
-                .unwrap_or_default();
+            let base_sm = out.state_machine.clone().unwrap_or_default();
             out.state_machine = Some(crate::detection::StateMachineConfig {
                 degrade_enter: sm.degrade_enter.unwrap_or(base_sm.degrade_enter),
                 degrade_exit: sm.degrade_exit.unwrap_or(base_sm.degrade_exit),
@@ -396,7 +395,11 @@ fn parse_cpu_range(s: &str) -> Option<u32> {
             count += 1;
         }
     }
-    if count > 0 { Some(count) } else { None }
+    if count > 0 {
+        Some(count)
+    } else {
+        None
+    }
 }
 
 impl Default for AgentConfig {
@@ -443,7 +446,9 @@ impl DetectionConfig {
             );
         }
         if self.rdma_baseline_latency_ns == 0 {
-            bail!("rdma_baseline_latency_ns must be >= 1, got 0 (would cause division by infinity)");
+            bail!(
+                "rdma_baseline_latency_ns must be >= 1, got 0 (would cause division by infinity)"
+            );
         }
         if let Some(ref sm) = self.state_machine {
             sm.validate_config()?;
@@ -500,8 +505,12 @@ impl Cli {
         let tls_cert = self.tls_cert.or_else(|| fc.tls.cert.clone());
         let tls_key = self.tls_key.or_else(|| fc.tls.key.clone());
         match (&tls_cert, &tls_key) {
-            (Some(_), None) => bail!("TLS cert provided without key (need both --tls-cert and --tls-key)"),
-            (None, Some(_)) => bail!("TLS key provided without cert (need both --tls-cert and --tls-key)"),
+            (Some(_), None) => {
+                bail!("TLS cert provided without key (need both --tls-cert and --tls-key)")
+            }
+            (None, Some(_)) => {
+                bail!("TLS key provided without cert (need both --tls-cert and --tls-key)")
+            }
             _ => {}
         }
 
@@ -516,8 +525,9 @@ impl Cli {
                 .or_else(|| fc.auth.bearer_token_file.clone());
             match token_path {
                 Some(ref p) => {
-                    let raw = std::fs::read_to_string(p)
-                        .with_context(|| format!("failed to read bearer token file: {}", p.display()))?;
+                    let raw = std::fs::read_to_string(p).with_context(|| {
+                        format!("failed to read bearer token file: {}", p.display())
+                    })?;
                     let trimmed = raw.trim().to_string();
                     if trimmed.is_empty() {
                         bail!("bearer token file is empty: {}", p.display());
@@ -530,18 +540,20 @@ impl Cli {
 
         let defaults = DetectionConfig::default();
         let sm_defaults = crate::detection::StateMachineConfig::default();
-        let state_machine = fc.detection.state_machine.as_ref().map(|sm| {
-            crate::detection::StateMachineConfig {
-                degrade_enter: sm.degrade_enter.unwrap_or(sm_defaults.degrade_enter),
-                degrade_exit: sm.degrade_exit.unwrap_or(sm_defaults.degrade_exit),
-                critical_enter: sm.critical_enter.unwrap_or(sm_defaults.critical_enter),
-                critical_exit: sm.critical_exit.unwrap_or(sm_defaults.critical_exit),
-                enter_windows: sm.enter_windows.unwrap_or(sm_defaults.enter_windows),
-                exit_windows: sm.exit_windows.unwrap_or(sm_defaults.exit_windows),
-                recover_windows: sm.recover_windows.unwrap_or(sm_defaults.recover_windows),
-                max_hold_windows: sm.max_hold_windows.unwrap_or(sm_defaults.max_hold_windows),
-            }
-        });
+        let state_machine =
+            fc.detection
+                .state_machine
+                .as_ref()
+                .map(|sm| crate::detection::StateMachineConfig {
+                    degrade_enter: sm.degrade_enter.unwrap_or(sm_defaults.degrade_enter),
+                    degrade_exit: sm.degrade_exit.unwrap_or(sm_defaults.degrade_exit),
+                    critical_enter: sm.critical_enter.unwrap_or(sm_defaults.critical_enter),
+                    critical_exit: sm.critical_exit.unwrap_or(sm_defaults.critical_exit),
+                    enter_windows: sm.enter_windows.unwrap_or(sm_defaults.enter_windows),
+                    exit_windows: sm.exit_windows.unwrap_or(sm_defaults.exit_windows),
+                    recover_windows: sm.recover_windows.unwrap_or(sm_defaults.recover_windows),
+                    max_hold_windows: sm.max_hold_windows.unwrap_or(sm_defaults.max_hold_windows),
+                });
         let detection = DetectionConfig {
             num_cpus,
             irq_skew_threshold_pct: fc
@@ -567,7 +579,9 @@ impl Cli {
             state_machine,
         };
 
-        detection.validate().context("invalid detection configuration")?;
+        detection
+            .validate()
+            .context("invalid detection configuration")?;
 
         let fabric_profiles = fc.detection.profile.clone();
 
@@ -588,16 +602,14 @@ impl Cli {
         let scheduler_backend = if read_only {
             None
         } else {
-            self.scheduler
-                .or_else(|| fc.scheduler.backend.clone())
+            self.scheduler.or_else(|| fc.scheduler.backend.clone())
         };
         let scheduler = scheduler_backend.map(|backend| {
             use std::time::Duration;
             let defaults = crate::scheduler::SchedulerConfig::default();
             crate::scheduler::SchedulerConfig {
                 backend,
-                dry_run: self.scheduler_dry_run
-                    || fc.scheduler.dry_run.unwrap_or(false),
+                dry_run: self.scheduler_dry_run || fc.scheduler.dry_run.unwrap_or(false),
                 drain_on_degraded: self.drain_on_degraded
                     || fc.scheduler.drain_on_degraded.unwrap_or(false),
                 resume_cooldown: Duration::from_secs(
@@ -606,11 +618,13 @@ impl Cli {
                         .unwrap_or(defaults.resume_cooldown.as_secs()),
                 ),
                 reconcile_interval: Duration::from_secs(
-                    fc.scheduler.reconcile_interval_secs
+                    fc.scheduler
+                        .reconcile_interval_secs
                         .unwrap_or(defaults.reconcile_interval.as_secs()),
                 ),
                 contested_cooldown: Duration::from_secs(
-                    fc.scheduler.contested_cooldown_secs
+                    fc.scheduler
+                        .contested_cooldown_secs
                         .unwrap_or(defaults.contested_cooldown.as_secs()),
                 ),
                 max_consecutive_failures: fc
@@ -626,11 +640,7 @@ impl Cli {
                     .state_file
                     .clone()
                     .unwrap_or(defaults.state_file),
-                lock_file: fc
-                    .scheduler
-                    .lock_file
-                    .clone()
-                    .unwrap_or(defaults.lock_file),
+                lock_file: fc.scheduler.lock_file.clone().unwrap_or(defaults.lock_file),
                 audit_log_path: fc
                     .scheduler
                     .audit_log_path
@@ -648,9 +658,12 @@ impl Cli {
             num_cpus,
             tui: self.tui,
             attach: self.attach.or_else(|| {
-                if std::env::args().next().as_deref().map(std::path::Path::new)
+                if std::env::args()
+                    .next()
+                    .as_deref()
+                    .map(std::path::Path::new)
                     .and_then(|p| p.file_name())
-                    .map_or(false, |n| n == "argus-tui")
+                    .is_some_and(|n| n == "argus-tui")
                 {
                     Some("localhost:9100".into())
                 } else {
@@ -696,7 +709,7 @@ impl Cli {
 
 impl EffectiveConfig {
     #[must_use]
-    pub fn resolve_num_cpus(&self) -> u32 {
+    pub const fn resolve_num_cpus(&self) -> u32 {
         self.num_cpus
     }
 }
@@ -742,7 +755,10 @@ mod tests {
         assert_eq!(merged.rdma_baseline_latency_ns, 2000);
         // Untouched fields keep their defaults.
         assert_eq!(merged.rdma_spike_factor, base.rdma_spike_factor);
-        assert_eq!(merged.slab_pressure_min_allocs, base.slab_pressure_min_allocs);
+        assert_eq!(
+            merged.slab_pressure_min_allocs,
+            base.slab_pressure_min_allocs
+        );
     }
 
     #[test]

@@ -75,10 +75,8 @@ try_ensure_netem() {
 # ---------------------------------------------------------------------------
 
 netem_add() {
-    # Replace any existing root qdisc — word splitting on $* is intentional
-    # as netem params are multiple space-separated arguments.
-    # shellcheck disable=SC2086
-    tc qdisc replace dev "$IFACE" root netem $*
+    # Each netem parameter arrives as its own argument — "$@" preserves that.
+    tc qdisc replace dev "$IFACE" root netem "$@"
     info "netem active on $IFACE: $*"
     info "Remove with: $SCRIPT_NAME $IFACE clear"
 }

@@ -6,7 +6,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use ratatui::{prelude::*, widgets::*};
+use ratatui::{
+    prelude::*,
+    widgets::{Block, Borders, Paragraph, Sparkline},
+};
 use std::io::stdout;
 use std::time::Duration;
 
@@ -173,7 +176,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let rdma_active = state
         .rdma_throughput_history
         .last()
-        .map_or(false, |&v| v > 0.0);
+        .is_some_and(|&v| v > 0.0);
     let (rdma_indicator, rdma_style) = if rdma_active {
         ("▲ active", Style::default().fg(Color::Green).bold())
     } else {
@@ -187,7 +190,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let max_idle = state.metrics.ib_max_idle_seconds();
     let (idle_indicator, idle_style) = if !state.metrics.ib_port_idle.is_empty() && fabric_idle {
         (
-            format!(" | IB: passive ({}s idle)", max_idle),
+            format!(" | IB: passive ({max_idle}s idle)"),
             Style::default().fg(Color::Yellow),
         )
     } else if !state.metrics.ib_port_idle.is_empty() {
@@ -224,7 +227,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &DashboardState) {
 fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let dist = &state.metrics.interrupt_distribution;
     let total_cpus = dist.per_cpu_counts.len();
-    let title = format!(" IRQ Distribution ({} CPUs) ", total_cpus);
+    let title = format!(" IRQ Distribution ({total_cpus} CPUs) ");
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -246,15 +249,10 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
     // even on 80-core nodes where a per-index list would hide them. We
     // keep the original CPU index alongside the count so the label
     // remains meaningful ("CPU 47" not "row 3").
-    let mut indexed: Vec<(usize, u64)> = dist
-        .per_cpu_counts
-        .iter()
-        .copied()
-        .enumerate()
-        .collect();
+    let mut indexed: Vec<(usize, u64)> = dist.per_cpu_counts.iter().copied().enumerate().collect();
     indexed.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let max_count = indexed.first().map(|(_, c)| *c).unwrap_or(1).max(1);
+    let max_count = indexed.first().map_or(1, |(_, c)| *c).max(1);
     let active_count = indexed.iter().filter(|(_, c)| *c > 0).count();
 
     // Reserve the bottom row for a summary line. Show as many CPU bars
@@ -272,7 +270,7 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
         } else {
             0.0
         };
-        let bar_len = ((*count as f64 / max_count as f64) * bar_area_width as f64) as u16;
+        let bar_len = ((*count as f64 / max_count as f64) * f64::from(bar_area_width)) as u16;
         let color = if pct >= 70.0 {
             Color::Red
         } else if pct >= 40.0 {
@@ -304,14 +302,14 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
     // size, so operators always see fleet-relevant stats: which CPU
     // dominates, how skewed, how many CPUs are active, and how many
     // are off-screen.
-    let dominant_cpu = indexed.first().map(|(c, _)| *c).unwrap_or(0);
-    let dominant_pct = indexed.first().map(|(_, c)| {
+    let dominant_cpu = indexed.first().map_or(0, |(c, _)| *c);
+    let dominant_pct = indexed.first().map_or(0.0, |(_, c)| {
         if dist.total_count > 0 {
             *c as f64 / dist.total_count as f64 * 100.0
         } else {
             0.0
         }
-    }).unwrap_or(0.0);
+    });
     let perfect_share = 100.0 / total_cpus.max(1) as f64;
     let skew = if total_cpus > 1 && dominant_pct > perfect_share {
         ((dominant_pct - perfect_share) / (100.0 - perfect_share) * 100.0).clamp(0.0, 100.0)
@@ -331,7 +329,10 @@ fn render_irq_distribution(frame: &mut Frame, area: Rect, state: &DashboardState
     );
     let y = inner.y + inner.height.saturating_sub(summary_rows);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(summary_color)))),
+        Paragraph::new(Line::from(Span::styled(
+            summary,
+            Style::default().fg(summary_color),
+        ))),
         Rect::new(inner.x, y, inner.width, 1),
     );
 }
@@ -351,7 +352,7 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     let rdma_active = state
         .rdma_throughput_history
         .last()
-        .map_or(false, |&v| v > 0.0);
+        .is_some_and(|&v| v > 0.0);
     let rdma_color = if rdma_active {
         Color::Green
     } else {
@@ -377,10 +378,7 @@ fn render_metrics_panel(frame: &mut Frame, area: Rect, state: &DashboardState) {
     // line — which looks identical to "broken" to an operator. Detect
     // the all-zero case and tag the title so the operator knows the
     // data path isn't producing data, not just that nothing's happened.
-    let cq_has_any_data = state
-        .cq_latency_history
-        .iter()
-        .any(|&v| v > 0.0);
+    let cq_has_any_data = state.cq_latency_history.iter().any(|&v| v > 0.0);
     let cq_color = if cq_has_any_data {
         Color::LightRed
     } else {
@@ -505,13 +503,20 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
         .map(|alert| {
             let ts_display = {
                 let secs = (alert.timestamp_ns / 1_000_000_000) as i64;
-                chrono::DateTime::from_timestamp(secs, 0)
-                    .map(|utc| utc.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
-                    .unwrap_or_else(|| "??:??:??".to_string())
+                chrono::DateTime::from_timestamp(secs, 0).map_or_else(
+                    || "??:??:??".to_string(),
+                    |utc| {
+                        utc.with_timezone(&chrono::Local)
+                            .format("%H:%M:%S")
+                            .to_string()
+                    },
+                )
             };
             let severity_style = match alert.severity {
                 HealthState::Healthy => Style::default().fg(Color::Green),
-                HealthState::Degraded | HealthState::Recovering => Style::default().fg(Color::Yellow),
+                HealthState::Degraded | HealthState::Recovering => {
+                    Style::default().fg(Color::Yellow)
+                }
                 HealthState::Critical => Style::default().fg(Color::Red).bold(),
             };
 
@@ -535,6 +540,7 @@ fn render_event_log(frame: &mut Frame, area: Rect, state: &DashboardState) {
 }
 
 /// Render a single frame to a string buffer (for snapshot testing).
+#[must_use]
 pub fn render_to_string(state: &DashboardState, width: u16, height: u16) -> String {
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -543,7 +549,8 @@ pub fn render_to_string(state: &DashboardState, width: u16, height: u16) -> Stri
         .expect("draw");
     let buf = terminal.backend().buffer().clone();
 
-    let mut output = String::with_capacity(usize::from(width) * usize::from(height) + usize::from(height));
+    let mut output =
+        String::with_capacity(usize::from(width) * usize::from(height) + usize::from(height));
     let mut line = String::with_capacity(usize::from(width));
     for y in 0..height {
         line.clear();

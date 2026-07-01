@@ -21,7 +21,7 @@ use std::fmt;
 /// based on detected fabric, driver, kernel, and privilege.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum Capability {
-    /// Symbol errors, link downed, port_rcv_errors, port_xmit_discards.
+    /// Symbol errors, link downed, `port_rcv_errors`, `port_xmit_discards`.
     /// Universal — sysfs port counters work on every IB/RoCE/rxe device.
     LinkErrors,
     /// Bytes/packets observed per port.
@@ -38,7 +38,7 @@ pub enum Capability {
     /// Per-priority PFC pause durations and frame counts.
     /// `Quality::Absent` on InfiniBand (CBFC) and rxe (no PFC layer).
     PfcPause,
-    /// ECN-marked packet rate (RoCEv2 only).
+    /// ECN-marked packet rate (`RoCEv2` only).
     EcnMarks,
     /// Congestion Notification Packet rate (RoCEv2/DCQCN).
     CnpRate,
@@ -55,7 +55,7 @@ pub enum Capability {
 
 impl Capability {
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::LinkErrors => "link_errors",
             Self::Throughput => "throughput",
@@ -75,7 +75,7 @@ impl Capability {
 
     /// All known capabilities, used for registry initialization and coverage iteration.
     #[must_use]
-    pub fn all() -> &'static [Capability] {
+    pub const fn all() -> &'static [Self] {
         &[
             Self::LinkErrors,
             Self::Throughput,
@@ -121,7 +121,7 @@ impl Quality {
     /// Multiplicative weight applied during confidence fusion.
     /// High=1.0, Medium=0.7, Low=0.4, Absent=0.0.
     #[must_use]
-    pub fn weight(self) -> f64 {
+    pub const fn weight(self) -> f64 {
         match self {
             Self::High => 1.0,
             Self::Medium => 0.7,
@@ -131,7 +131,7 @@ impl Quality {
     }
 
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::High => "high",
             Self::Medium => "medium",
@@ -142,7 +142,7 @@ impl Quality {
 
     /// Numeric encoding for Prometheus gauges (matches enum discriminant).
     #[must_use]
-    pub fn as_i64(self) -> i64 {
+    pub const fn as_i64(self) -> i64 {
         self as i64
     }
 }
@@ -222,7 +222,7 @@ pub enum BackendId {
 
 impl BackendId {
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::SysfsPortCounters => "sysfs_port_counters",
             Self::SysfsHwCounters => "sysfs_hw_counters",
@@ -349,7 +349,7 @@ pub enum CoverageGrade {
 
 impl CoverageGrade {
     #[must_use]
-    pub fn as_char(self) -> char {
+    pub const fn as_char(self) -> char {
         match self {
             Self::A => 'A',
             Self::B => 'B',
@@ -379,8 +379,8 @@ impl CoverageReport {
     ///
     /// Uses the **maximum** quality across consulted inputs ("best evidence
     /// wins"). Rationale: rules typically combine a dominant signal (e.g.,
-    /// LinkErrors at High) with corroborating signals (e.g.,
-    /// RetransmitSignal at Low via inference). The dominant signal alone
+    /// `LinkErrors` at High) with corroborating signals (e.g.,
+    /// `RetransmitSignal` at Low via inference). The dominant signal alone
     /// is usually enough to trust the rule's verdict; we don't want to
     /// throw away the boost just because one tier is degraded. When *all*
     /// inputs are Absent the weight is 0 — a rule with no fabric data

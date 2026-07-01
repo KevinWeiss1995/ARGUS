@@ -75,19 +75,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Populates the global CURL_ARGS array. An array (not an echoed string) is
+# required: "Authorization: Bearer <token>" contains spaces and must stay a
+# single argv element or curl misparses it as extra URLs.
+CURL_ARGS=()
 build_curl_args() {
-    local args=("-sf" "--connect-timeout" "3" "--max-time" "5")
+    CURL_ARGS=("-sf" "--connect-timeout" "3" "--max-time" "5")
     if [[ "$SCHEME" == "https" ]]; then
         if $INSECURE; then
-            args+=("-k")
+            CURL_ARGS+=("-k")
         elif [[ -n "$CACERT" ]]; then
-            args+=("--cacert" "$CACERT")
+            CURL_ARGS+=("--cacert" "$CACERT")
         fi
     fi
     if [[ -n "$TOKEN" ]]; then
-        args+=("-H" "Authorization: Bearer $TOKEN")
+        CURL_ARGS+=("-H" "Authorization: Bearer $TOKEN")
     fi
-    echo "${args[@]}"
 }
 
 format_state() {
@@ -95,6 +98,7 @@ format_state() {
         *HEALTHY*|*healthy*|*Healthy*)  echo -e "\033[32m● HEALTHY\033[0m" ;;
         *DEGRADED*|*degraded*|*Degraded*) echo -e "\033[33m● DEGRADED\033[0m" ;;
         *CRITICAL*|*critical*|*Critical*) echo -e "\033[31m● CRITICAL\033[0m" ;;
+        *RECOVERING*|*recovering*|*Recovering*) echo -e "\033[38;5;208m● RECOVERING\033[0m" ;;
         *)                               echo "○ $1" ;;
     esac
 }
@@ -120,11 +124,10 @@ format_uptime() {
 check_node() {
     local host="$1"
     local port="$2"
-    local curl_args
-    curl_args=$(build_curl_args)
+    build_curl_args
 
     local health_json
-    if ! health_json=$(curl $curl_args "${SCHEME}://${host}:${port}/health" 2>/dev/null); then
+    if ! health_json=$(curl "${CURL_ARGS[@]}" "${SCHEME}://${host}:${port}/health" 2>/dev/null); then
         if $JSON_MODE; then
             echo "{\"host\":\"${host}:${port}\",\"error\":\"unreachable\"}"
         else
@@ -157,7 +160,7 @@ check_node() {
     # Fetch key metrics from /metrics
     local irq_imbalance="" slab_latency="" napi_pct=""
     local metrics_text
-    if metrics_text=$(curl $curl_args "${SCHEME}://${host}:${port}/metrics" 2>/dev/null); then
+    if metrics_text=$(curl "${CURL_ARGS[@]}" "${SCHEME}://${host}:${port}/metrics" 2>/dev/null); then
         irq_imbalance=$(echo "$metrics_text" | grep '^argus_irq_imbalance_pct ' | awk '{print $2}' | head -1)
         slab_latency=$(echo "$metrics_text" | grep '^argus_slab_avg_latency_ns ' | awk '{print $2}' | head -1)
         napi_pct=$(echo "$metrics_text" | grep '^argus_napi_utilization_pct ' | awk '{print $2}' | head -1)
@@ -183,14 +186,14 @@ run_check() {
 
         local targets
         if command -v python3 &>/dev/null; then
-            targets=$(python3 -c "
-import json
-with open('$TARGETS_FILE') as f:
+            targets=$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
     data = json.load(f)
 for group in data:
-    for t in group.get('targets', []):
+    for t in group.get("targets", []):
         print(t)
-")
+' "$TARGETS_FILE")
         else
             targets=$(grep -o '"[0-9][^"]*:[0-9]*"' "$TARGETS_FILE" | tr -d '"')
         fi
@@ -204,7 +207,7 @@ for group in data:
         echo "══════════════════"
         echo ""
 
-        local total=0 healthy=0 degraded=0 critical=0 down=0
+        local total=0 healthy=0 degraded=0 critical=0 recovering=0 down=0
         while IFS= read -r target; do
             local h="${target%:*}"
             local p="${target#*:}"
@@ -213,9 +216,10 @@ for group in data:
             if result=$(check_node "$h" "$p" 2>&1); then
                 echo "$result"
                 case "$result" in
-                    *HEALTHY*)  healthy=$((healthy + 1)) ;;
-                    *DEGRADED*) degraded=$((degraded + 1)) ;;
-                    *CRITICAL*) critical=$((critical + 1)) ;;
+                    *HEALTHY*)    healthy=$((healthy + 1)) ;;
+                    *DEGRADED*)   degraded=$((degraded + 1)) ;;
+                    *CRITICAL*)   critical=$((critical + 1)) ;;
+                    *RECOVERING*) recovering=$((recovering + 1)) ;;
                 esac
             else
                 echo "$result"
@@ -228,6 +232,7 @@ for group in data:
         [[ $healthy -gt 0 ]] && printf "\033[32m%d healthy\033[0m  " "$healthy"
         [[ $degraded -gt 0 ]] && printf "\033[33m%d degraded\033[0m  " "$degraded"
         [[ $critical -gt 0 ]] && printf "\033[31m%d critical\033[0m  " "$critical"
+        [[ $recovering -gt 0 ]] && printf "\033[38;5;208m%d recovering\033[0m  " "$recovering"
         [[ $down -gt 0 ]] && printf "\033[31m%d unreachable\033[0m  " "$down"
         echo ""
     else
@@ -241,7 +246,8 @@ if $WATCH_MODE; then
         clear
         echo "ARGUS Status — $(date '+%H:%M:%S')  (Ctrl+C to stop)"
         echo ""
-        run_check
+        # An unreachable node must not kill the watch loop (set -e).
+        run_check || true
         sleep 3
     done
 else

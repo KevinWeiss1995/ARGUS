@@ -20,6 +20,9 @@ OUTPUT=""
 TIMEOUT=2
 DRY_RUN=false
 START_STACK=false
+ENABLE_SLURM=false
+SSH_USER="root"
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
 LABELS=()
 SUBNET=""
 
@@ -35,6 +38,12 @@ Options:
   --timeout SECS      Connection timeout per host (default: 2)
   --dry-run           Print discovered hosts but don't write file
   --start             Discover nodes then start the Grafana + Prometheus stack
+  --enable-slurm      After discovery, ssh to each node and run
+                      'argus-scheduler enable slurm' (requires passwordless
+                      ssh as --ssh-user; validates SLURM on each node first)
+  --ssh-user USER     ssh user for --enable-slurm (default: root)
+  --ssh-opts OPTS     Extra ssh options for --enable-slurm
+                      (default: ${SSH_OPTS})
   -h, --help          Show this help
 EOF
     exit 0
@@ -49,6 +58,9 @@ while [[ $# -gt 0 ]]; do
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --dry-run)  DRY_RUN=true; shift ;;
         --start)    START_STACK=true; shift ;;
+        --enable-slurm) ENABLE_SLURM=true; shift ;;
+        --ssh-user) SSH_USER="$2"; shift 2 ;;
+        --ssh-opts) SSH_OPTS="$2"; shift 2 ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -64,6 +76,18 @@ cidr_to_ips() {
     local base="${cidr%/*}"
     local mask="${cidr#*/}"
 
+    if [[ "$cidr" != */* ]]; then
+        mask=32
+    fi
+    if [[ ! "$mask" =~ ^[0-9]+$ ]] || (( mask > 32 )); then
+        echo "Error: invalid CIDR mask in '${cidr}'" >&2
+        exit 1
+    fi
+    if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "Error: invalid IPv4 base address in '${cidr}'" >&2
+        exit 1
+    fi
+
     IFS='.' read -r a b c d <<< "$base"
     local ip_num=$(( (a << 24) + (b << 16) + (c << 8) + d ))
     local host_bits=$(( 32 - mask ))
@@ -71,7 +95,15 @@ cidr_to_ips() {
 
     local network=$(( ip_num & ( (0xFFFFFFFF << host_bits) & 0xFFFFFFFF ) ))
 
-    for (( i = 1; i < num_hosts - 1; i++ )); do
+    # /31 and /32 have no network/broadcast addresses — probe every address
+    # in the range (RFC 3021). Larger subnets skip .0 and broadcast.
+    local first=1 last=$(( num_hosts - 2 ))
+    if (( mask >= 31 )); then
+        first=0
+        last=$(( num_hosts - 1 ))
+    fi
+
+    for (( i = first; i <= last; i++ )); do
         local addr=$(( network + i ))
         printf "%d.%d.%d.%d\n" \
             $(( (addr >> 24) & 255 )) \
@@ -122,7 +154,40 @@ if $DRY_RUN; then
     for ip in "${DISCOVERED[@]}"; do
         echo "  $ip:$PORT"
     done
+    if $ENABLE_SLURM; then
+        echo "" >&2
+        echo "[dry-run] would enable SLURM integration on ${#DISCOVERED[@]} node(s) via:" >&2
+        echo "[dry-run]   ssh ${SSH_USER}@<node> argus-scheduler enable slurm" >&2
+    fi
     exit 0
+fi
+
+# Fleet-wide SLURM enablement: ssh to each discovered node and turn on the
+# scheduler integration. Each node validates its own SLURM setup (scontrol,
+# munge, registration) before flipping the config, so a node with broken
+# SLURM reports failure instead of silently degrading.
+enable_slurm_fleet() {
+    local ok=0 fail=0
+    echo "Enabling SLURM scheduler integration on ${#DISCOVERED[@]} node(s)..." >&2
+    for ip in "${DISCOVERED[@]}"; do
+        # shellcheck disable=SC2086  # SSH_OPTS is intentionally word-split
+        if ssh $SSH_OPTS "${SSH_USER}@${ip}" "argus-scheduler enable slurm" >/dev/null 2>&1; then
+            echo "  ✓ ${ip} — SLURM integration enabled" >&2
+            ok=$((ok + 1))
+        else
+            echo "  ✗ ${ip} — failed (run 'ssh ${SSH_USER}@${ip} argus-scheduler validate' to diagnose)" >&2
+            fail=$((fail + 1))
+        fi
+    done
+    echo "SLURM enablement: ${ok} OK, ${fail} failed." >&2
+    if [[ $fail -gt 0 ]]; then
+        SLURM_ENABLE_FAILURES=$fail
+    fi
+}
+
+SLURM_ENABLE_FAILURES=0
+if $ENABLE_SLURM; then
+    enable_slurm_fleet
 fi
 
 # Build targets JSON (Prometheus file_sd_configs format)
@@ -190,4 +255,10 @@ else
     else
         echo "$JSON"
     fi
+fi
+
+# Surface partial SLURM-enable failures in the exit code so fleet tooling
+# (Ansible, cron) notices, while still writing the targets file above.
+if [[ "${SLURM_ENABLE_FAILURES}" -gt 0 ]]; then
+    exit 1
 fi

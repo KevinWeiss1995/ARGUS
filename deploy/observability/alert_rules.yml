@@ -16,6 +16,21 @@ groups:
           dashboard: "Grafana → ARGUS / Node detail → {{ $labels.instance }}"
           runbook: "https://github.com/KevinWeiss1995/ARGUS/blob/main/docs/troubleshooting.md#argusnodedegraded"
 
+      - alert: ArgusNodeRecovering
+        expr: argus_health_state == 3
+        for: 1m
+        labels:
+          severity: INFO
+        annotations:
+          summary: "ARGUS node {{ $labels.instance }} is recovering"
+          description: |
+            {{ $labels.instance }} exited Critical and is in the Recovering
+            dwell state. It is not yet fully healthy — if scheduler
+            integration is enabled the node will be resumed only after the
+            recovery dwell completes. No action needed unless the node
+            oscillates between Critical and Recovering.
+          runbook: "https://github.com/KevinWeiss1995/ARGUS/blob/main/docs/troubleshooting.md#argusnoderecovering"
+
       - alert: ArgusNodeCritical
         expr: argus_health_state == 2
         for: 15s

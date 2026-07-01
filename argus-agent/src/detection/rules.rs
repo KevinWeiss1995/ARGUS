@@ -38,7 +38,7 @@ impl InterruptAffinitySkewRule {
     /// On 4 CPUs: perfect = 25%, effective = max(70, 25+45) = 70%
     /// On 8 CPUs: perfect = 12.5%, effective = max(70, 12.5+45) = 70%
     fn effective_threshold(&self) -> f64 {
-        let perfect_share = 100.0 / self.num_cpus.max(1) as f64;
+        let perfect_share = 100.0 / f64::from(self.num_cpus.max(1));
         f64::max(self.threshold_pct, perfect_share + 45.0)
     }
 }
@@ -53,7 +53,7 @@ impl Default for InterruptAffinitySkewRule {
 }
 
 impl DetectionRule for InterruptAffinitySkewRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "interrupt_affinity_skew"
     }
 
@@ -117,7 +117,7 @@ impl Default for RdmaLatencySpikeRule {
 }
 
 impl DetectionRule for RdmaLatencySpikeRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "rdma_latency_spike"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -173,9 +173,9 @@ enum LinkHealthState {
     Nominal,
     /// Error rates are elevated above baseline. Possible early degradation.
     ElevatedErrors,
-    /// link_error_recovery is incrementing — active cable fault in progress.
+    /// `link_error_recovery` is incrementing — active cable fault in progress.
     LinkRecovering,
-    /// link_downed has fired — link is down.
+    /// `link_downed` has fired — link is down.
     LinkDown,
 }
 
@@ -188,7 +188,7 @@ pub struct RdmaLinkDegradationRule {
     z_threshold: f64,
     elevated_windows: u32,
     absolute_error_rate_ceiling: f64,
-    /// Cooldown windows remaining before elevated_windows can step down.
+    /// Cooldown windows remaining before `elevated_windows` can step down.
     cooldown_remaining: u32,
     /// How many clean windows to wait before each step-down.
     cooldown_windows: u32,
@@ -196,7 +196,7 @@ pub struct RdmaLinkDegradationRule {
 
 impl RdmaLinkDegradationRule {
     #[must_use]
-    pub fn new(z_threshold: f64, error_budget: u64) -> Self {
+    pub const fn new(z_threshold: f64, error_budget: u64) -> Self {
         Self {
             symbol_error_rate: RollingStats::with_clamp(0.1, 3.0),
             rcv_error_rate: RollingStats::with_clamp(0.1, 3.0),
@@ -257,7 +257,7 @@ fn format_error_parts(d: &argus_common::IbCounterDeltas) -> String {
 }
 
 impl DetectionRule for RdmaLinkDegradationRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "rdma_link_degradation"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -468,7 +468,7 @@ impl Default for SlabPressureRule {
 }
 
 impl DetectionRule for SlabPressureRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "slab_pressure_correlation"
     }
 
@@ -540,7 +540,7 @@ pub struct RisingErrorTrendRule {
 
 impl RisingErrorTrendRule {
     #[must_use]
-    pub fn new(min_consecutive_windows: u32) -> Self {
+    pub const fn new(min_consecutive_windows: u32) -> Self {
         Self {
             min_consecutive_windows,
             min_magnitude: 10,
@@ -556,7 +556,7 @@ impl Default for RisingErrorTrendRule {
 }
 
 impl DetectionRule for RisingErrorTrendRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "rising_error_trend"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -607,7 +607,7 @@ pub struct LatencyDriftRule {
 
 impl LatencyDriftRule {
     #[must_use]
-    pub fn new(z_threshold: f64) -> Self {
+    pub const fn new(z_threshold: f64) -> Self {
         Self {
             z_threshold,
             stats: RollingStats::new(0.1),
@@ -622,7 +622,7 @@ impl Default for LatencyDriftRule {
 }
 
 impl DetectionRule for LatencyDriftRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "latency_drift"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -686,7 +686,7 @@ pub struct ThroughputDropRule {
 
 impl ThroughputDropRule {
     #[must_use]
-    pub fn new(drop_threshold_pct: f64) -> Self {
+    pub const fn new(drop_threshold_pct: f64) -> Self {
         Self {
             drop_threshold_pct,
             // Floor clamp at 0.5: EWMA can't drop below 50% of initial throughput.
@@ -704,7 +704,7 @@ impl Default for ThroughputDropRule {
 }
 
 impl DetectionRule for ThroughputDropRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "throughput_drop"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -806,7 +806,7 @@ pub struct CqJitterRule {
 
 impl CqJitterRule {
     #[must_use]
-    pub fn new(z_threshold: f64) -> Self {
+    pub const fn new(z_threshold: f64) -> Self {
         Self {
             p99_stats: RollingStats::with_clamp(0.1, 5.0),
             z_threshold,
@@ -822,7 +822,7 @@ impl Default for CqJitterRule {
 }
 
 impl DetectionRule for CqJitterRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cq_jitter_stall"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -909,7 +909,7 @@ impl Default for NapiSaturationRule {
 }
 
 impl DetectionRule for NapiSaturationRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "napi_saturation"
     }
 
@@ -965,7 +965,7 @@ pub struct CongestionSpreadRule {
 
 impl CongestionSpreadRule {
     #[must_use]
-    pub fn new(z_threshold: f64) -> Self {
+    pub const fn new(z_threshold: f64) -> Self {
         Self {
             xmit_wait_stats: RollingStats::with_clamp(0.1, 5.0),
             z_threshold,
@@ -980,7 +980,7 @@ impl Default for CongestionSpreadRule {
 }
 
 impl DetectionRule for CongestionSpreadRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "congestion_spread"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -1054,7 +1054,7 @@ impl Default for PcieBottleneckRule {
 }
 
 impl DetectionRule for PcieBottleneckRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "pcie_bottleneck"
     }
 
@@ -1118,10 +1118,10 @@ impl DetectionRule for PcieBottleneckRule {
 
 pub struct SlowDegradationRule {
     /// Rolling-window samples for the aggregate Mellanox slow-degradation
-    /// signal (local_ack_timeout + packet_seq_err + implied_nak_seq_err
-    /// + roce_adp_retrans). Each entry is one window's delta.
+    /// signal (`local_ack_timeout` + `packet_seq_err` + `implied_nak_seq_err`
+    /// + `roce_adp_retrans`). Each entry is one window's delta.
     mlx5_signal_history: std::collections::VecDeque<u64>,
-    /// Rolling-window samples for symbol_error_count delta. Tracks the
+    /// Rolling-window samples for `symbol_error_count` delta. Tracks the
     /// classic IB cable-degradation signal independently of mlx5
     /// hardware presence.
     symbol_error_history: std::collections::VecDeque<u64>,
@@ -1130,7 +1130,7 @@ pub struct SlowDegradationRule {
     /// Minimum mean rate (events / window) over the rolling window to
     /// consider "elevated." Tuned to noise: 0.5 events/window means
     /// >=1 event per 2 windows on average. Higher than 0.5 catches real
-    /// drift while ignoring single-event noise.
+    /// > drift while ignoring single-event noise.
     pub elevated_mean_threshold: f64,
     /// Minimum samples collected before the rule will fire. Default 60
     /// samples = ~3 minutes — short enough for fast-developing creep,
@@ -1183,7 +1183,7 @@ impl Default for SlowDegradationRule {
 }
 
 impl DetectionRule for SlowDegradationRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "slow_degradation"
     }
     fn capabilities_consulted(&self) -> &[Capability] {
@@ -1225,13 +1225,10 @@ impl DetectionRule for SlowDegradationRule {
         let symbol_mean = Self::mean(&self.symbol_error_history);
 
         // Check Mellanox slow signal first — most specific.
-        if self.mlx5_cooldown_remaining == 0
-            && mlx5_mean >= self.elevated_mean_threshold
-        {
+        if self.mlx5_cooldown_remaining == 0 && mlx5_mean >= self.elevated_mean_threshold {
             self.mlx5_cooldown_remaining = self.cooldown_windows;
             let sustained_windows = self.mlx5_signal_history.len() as u32;
-            let sustained_seconds =
-                sustained_windows as u64 * 3; // assumes ~3s window; metadata only
+            let sustained_seconds = u64::from(sustained_windows) * 3; // assumes ~3s window; metadata only
             return Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::SlowDegradation {
@@ -1254,12 +1251,10 @@ impl DetectionRule for SlowDegradationRule {
         }
 
         // Symbol error creep — works on any IB hardware.
-        if self.symbol_cooldown_remaining == 0
-            && symbol_mean >= self.elevated_mean_threshold
-        {
+        if self.symbol_cooldown_remaining == 0 && symbol_mean >= self.elevated_mean_threshold {
             self.symbol_cooldown_remaining = self.cooldown_windows;
             let sustained_windows = self.symbol_error_history.len() as u32;
-            let sustained_seconds = sustained_windows as u64 * 3;
+            let sustained_seconds = u64::from(sustained_windows) * 3;
             return Some(Alert {
                 timestamp_ns: metrics.window_end_ns,
                 kind: AlertKind::SlowDegradation {
@@ -1917,7 +1912,8 @@ mod tests {
         };
         let alert = rule.evaluate_mut(&partial).expect("must fire");
         assert_eq!(
-            alert.severity, HealthState::Degraded,
+            alert.severity,
+            HealthState::Degraded,
             "60% drop is below the 80% Critical threshold"
         );
     }

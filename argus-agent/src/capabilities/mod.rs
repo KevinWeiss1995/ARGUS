@@ -100,14 +100,15 @@ impl CapabilityRegistry {
     /// Unavailable ones are recorded for the coverage report.
     #[must_use]
     pub fn new(env: &FabricEnv, candidates: Vec<Box<dyn CapabilityProvider>>) -> Self {
-        let mut active: HashMap<Capability, Box<dyn CapabilityProvider>> = HashMap::new();
-        let mut probe_log: HashMap<Capability, Vec<BackendProbeResult>> = HashMap::new();
-
-        // First pass: probe everything, collect outcomes.
         struct Probed {
             provider: Box<dyn CapabilityProvider>,
             outcome: ProbeOutcome,
         }
+
+        let mut active: HashMap<Capability, Box<dyn CapabilityProvider>> = HashMap::new();
+        let mut probe_log: HashMap<Capability, Vec<BackendProbeResult>> = HashMap::new();
+
+        // First pass: probe everything, collect outcomes.
         let mut probed: Vec<Probed> = candidates
             .into_iter()
             .map(|mut p| {
@@ -185,7 +186,7 @@ impl CapabilityRegistry {
 
     /// Snapshot the current coverage report.
     #[must_use]
-    pub fn coverage(&self) -> &CoverageReport {
+    pub const fn coverage(&self) -> &CoverageReport {
         &self.coverage
     }
 
@@ -198,7 +199,7 @@ impl CapabilityRegistry {
         let mut all = Vec::new();
         // Iterate in deterministic order so trace logs and proptests are stable.
         let mut caps: Vec<Capability> = self.active.keys().copied().collect();
-        caps.sort_by_key(|c| c.name());
+        caps.sort_by_key(argus_common::Capability::name);
         for cap in caps {
             if let Some(provider) = self.active.get_mut(&cap) {
                 let samples = provider.collect(ctx);
@@ -210,7 +211,7 @@ impl CapabilityRegistry {
 
     /// Probe-time records — used by /coverage and Prometheus capability metric.
     #[must_use]
-    pub fn probe_log(&self) -> &HashMap<Capability, Vec<BackendProbeResult>> {
+    pub const fn probe_log(&self) -> &HashMap<Capability, Vec<BackendProbeResult>> {
         &self.probe_log
     }
 }
@@ -257,10 +258,7 @@ fn build_coverage_report(
 
     let grade = if critical_qualities.iter().all(|q| *q == Quality::High) {
         CoverageGrade::A
-    } else if critical_qualities
-        .iter()
-        .all(|q| *q >= Quality::Medium)
-    {
+    } else if critical_qualities.iter().all(|q| *q >= Quality::Medium) {
         CoverageGrade::B
     } else if critical_qualities.iter().any(|q| *q != Quality::Absent) {
         CoverageGrade::C
@@ -354,7 +352,10 @@ mod tests {
         ];
         let registry = CapabilityRegistry::new(&env, providers);
         let active = registry.active_providers();
-        let (_cap, id, q) = active.iter().find(|(c, _, _)| *c == Capability::Throughput).unwrap();
+        let (_cap, id, q) = active
+            .iter()
+            .find(|(c, _, _)| *c == Capability::Throughput)
+            .unwrap();
         assert_eq!(*q, Quality::High);
         assert_eq!(*id, BackendId::SysfsPortCounters);
     }

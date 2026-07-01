@@ -36,7 +36,8 @@ impl ReplayEventSource {
         Ok((source, scenario.expected_states))
     }
 
-    pub fn from_events(events: Vec<ArgusEvent>) -> Self {
+    #[must_use]
+    pub const fn from_events(events: Vec<ArgusEvent>) -> Self {
         Self {
             events,
             index: 0,
@@ -45,18 +46,19 @@ impl ReplayEventSource {
     }
 
     /// Speed multiplier: 2.0 = double speed, 0.5 = half speed, 0.0 = instant.
-    pub fn with_time_scale(mut self, scale: f64) -> Self {
+    #[must_use]
+    pub const fn with_time_scale(mut self, scale: f64) -> Self {
         self.time_scale = scale;
         self
     }
 
     #[must_use]
-    pub fn total_events(&self) -> usize {
+    pub const fn total_events(&self) -> usize {
         self.events.len()
     }
 
     #[must_use]
-    pub fn remaining_events(&self) -> usize {
+    pub const fn remaining_events(&self) -> usize {
         self.events.len().saturating_sub(self.index)
     }
 }
@@ -93,7 +95,7 @@ impl EventSource for ReplayEventSource {
         Some(event)
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "replay"
     }
 }

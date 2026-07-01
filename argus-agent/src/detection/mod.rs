@@ -36,7 +36,7 @@ pub struct SmoothedHealthScore {
 
 impl SmoothedHealthScore {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self::with_params(0.3, 0.85)
     }
 
@@ -44,7 +44,7 @@ impl SmoothedHealthScore {
     /// Used by the multi-timescale evaluator to spawn fast/slow tracks
     /// with different time constants.
     #[must_use]
-    pub fn with_params(alpha: f64, peak_decay: f64) -> Self {
+    pub const fn with_params(alpha: f64, peak_decay: f64) -> Self {
         Self {
             ewma: 0.0,
             peak_hold: 0.0,
@@ -87,26 +87,26 @@ impl SmoothedHealthScore {
     }
 
     #[must_use]
-    pub fn effective(&self) -> f64 {
+    pub const fn effective(&self) -> f64 {
         self.ewma.max(self.peak_hold)
     }
 
     #[must_use]
-    pub fn raw(&self) -> f64 {
+    pub const fn raw(&self) -> f64 {
         self.prev_raw
     }
 
     #[must_use]
-    pub fn ewma(&self) -> f64 {
+    pub const fn ewma(&self) -> f64 {
         self.ewma
     }
 
     #[must_use]
-    pub fn peak_hold(&self) -> f64 {
+    pub const fn peak_hold(&self) -> f64 {
         self.peak_hold
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         *self = Self::new();
     }
 }
@@ -157,25 +157,29 @@ impl StateMachineConfig {
         if self.degrade_enter <= self.degrade_exit {
             bail!(
                 "state_machine: degrade_enter ({}) must exceed degrade_exit ({})",
-                self.degrade_enter, self.degrade_exit
+                self.degrade_enter,
+                self.degrade_exit
             );
         }
         if self.critical_enter <= self.critical_exit {
             bail!(
                 "state_machine: critical_enter ({}) must exceed critical_exit ({})",
-                self.critical_enter, self.critical_exit
+                self.critical_enter,
+                self.critical_exit
             );
         }
         if self.critical_enter <= self.degrade_enter {
             bail!(
                 "state_machine: critical_enter ({}) must exceed degrade_enter ({})",
-                self.critical_enter, self.degrade_enter
+                self.critical_enter,
+                self.degrade_enter
             );
         }
         if self.critical_exit < self.degrade_enter {
             bail!(
                 "state_machine: critical_exit ({}) must be >= degrade_enter ({})",
-                self.critical_exit, self.degrade_enter
+                self.critical_exit,
+                self.degrade_enter
             );
         }
         if self.enter_windows == 0 {
@@ -320,22 +324,21 @@ impl HealthStateMachine {
             );
 
             let exit_threshold = match self.current {
-                HealthState::Critical => self.config.critical_exit,
+                HealthState::Critical | HealthState::Recovering => self.config.critical_exit,
                 HealthState::Degraded => self.config.degrade_exit,
-                HealthState::Recovering => self.config.critical_exit,
                 HealthState::Healthy => unreachable!(),
             };
             let enter_threshold = match self.current {
-                HealthState::Critical => self.config.critical_enter,
+                HealthState::Critical | HealthState::Recovering => self.config.critical_enter,
                 HealthState::Degraded => self.config.degrade_enter,
-                HealthState::Recovering => self.config.critical_enter,
                 HealthState::Healthy => unreachable!(),
             };
 
             // Score is borderline: above exit but below (re-)entry threshold.
             // Accumulate stability evidence at half rate (every other window).
-            if effective >= exit_threshold && effective < enter_threshold
-                && self.windows_in_state % 2 == 0
+            if effective >= exit_threshold
+                && effective < enter_threshold
+                && self.windows_in_state.is_multiple_of(2)
             {
                 self.stability_evidence += 1;
 
@@ -362,10 +365,10 @@ impl HealthStateMachine {
             }
         }
 
-        if self.current != previous {
-            Some(previous)
-        } else {
+        if self.current == previous {
             None
+        } else {
+            Some(previous)
         }
     }
 
@@ -387,16 +390,16 @@ impl HealthStateMachine {
     }
 
     #[must_use]
-    pub fn current(&self) -> HealthState {
+    pub const fn current(&self) -> HealthState {
         self.current
     }
 
     #[must_use]
-    pub fn window_seq(&self) -> u64 {
+    pub const fn window_seq(&self) -> u64 {
         self.window_seq
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current = HealthState::Healthy;
         self.window_seq = 0;
         self.escalation_evidence = 0;
@@ -404,7 +407,6 @@ impl HealthStateMachine {
         self.hold_counter = 0;
         self.windows_in_state = 0;
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -438,10 +440,7 @@ impl DetectionEngine {
 
     #[must_use]
     pub fn with_config(config: &DetectionConfig) -> Self {
-        let sm_config = config
-            .state_machine
-            .clone()
-            .unwrap_or_default();
+        let sm_config = config.state_machine.clone().unwrap_or_default();
         Self {
             rules: vec![
                 Box::new(InterruptAffinitySkewRule {
@@ -475,7 +474,7 @@ impl DetectionEngine {
             num_cpus: config.num_cpus,
             prev_raw_score: 0.0,
             last_sample_contribution: 0.0,
-            multi_timescale: timescale::MultiTimescaleEvaluator::new(sm_config),
+            multi_timescale: timescale::MultiTimescaleEvaluator::new(&sm_config),
             burst_classifier: burst::BurstClassifier::default(),
         }
     }
@@ -483,13 +482,13 @@ impl DetectionEngine {
     /// Composite state across fast/medium/slow timescales.
     /// Always equal to or more pessimistic than `current_state()`.
     #[must_use]
-    pub fn multi_timescale(&self) -> &timescale::MultiTimescaleEvaluator {
+    pub const fn multi_timescale(&self) -> &timescale::MultiTimescaleEvaluator {
         &self.multi_timescale
     }
 
     /// Latest burst classification.
     #[must_use]
-    pub fn burst_class(&self) -> burst::BurstClass {
+    pub const fn burst_class(&self) -> burst::BurstClass {
         self.burst_classifier.current()
     }
 
@@ -497,7 +496,7 @@ impl DetectionEngine {
     /// Surfaced for observability — a non-zero value means capability
     /// samples agreed with the rule layer.
     #[must_use]
-    pub fn last_sample_contribution(&self) -> f64 {
+    pub const fn last_sample_contribution(&self) -> f64 {
         self.last_sample_contribution
     }
 
@@ -534,8 +533,8 @@ impl DetectionEngine {
     /// raw = max(raw, severity_floor * coverage_w) // coverage-scaled boost
     /// effective = smooth(raw)                     // EWMA + peak-hold
     /// ```
-    /// where `coverage_w = max(quality_weight) over capabilities consulted by
-    /// the rule that produced `worst_severity`. When all consulted caps are
+    /// where `coverage_w` is the max `quality_weight` over capabilities consulted
+    /// by the rule that produced `worst_severity`. When all consulted caps are
     /// High the boost is full strength; when any are Absent the boost is
     /// zero — i.e., a rule cannot lift the score without underlying signals.
     pub fn evaluate_with_coverage(
@@ -628,12 +627,12 @@ impl DetectionEngine {
     }
 
     #[must_use]
-    pub fn current_state(&self) -> HealthState {
+    pub const fn current_state(&self) -> HealthState {
         self.state_machine.current()
     }
 
     #[must_use]
-    pub fn smoothed_score(&self) -> &SmoothedHealthScore {
+    pub const fn smoothed_score(&self) -> &SmoothedHealthScore {
         &self.score
     }
 
@@ -646,7 +645,7 @@ impl DetectionEngine {
 
         // IRQ skew component (0..0.15) — scaled by CPU count
         let irq_pct = metrics.interrupt_distribution.dominant_cpu_pct();
-        let perfect_share = 100.0 / num_cpus.max(1) as f64;
+        let perfect_share = 100.0 / f64::from(num_cpus.max(1));
         let irq_baseline = perfect_share + 20.0;
         if irq_pct > irq_baseline {
             score += ((irq_pct - irq_baseline) / (100.0 - irq_baseline)).min(1.0) * 0.15;
@@ -728,11 +727,11 @@ impl Default for DetectionEngine {
     }
 }
 
-pub fn severity_rank(state: HealthState) -> u8 {
+#[must_use]
+pub const fn severity_rank(state: HealthState) -> u8 {
     match state {
         HealthState::Healthy => 0,
-        HealthState::Degraded => 1,
-        HealthState::Recovering => 1,
+        HealthState::Degraded | HealthState::Recovering => 1,
         HealthState::Critical => 2,
     }
 }
@@ -797,13 +796,19 @@ mod tests {
 
         // First window: score enters EWMA but dwell not met — state stays Healthy
         let _first = engine.evaluate(&metrics);
-        assert_eq!(engine.current_state(), HealthState::Healthy,
-            "single window should not transition state");
+        assert_eq!(
+            engine.current_state(),
+            HealthState::Healthy,
+            "single window should not transition state"
+        );
 
         // Second window: dwell met → Degraded
         let _second = engine.evaluate(&metrics);
-        assert_eq!(engine.current_state(), HealthState::Degraded,
-            "second window should transition to Degraded");
+        assert_eq!(
+            engine.current_state(),
+            HealthState::Degraded,
+            "second window should transition to Degraded"
+        );
     }
 
     #[test]
@@ -944,7 +949,9 @@ mod tests {
         }
         let pre = sm.current();
         assert!(
-            pre == HealthState::Recovering || pre == HealthState::Degraded || pre == HealthState::Healthy,
+            pre == HealthState::Recovering
+                || pre == HealthState::Degraded
+                || pre == HealthState::Healthy,
             "should have started de-escalating, got {pre}"
         );
 
@@ -1087,8 +1094,8 @@ mod tests {
     #[test]
     fn state_machine_is_deterministic() {
         let raw_sequence = [
-            0.0, 0.3, 0.55, 0.60, 0.0, 0.0, 0.55, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.3, 0.55, 0.60, 0.0, 0.0, 0.55, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
         ];
 
         let run = || {
@@ -1105,7 +1112,10 @@ mod tests {
 
         let run1 = run();
         let run2 = run();
-        assert_eq!(run1, run2, "state machine must be deterministic across runs");
+        assert_eq!(
+            run1, run2,
+            "state machine must be deterministic across runs"
+        );
     }
 
     #[test]

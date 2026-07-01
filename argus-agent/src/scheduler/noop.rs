@@ -6,7 +6,7 @@ use tracing::info;
 pub struct NoopBackend;
 
 impl SchedulerBackend for NoopBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "noop"
     }
 

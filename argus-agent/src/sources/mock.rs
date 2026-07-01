@@ -100,7 +100,7 @@ impl MockEventSource {
         }
     }
 
-    fn current_timestamp(&self) -> u64 {
+    const fn current_timestamp(&self) -> u64 {
         self.base_timestamp + self.event_count * 1_000_000
     }
 
@@ -141,7 +141,7 @@ impl MockEventSource {
                 timestamp_ns: ts,
                 cpu: self.pick_cpu(),
                 irq: self.rng.gen_range(30..50),
-                handler_name_hash: 0xdeadbeef,
+                handler_name_hash: 0xdead_beef,
             }),
             3 => {
                 let budget = 64;
@@ -151,7 +151,7 @@ impl MockEventSource {
                     cpu: self.pick_cpu(),
                     budget,
                     work_done: work,
-                    dev_name_hash: 0xcafebabe,
+                    dev_name_hash: 0xcafe_babe,
                 })
             }
             _ => {
@@ -189,7 +189,7 @@ impl EventSource for MockEventSource {
         Ok(event)
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "mock"
     }
 }

@@ -85,7 +85,7 @@ emit() {
 # Check 1: kernel version
 # ---------------------------------------------------------------------------
 check_kernel() {
-    local release major minor patch
+    local release major minor
     release=$(uname -r 2>/dev/null || echo "")
     if [[ -z "$release" ]]; then
         emit FAIL "kernel.version" "uname -r returned nothing"

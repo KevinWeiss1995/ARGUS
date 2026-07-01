@@ -1,6 +1,19 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// See lib.rs for rationale on these allows.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::too_many_lines
+)]
+#![allow(clippy::option_if_let_else)]
 
 use anyhow::{bail, Context, Result};
 use argus_agent::config::{Cli, EffectiveConfig, MockProfile, RunMode};
@@ -27,7 +40,7 @@ async fn main() -> Result<()> {
     }
 
     if let Some(ref addr) = config.attach {
-        return run_attach_tui(addr, config.tls_skip_verify).await;
+        return run_attach_tui(addr, config.tls_skip_verify, config.auth_token.as_deref()).await;
     }
 
     if !config.tui {
@@ -75,8 +88,7 @@ async fn main() -> Result<()> {
     let fabric_env = argus_agent::capabilities::FabricEnv::detect();
     let fabric_name = fabric_env
         .fabric
-        .map(|f| f.name().to_string())
-        .unwrap_or_else(|| "none".into());
+        .map_or_else(|| "none".into(), |f| f.name().to_string());
 
     // Apply per-fabric profile overrides if one matches the detected fabric.
     let detection_config = if let Some(profile) = config.fabric_profiles.get(&fabric_name) {
@@ -103,8 +115,7 @@ async fn main() -> Result<()> {
         for cap in &coverage.capabilities {
             let backend = cap
                 .active_backend
-                .map(|b| b.name())
-                .unwrap_or("none");
+                .map_or("none", argus_common::BackendId::name);
             tracing::info!(
                 capability = %cap.capability,
                 backend = backend,
@@ -132,9 +143,8 @@ async fn main() -> Result<()> {
     let shared_reconciler: Option<
         std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
     > = if let Some(ref sched_cfg) = config.scheduler {
-        let hostname = hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".into());
+        let hostname =
+            hostname::get().map_or_else(|_| "unknown".into(), |h| h.to_string_lossy().to_string());
         let backend = argus_agent::scheduler::build_backend(sched_cfg);
         tracing::info!(
             backend = backend.name(),
@@ -172,11 +182,18 @@ async fn main() -> Result<()> {
         let auth_token = config.auth_token.clone();
         let metrics_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                argus_agent::telemetry::prometheus::serve_metrics(
-                    exp, hs, ss, rc, cov, addr, tls_cfg, auth_token, metrics_shutdown,
-                )
-                .await
+            if let Err(e) = argus_agent::telemetry::prometheus::serve_metrics(
+                exp,
+                hs,
+                ss,
+                rc,
+                cov,
+                addr,
+                tls_cfg,
+                auth_token,
+                metrics_shutdown,
+            )
+            .await
             {
                 tracing::error!("metrics server failed: {e}");
             }
@@ -189,34 +206,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    match config.mode {
-        RunMode::Live => {
-            #[cfg(target_os = "linux")]
-            {
-                run_live_mode(
-                    &config,
-                    pipeline,
-                    telemetry,
-                    dash_state,
-                    dashboard,
-                    start,
-                    prom_exporter,
-                    health_snapshot,
-                    status_snapshot,
-                    shared_reconciler,
-                    shutdown_rx,
-                )?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                bail!("live eBPF mode requires Linux — use --mode mock or --mode replay on this platform");
-            }
-        }
-        _ => {
-            let (source, source_name) = build_event_source(&config)?;
-            run_event_mode(
-                source,
-                source_name,
+    if config.mode == RunMode::Live {
+        #[cfg(target_os = "linux")]
+        {
+            run_live_mode(
                 &config,
                 pipeline,
                 telemetry,
@@ -228,10 +221,34 @@ async fn main() -> Result<()> {
                 status_snapshot,
                 shared_reconciler,
                 shutdown_rx,
-            )
-            .await?;
+            )?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            bail!(
+                "live eBPF mode requires Linux — use --mode mock or --mode replay on this platform"
+            );
         }
     }
+
+    let (source, source_name) = build_event_source(&config)?;
+    run_event_mode(
+        source,
+        source_name,
+        &config,
+        pipeline,
+        telemetry,
+        dash_state,
+        dashboard,
+        start,
+        prom_exporter,
+        health_snapshot,
+        status_snapshot,
+        shared_reconciler,
+        shutdown_rx,
+    )
+    .await?;
 
     Ok(())
 }
@@ -257,9 +274,7 @@ fn run_live_mode(
     status_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
     >,
-    shared_reconciler: Option<
-        std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
-    >,
+    shared_reconciler: Option<std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>>,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let ebpf_path = config
@@ -274,10 +289,7 @@ fn run_live_mode(
         );
     }
 
-    let ebpf_hash = config
-        .ebpf_hash
-        .clone()
-        .or_else(|| load_ebpf_hash_file());
+    let ebpf_hash = config.ebpf_hash.clone().or_else(|| load_ebpf_hash_file());
     if let Some(ref expected_hash) = ebpf_hash {
         verify_ebpf_hash(ebpf_path, expected_hash)?;
     } else {
@@ -433,10 +445,22 @@ fn run_live_mode(
                 exp.update_timescales(pipeline.detection_engine().multi_timescale());
                 let class = pipeline.detection_engine().burst_class();
                 exp.update_burst_classification(&[
-                    ("quiet", class == argus_agent::detection::burst::BurstClass::Quiet),
-                    ("burst", class == argus_agent::detection::burst::BurstClass::Burst),
-                    ("sustained", class == argus_agent::detection::burst::BurstClass::Sustained),
-                    ("mixed", class == argus_agent::detection::burst::BurstClass::MixedBurstSustained),
+                    (
+                        "quiet",
+                        class == argus_agent::detection::burst::BurstClass::Quiet,
+                    ),
+                    (
+                        "burst",
+                        class == argus_agent::detection::burst::BurstClass::Burst,
+                    ),
+                    (
+                        "sustained",
+                        class == argus_agent::detection::burst::BurstClass::Sustained,
+                    ),
+                    (
+                        "mixed",
+                        class == argus_agent::detection::burst::BurstClass::MixedBurstSustained,
+                    ),
                 ]);
                 for (device, port, dev_type) in hw_reader.discovered_ports() {
                     let port_str = port.to_string();
@@ -473,8 +497,8 @@ fn run_live_mode(
                 ss.uptime_secs = start.elapsed().as_secs_f64();
                 ss.events_processed = event_count;
                 ss.metrics = dash_state.metrics.clone();
-                ss.recent_alerts = dash_state.recent_alerts.clone();
-                ss.source_name = dash_state.source_name.clone();
+                ss.recent_alerts.clone_from(&dash_state.recent_alerts);
+                ss.source_name.clone_from(&dash_state.source_name);
             }
 
             // Scheduler reconciliation — uses current_state(), not alerts (M5 fix)
@@ -546,9 +570,7 @@ async fn run_event_mode(
     status_snapshot: std::sync::Arc<
         std::sync::Mutex<argus_agent::telemetry::prometheus::StatusSnapshot>,
     >,
-    shared_reconciler: Option<
-        std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>,
-    >,
+    shared_reconciler: Option<std::sync::Arc<std::sync::Mutex<argus_agent::scheduler::Reconciler>>>,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     dash_state.source_name = source_name;
@@ -637,10 +659,22 @@ async fn run_event_mode(
                 exp.update_timescales(pipeline.detection_engine().multi_timescale());
                 let class = pipeline.detection_engine().burst_class();
                 exp.update_burst_classification(&[
-                    ("quiet", class == argus_agent::detection::burst::BurstClass::Quiet),
-                    ("burst", class == argus_agent::detection::burst::BurstClass::Burst),
-                    ("sustained", class == argus_agent::detection::burst::BurstClass::Sustained),
-                    ("mixed", class == argus_agent::detection::burst::BurstClass::MixedBurstSustained),
+                    (
+                        "quiet",
+                        class == argus_agent::detection::burst::BurstClass::Quiet,
+                    ),
+                    (
+                        "burst",
+                        class == argus_agent::detection::burst::BurstClass::Burst,
+                    ),
+                    (
+                        "sustained",
+                        class == argus_agent::detection::burst::BurstClass::Sustained,
+                    ),
+                    (
+                        "mixed",
+                        class == argus_agent::detection::burst::BurstClass::MixedBurstSustained,
+                    ),
                 ]);
             }
             if let Ok(mut hs) = health_snapshot.lock() {
@@ -655,8 +689,8 @@ async fn run_event_mode(
                 ss.uptime_secs = start.elapsed().as_secs_f64();
                 ss.events_processed = event_count;
                 ss.metrics = dash_state.metrics.clone();
-                ss.recent_alerts = dash_state.recent_alerts.clone();
-                ss.source_name = dash_state.source_name.clone();
+                ss.recent_alerts.clone_from(&dash_state.recent_alerts);
+                ss.source_name.clone_from(&dash_state.source_name);
             }
 
             // Scheduler reconciliation (event mode)
@@ -668,8 +702,7 @@ async fn run_event_mode(
                         if let Ok(exp) = prom_exporter.lock() {
                             let drain_dur = reconciler
                                 .last_drain_time()
-                                .map(|t| t.elapsed().as_secs_f64())
-                                .unwrap_or(0.0);
+                                .map_or(0.0, |t| t.elapsed().as_secs_f64());
                             exp.update_scheduler(
                                 &reconciler.desired_state(),
                                 &reconciler.last_observed_state(),
@@ -753,23 +786,44 @@ async fn run_event_mode(
 
 /// Attach-mode TUI: read-only viewer that connects to a running daemon's /status endpoint.
 /// Does not load eBPF, does not start a pipeline — purely a display client.
-async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
+async fn run_attach_tui(addr: &str, tls_skip_verify: bool, auth_token: Option<&str>) -> Result<()> {
     use argus_agent::telemetry::prometheus::StatusSnapshot;
 
-    let addr_with_port = if addr.contains(':') {
-        addr.to_string()
+    // Normalize the attach target into scheme://host:port. The scheme is
+    // split off first so `https://node` still gets the default port appended.
+    // IPv6 literals must be bracketed (`[::1]` or `[::1]:9100`).
+    let (scheme, host_part) = addr
+        .split_once("://")
+        .map_or(("http", addr), |(s, h)| (s, h));
+    let has_port = if let Some(v6) = host_part.strip_prefix('[') {
+        v6.contains("]:")
     } else {
-        format!("{addr}:9100")
+        host_part
+            .split_once(':')
+            .is_some_and(|(_, p)| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
     };
-    let addr = if addr_with_port.contains("://") {
-        addr_with_port
+    let host_with_port = if has_port {
+        host_part.to_string()
     } else {
-        format!("http://{addr_with_port}")
+        format!("{host_part}:9100")
     };
+    let addr = format!("{scheme}://{host_with_port}");
     let status_url = format!("{addr}/status");
+
+    // Honor the same bearer token the daemon side accepts. The token is
+    // surfaced through --auth-token / ARGUS_METRICS_TOKEN — exactly what the
+    // 401 hint below tells the operator to set.
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = auth_token {
+        let mut value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .context("auth token contains characters not permitted in an HTTP header")?;
+        value.set_sensitive(true);
+        default_headers.insert(reqwest::header::AUTHORIZATION, value);
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .danger_accept_invalid_certs(tls_skip_verify)
+        .default_headers(default_headers)
         .build()?;
 
     // Probe once up front. Most operator-facing failures (daemon not
@@ -805,14 +859,25 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
                     ),
                     _ => format!("{status_url} returned HTTP {code}"),
                 });
+                // Auth/client errors are deterministic — retrying the same
+                // request can't succeed, so fail fast with the guidance.
+                if code.is_client_error() {
+                    break;
+                }
                 if attempt < max_attempts {
-                    eprintln!("retry {attempt}/{max_attempts}: {}", last_error.as_ref().unwrap());
+                    eprintln!(
+                        "retry {attempt}/{max_attempts}: {}",
+                        last_error.as_ref().unwrap()
+                    );
                 }
             }
             Err(e) => {
                 last_error = Some(diagnose_connect_error(&status_url, &e));
                 if attempt < max_attempts {
-                    eprintln!("retry {attempt}/{max_attempts}: {}", last_error.as_ref().unwrap());
+                    eprintln!(
+                        "retry {attempt}/{max_attempts}: {}",
+                        last_error.as_ref().unwrap()
+                    );
                 }
             }
         }
@@ -826,19 +891,23 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
     }
 
     let mut dashboard = Dashboard::new()?;
-    let mut dash_state = DashboardState::default();
-    dash_state.source_name = format!("attach/{addr}");
+    let mut dash_state = DashboardState {
+        source_name: format!("attach/{addr}"),
+        ..Default::default()
+    };
 
     let poll_interval = std::time::Duration::from_millis(1000);
     let draw_interval = std::time::Duration::from_millis(200);
-    let mut last_poll = std::time::Instant::now() - poll_interval;
+    // None = no poll yet; forces an immediate first poll without doing
+    // Instant arithmetic that can underflow shortly after boot.
+    let mut last_poll: Option<std::time::Instant> = None;
 
     loop {
         if dashboard.poll_quit()? {
             break;
         }
 
-        if last_poll.elapsed() >= poll_interval {
+        if last_poll.is_none_or(|t| t.elapsed() >= poll_interval) {
             match client.get(&status_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(snap) = resp.json::<StatusSnapshot>().await {
@@ -875,7 +944,7 @@ async fn run_attach_tui(addr: &str, tls_skip_verify: bool) -> Result<()> {
                     dash_state.source_name = format!("attach/{addr} [disconnected]");
                 }
             }
-            last_poll = std::time::Instant::now();
+            last_poll = Some(std::time::Instant::now());
         }
 
         dash_state.uptime_secs += 0.2;
@@ -923,9 +992,7 @@ fn diagnose_connect_error(url: &str, err: &reqwest::Error) -> String {
 
     // DNS / name resolution.
     if msg.contains("dns") || msg.contains("failed to lookup") {
-        return format!(
-            "{url}: DNS resolution failed. Use an IP address or fix /etc/hosts."
-        );
+        return format!("{url}: DNS resolution failed. Use an IP address or fix /etc/hosts.");
     }
 
     // TLS handshake errors.
@@ -948,15 +1015,12 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         // Attempt terminal restoration so the user's shell isn't left in raw mode.
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stderr(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
 
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "<unknown>".into());
+        let location = info.location().map_or_else(
+            || "<unknown>".into(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
@@ -1016,8 +1080,7 @@ fn acquire_pid_lock() -> Result<std::fs::File> {
 
     let pid_dir = std::path::Path::new("/var/run/argus");
     if !pid_dir.exists() {
-        std::fs::create_dir_all(pid_dir)
-            .context("failed to create /var/run/argus for PID file")?;
+        std::fs::create_dir_all(pid_dir).context("failed to create /var/run/argus for PID file")?;
     }
     let pid_path = pid_dir.join("argusd.pid");
     let mut opts = std::fs::OpenOptions::new();
@@ -1136,10 +1199,8 @@ fn build_event_source(config: &EffectiveConfig) -> Result<(AnyEventSource, Strin
                 .len();
             if file_size > MAX_REPLAY_FILE_SIZE {
                 bail!(
-                    "replay file too large: {} bytes (max {}). \
-                     This limit prevents OOM from malformed inputs.",
-                    file_size,
-                    MAX_REPLAY_FILE_SIZE
+                    "replay file too large: {file_size} bytes (max {MAX_REPLAY_FILE_SIZE}). \
+                     This limit prevents OOM from malformed inputs."
                 );
             }
 

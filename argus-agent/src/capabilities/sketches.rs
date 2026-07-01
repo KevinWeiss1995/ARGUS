@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// Logarithmic-bucket relative-error quantile sketch.
 ///
 /// Implementation note: this is the "unbounded log mapping" form — a fast,
-/// deterministic Rust implementation of Datadog's DDSketch. We don't bother
+/// deterministic Rust implementation of Datadog's `DDSketch`. We don't bother
 /// with bin collapsing (we cap total bins instead). For RDMA latency the
 /// bin count plateaus quickly.
 ///
@@ -125,7 +125,7 @@ impl DdSketch {
             return 0.0;
         }
         let mut pos_keys: Vec<i32> = self.pos_bins.keys().copied().collect();
-        pos_keys.sort();
+        pos_keys.sort_unstable();
         for k in pos_keys {
             cumulative += self.pos_bins[&k];
             if cumulative >= target_rank {
@@ -141,7 +141,7 @@ impl DdSketch {
     }
 
     #[must_use]
-    pub fn count(&self) -> u64 {
+    pub const fn count(&self) -> u64 {
         self.total_count
     }
 
@@ -154,7 +154,7 @@ impl DdSketch {
     }
 
     #[must_use]
-    pub fn alpha(&self) -> f64 {
+    pub const fn alpha(&self) -> f64 {
         self.alpha
     }
 }
@@ -169,7 +169,8 @@ impl Default for DdSketch {
 // SpaceSaving (Misra-Gries variant) — top-K heavy hitters
 // ---------------------------------------------------------------------------
 
-/// Misra-Gries / SpaceSaving combined: tracks up to `k` candidate keys.
+/// Misra-Gries / `SpaceSaving` combined: tracks up to `k` candidate keys.
+///
 /// On insertion of a new key when full, the smallest counter is evicted and
 /// reused for the new key (its count starts at the evicted count + 1). This
 /// yields the classic over-estimation guarantee: any item with true count ≥
@@ -300,7 +301,11 @@ mod tests {
         for q in 0u32..100 {
             ss.observe(q, 1);
         }
-        assert!(ss.len() <= 8, "should never exceed capacity, got {}", ss.len());
+        assert!(
+            ss.len() <= 8,
+            "should never exceed capacity, got {}",
+            ss.len()
+        );
     }
 
     #[test]

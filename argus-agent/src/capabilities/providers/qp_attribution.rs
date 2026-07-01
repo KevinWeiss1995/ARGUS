@@ -1,7 +1,7 @@
-//! QpAttribution capability — which QP a sample applies to.
+//! `QpAttribution` capability — which QP a sample applies to.
 //!
 //! Tier order:
-//!   1. **eBPF kprobe + map**: maintain a per-QP top-K via SpaceSaving.
+//!   1. **eBPF kprobe + map**: maintain a per-QP top-K via `SpaceSaving`.
 //!      Provides true per-QP attribution. Scaffolded.
 //!   2. **rdma-core netlink** (`rdmatool resource show qp`): enumerates QPs
 //!      with PD/PID/state — Medium quality, polled like sysfs.
@@ -86,6 +86,7 @@ impl CapabilityProvider for EbpfQpAttributionProvider {
 }
 
 /// rdma-core netlink-backed enumeration via `rdma resource show qp -j`.
+///
 /// We invoke the `rdma` userspace tool rather than linking libnl directly
 /// — it ships with rdma-core, supports JSON output, and is the same
 /// interface every modern RDMA distro uses for diagnostics.

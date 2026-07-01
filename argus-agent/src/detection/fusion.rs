@@ -25,7 +25,10 @@ use argus_common::{Capability, Sample};
 
 /// Per-capability weight in the fusion sum. Higher = the capability has
 /// more influence on the raw score.
-fn cap_weight(cap: Capability) -> f64 {
+// Tuning table: one arm per capability is intentional so weights can be
+// adjusted independently without restructuring the match.
+#[allow(clippy::match_same_arms)]
+const fn cap_weight(cap: Capability) -> f64 {
     match cap {
         Capability::LinkErrors => 1.0,
         Capability::RetransmitSignal => 0.8,
@@ -46,6 +49,8 @@ fn cap_weight(cap: Capability) -> f64 {
 /// Normalize a sample value to roughly `[0, 1]` for fusion purposes.
 /// Different capabilities have wildly different units; this keeps each
 /// signal comparable.
+// Tuning table — see `cap_weight`.
+#[allow(clippy::match_same_arms)]
 fn normalize(sample: &Sample) -> f64 {
     let v = sample.value;
     if v <= 0.0 || !v.is_finite() {
@@ -76,9 +81,7 @@ fn normalize(sample: &Sample) -> f64 {
         // PeerLiveness: typical RTT in us; 1ms+ is concerning.
         Capability::PeerLiveness => ((v - 100.0) / 1000.0).clamp(0.0, 1.0),
         // Pure metadata caps don't contribute.
-        Capability::Throughput
-        | Capability::QpAttribution
-        | Capability::ProcessAttribution => 0.0,
+        Capability::Throughput | Capability::QpAttribution | Capability::ProcessAttribution => 0.0,
     }
 }
 

@@ -196,6 +196,14 @@ For dynamic node discovery across a subnet:
 argus-discover --subnet 10.0.0.0/24 --output /etc/prometheus/argus-targets.json
 ```
 
+To also enable SLURM drain/resume integration on every discovered node
+(requires passwordless ssh as root; each node validates its own SLURM
+setup before enabling):
+
+```bash
+argus-discover --subnet 10.0.0.0/24 --enable-slurm
+```
+
 ### Standalone Prometheus + Grafana + Alertmanager (turnkey)
 
 ```bash
@@ -295,7 +303,7 @@ counters keep firing regardless.
 | `/etc/argus/argusd.toml`                  | TOML config (preserved on upgrade)   |
 | `/etc/argus/ebpf.sha256`                  | eBPF integrity hash                  |
 | `/usr/lib/systemd/system/argusd.service`  | Systemd unit                         |
-| `/usr/share/argus/selinux/argus.pp`       | SELinux module (argus-selinux RPM)   |
+| `/usr/share/argus/selinux/`               | SELinux policy sources (opt-in)      |
 | `/var/lib/argus/`                         | Persistent state, scheduler audit log |
 | `/run/argus/`                             | PID and scheduler lock files         |
 
@@ -379,7 +387,7 @@ nine other common diagnostic paths, see
 - **eBPF integrity**: SHA-256 hash verification before loading probes
 - **Privilege dropping**: capabilities dropped after eBPF load; `PR_SET_NO_NEW_PRIVS` enforced
 - **Metrics auth**: optional TLS + bearer token with constant-time comparison
-- **Seccomp**: optional post-init syscall restriction via `--seccomp`
+- **Syscall filtering**: systemd `SystemCallFilter` allowlist in the shipped unit; `--seccomp` additionally enforces `PR_SET_NO_NEW_PRIVS` post-init
 - **Config protection**: `argusd.conf` installed mode `0640`
 
 ## Platform support

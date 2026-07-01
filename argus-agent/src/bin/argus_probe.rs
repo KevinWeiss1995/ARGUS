@@ -22,7 +22,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
-#[command(name = "argus-probe", about = "Pingmesh-style peer-liveness prober for ARGUS")]
+#[command(
+    name = "argus-probe",
+    about = "Pingmesh-style peer-liveness prober for ARGUS"
+)]
 struct Cli {
     /// Comma-separated list of peer addresses (host:port).
     #[arg(long)]
@@ -56,20 +59,17 @@ pub struct ProbeSnapshot {
 }
 
 fn probe_peer(peer: &str, timeout: Duration) -> ProbeResult {
-    let addr = match peer.to_socket_addrs().ok().and_then(|mut it| it.next()) {
-        Some(a) => a,
-        None => {
-            return ProbeResult {
-                peer: peer.into(),
-                rtt_us: None,
-                error: Some("address resolution failed".into()),
-            };
-        }
+    let Some(addr) = peer.to_socket_addrs().ok().and_then(|mut it| it.next()) else {
+        return ProbeResult {
+            peer: peer.into(),
+            rtt_us: None,
+            error: Some("address resolution failed".into()),
+        };
     };
     let started = Instant::now();
     match std::net::TcpStream::connect_timeout(&addr, timeout) {
         Ok(_stream) => {
-            let elapsed = started.elapsed().as_micros() as u64;
+            let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             ProbeResult {
                 peer: peer.into(),
                 rtt_us: Some(elapsed),

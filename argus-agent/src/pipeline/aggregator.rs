@@ -8,23 +8,26 @@ use crate::capabilities::sketches::DdSketch;
 pub struct Aggregator {
     metrics: AggregatedMetrics,
     num_cpus: u32,
-    /// Previous absolute counter values keyed by (port, counter_discriminant).
-    /// Used to compute deltas between windows.
-    prev_counters: HashMap<(u32, u8), u64>,
+    /// Previous absolute counter values keyed by (device, port,
+    /// `counter_discriminant`). Port numbers restart at 1 on every HCA, so
+    /// the device name is part of the key — without it, dual-rail nodes
+    /// (e.g. `mlx5_0`/`mlx5_1`, both port 1) compute deltas against the
+    /// other card's previous value.
+    prev_counters: HashMap<(String, u32, u8), u64>,
     /// Per-window completion latency sketch — fed by `CqCompletion` events.
-    /// Provides p50/p95/p99/p999 to the CompletionLatency capability.
+    /// Provides p50/p95/p99/p999 to the `CompletionLatency` capability.
     cq_latency_sketch: DdSketch,
-    /// Per-port idle counter (port_num → seconds idle). Persists across
+    /// Per-port idle counter ((device, port) → seconds idle). Persists across
     /// window resets — a port with no traffic for 600s reports 600s, not 0.
     /// Hardware error monitoring continues regardless; idle just means
     /// "no throughput observed this window."
-    port_idle_seconds: HashMap<u32, u64>,
+    port_idle_seconds: HashMap<(String, u32), u64>,
     /// Ports that observed any non-zero throughput counter delta this window.
     /// Cleared by `mark_window_complete`.
-    port_had_traffic_this_window: HashSet<u32>,
+    port_had_traffic_this_window: HashSet<(String, u32)>,
 }
 
-fn counter_discriminant(c: &HardwareCounter) -> u8 {
+const fn counter_discriminant(c: &HardwareCounter) -> u8 {
     match c {
         HardwareCounter::SymbolErrors(_) => 0,
         HardwareCounter::LinkDowned(_) => 1,
@@ -59,7 +62,7 @@ fn counter_discriminant(c: &HardwareCounter) -> u8 {
     }
 }
 
-fn counter_value(c: &HardwareCounter) -> u64 {
+const fn counter_value(c: &HardwareCounter) -> u64 {
     match c {
         HardwareCounter::SymbolErrors(v)
         | HardwareCounter::LinkDowned(v)
@@ -110,7 +113,7 @@ impl Aggregator {
     /// Read-only access to the per-window CQ latency sketch. Reset on
     /// `reset()` so quantiles reflect a single window.
     #[must_use]
-    pub fn cq_latency_sketch(&self) -> &DdSketch {
+    pub const fn cq_latency_sketch(&self) -> &DdSketch {
         &self.cq_latency_sketch
     }
 
@@ -190,15 +193,15 @@ impl Aggregator {
                 self.cq_latency_sketch.insert(e.latency_ns as f64);
             }
             ArgusEvent::HardwareCounter(e) => {
-                self.ingest_hw_counter(e.port_num, &e.counter);
+                self.ingest_hw_counter(&e.device, e.port_num, &e.counter);
             }
         }
     }
 
-    fn ingest_hw_counter(&mut self, port: u32, counter: &HardwareCounter) {
+    fn ingest_hw_counter(&mut self, device: &str, port: u32, counter: &HardwareCounter) {
         let disc = counter_discriminant(counter);
         let current = counter_value(counter);
-        let key = (port, disc);
+        let key = (device.to_string(), port, disc);
 
         let delta = if let Some(&prev) = self.prev_counters.get(&key) {
             current.saturating_sub(prev)
@@ -209,7 +212,9 @@ impl Aggregator {
 
         // Any hw counter reading for this port means the port is being polled.
         // Initialize its idle tracker if we haven't seen it before.
-        self.port_idle_seconds.entry(port).or_insert(0);
+        self.port_idle_seconds
+            .entry((device.to_string(), port))
+            .or_insert(0);
 
         // Mark traffic if a throughput counter shows non-zero delta.
         let is_throughput = matches!(
@@ -220,7 +225,8 @@ impl Aggregator {
                 | HardwareCounter::HwXmitPkts(_)
         );
         if is_throughput && delta > 0 {
-            self.port_had_traffic_this_window.insert(port);
+            self.port_had_traffic_this_window
+                .insert((device.to_string(), port));
         }
 
         let d = &mut self.metrics.ib_counter_deltas;
@@ -272,8 +278,8 @@ impl Aggregator {
     /// reset to 0; others accumulate `window_secs`. Call this once per
     /// window, after the snapshot is taken but before `reset()`.
     pub fn mark_window_complete(&mut self, window_secs: u64) {
-        for (port, idle) in &mut self.port_idle_seconds {
-            if self.port_had_traffic_this_window.contains(port) {
+        for (key, idle) in &mut self.port_idle_seconds {
+            if self.port_had_traffic_this_window.contains(key) {
                 *idle = 0;
             } else {
                 *idle = idle.saturating_add(window_secs);
@@ -282,21 +288,21 @@ impl Aggregator {
         self.port_had_traffic_this_window.clear();
     }
 
-    /// Read-only access to the per-port idle map (port_num → idle seconds).
+    /// Read-only access to the per-port idle map ((device, port) → idle seconds).
     #[must_use]
-    pub fn port_idle_seconds(&self) -> &HashMap<u32, u64> {
+    pub const fn port_idle_seconds(&self) -> &HashMap<(String, u32), u64> {
         &self.port_idle_seconds
     }
 
     /// Stamp a fully-annotated per-port idle list onto the current metrics.
-    /// Callers supply (device, port) pairs from `HwCounterReader::discovered_ports`
-    /// so the device names land in the published `AggregatedMetrics`.
-    /// Ports not in the supplied list still get an entry with device name "unknown"
-    /// so cross-device port-number collisions remain visible.
+    /// Callers supply (device, port) pairs from `HwCounterReader::discovered_ports`;
+    /// the order of the supplied list is preserved in the published metrics.
+    /// Tracked ports the caller didn't enumerate are appended afterwards so
+    /// they remain visible.
     pub fn set_ib_port_idle(&mut self, discovered: &[(String, u32)]) {
         let mut idle_list: Vec<IbPortIdle> = Vec::with_capacity(self.port_idle_seconds.len());
         for (device, port) in discovered {
-            if let Some(&idle_seconds) = self.port_idle_seconds.get(port) {
+            if let Some(&idle_seconds) = self.port_idle_seconds.get(&(device.clone(), *port)) {
                 idle_list.push(IbPortIdle {
                     device: device.clone(),
                     port: *port,
@@ -306,10 +312,10 @@ impl Aggregator {
         }
         // Catch any ports we tracked but the caller didn't enumerate
         // (shouldn't happen in normal operation; preserves visibility).
-        for (port, &idle_seconds) in &self.port_idle_seconds {
-            if !discovered.iter().any(|(_, p)| p == port) {
+        for ((device, port), &idle_seconds) in &self.port_idle_seconds {
+            if !discovered.iter().any(|(d, p)| d == device && p == port) {
                 idle_list.push(IbPortIdle {
-                    device: "unknown".to_string(),
+                    device: device.clone(),
                     port: *port,
                     idle_seconds,
                 });
@@ -351,13 +357,13 @@ impl Aggregator {
     }
 
     #[must_use]
-    pub fn current_metrics(&self) -> &AggregatedMetrics {
+    pub const fn current_metrics(&self) -> &AggregatedMetrics {
         &self.metrics
     }
 
     /// Stamp the composite health score on the current window's metrics.
     /// Called by the pipeline after each detection pass.
-    pub fn set_health_score(&mut self, score: f64) {
+    pub const fn set_health_score(&mut self, score: f64) {
         self.metrics.composite_health_score = score;
     }
 
@@ -492,6 +498,7 @@ mod tests {
         // First reading establishes baseline (delta = 0)
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(100),
         }));
@@ -503,6 +510,7 @@ mod tests {
         // Second reading: delta = 110 - 100 = 10
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(110),
         }));
@@ -521,6 +529,7 @@ mod tests {
         // Third reading: delta = 115 - 110 = 5
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 3_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(115),
         }));
@@ -537,12 +546,14 @@ mod tests {
         // Baseline read for port 1 throughput
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::PortRcvData(0),
         }));
         // Second read shows non-zero delta — traffic observed
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::PortRcvData(4000),
         }));
@@ -565,6 +576,7 @@ mod tests {
         // Baseline read so the port is tracked
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::PortRcvData(0),
         }));
@@ -573,6 +585,7 @@ mod tests {
         // Window 2: no throughput delta but error counters still polled
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 4_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::SymbolErrors(0),
         }));
@@ -597,6 +610,7 @@ mod tests {
         // Establish port + accumulate some idle time
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::HwRcvPkts(0),
         }));
@@ -607,6 +621,7 @@ mod tests {
         // Traffic returns
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::HwRcvPkts(500),
         }));
@@ -632,11 +647,13 @@ mod tests {
         // Two readings at same value — zero delta means no traffic
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::PortRcvData(1000),
         }));
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::PortRcvData(1000),
         }));
@@ -652,11 +669,13 @@ mod tests {
 
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::LinkDowned(0),
         }));
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
             port_num: 2,
             counter: HardwareCounter::LinkDowned(0),
         }));
@@ -664,6 +683,7 @@ mod tests {
         // Port 1 link goes down
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 1,
             counter: HardwareCounter::LinkDowned(1),
         }));
@@ -672,9 +692,70 @@ mod tests {
         // Port 2 also goes down — deltas accumulate across ports
         agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
             timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
             port_num: 2,
             counter: HardwareCounter::LinkDowned(2),
         }));
         assert_eq!(agg.current_metrics().ib_counter_deltas.link_downed_delta, 3);
+    }
+
+    /// Dual-rail regression: two HCAs both expose "port 1". Counter state
+    /// must be keyed per-device or the second card's reading is diffed
+    /// against the first card's value, producing phantom deltas.
+    #[test]
+    fn hw_counter_multi_device_same_port_number() {
+        let mut agg = Aggregator::new(4);
+
+        // Baselines: mlx5_0 port 1 at 1000 errors, mlx5_1 port 1 at 0.
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_000,
+            device: "mlx5_0".into(),
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(1000),
+        }));
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 1_001,
+            device: "mlx5_1".into(),
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(0),
+        }));
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            0,
+            "first readings are baselines, not deltas"
+        );
+
+        // Next window: both counters unchanged — delta must stay 0.
+        agg.reset();
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_000,
+            device: "mlx5_0".into(),
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(1000),
+        }));
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 2_001,
+            device: "mlx5_1".into(),
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(0),
+        }));
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            0,
+            "unchanged counters on two same-numbered ports must not produce phantom deltas"
+        );
+
+        // Real increment on mlx5_1 only.
+        agg.reset();
+        agg.ingest(&ArgusEvent::HardwareCounter(HardwareCounterEvent {
+            timestamp_ns: 3_000,
+            device: "mlx5_1".into(),
+            port_num: 1,
+            counter: HardwareCounter::SymbolErrors(7),
+        }));
+        assert_eq!(
+            agg.current_metrics().ib_counter_deltas.symbol_error_delta,
+            7
+        );
     }
 }

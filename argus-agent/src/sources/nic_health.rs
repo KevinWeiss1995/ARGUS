@@ -1,9 +1,9 @@
-//! Host-side NIC health monitoring: PCIe lane state and thermal.
+//! Host-side NIC health monitoring: `PCIe` lane state and thermal.
 //!
 //! These checks are NIC-side hardware facts that don't show up in IB
 //! counter deltas but predict failure independently:
 //!
-//!   * **PCIe lane degradation**: a NIC's PCIe link can drop lanes
+//!   * **`PCIe` lane degradation**: a NIC's `PCIe` link can drop lanes
 //!     (x16 → x8) or generations (Gen4 → Gen3) due to a bad slot, dirty
 //!     contacts, or thermal throttling. Throughput halves silently;
 //!     IB counters show nothing wrong because the IB protocol works
@@ -24,11 +24,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Snapshot of one NIC's PCIe link state at a point in time.
+/// Snapshot of one NIC's `PCIe` link state at a point in time.
 #[derive(Debug, Clone)]
 pub struct PcieLinkState {
     pub ib_device: String,
-    /// e.g. "16.0 GT/s PCIe" or "8.0 GT/s PCIe"
+    /// e.g. "16.0 GT/s `PCIe`" or "8.0 GT/s `PCIe`"
     pub current_speed: String,
     pub max_speed: String,
     pub current_width: u32,
@@ -38,7 +38,7 @@ pub struct PcieLinkState {
 impl PcieLinkState {
     /// True when either the link generation or lane count is below
     /// what the device negotiated as its maximum. This is the
-    /// definition of "degraded PCIe link" in NVIDIA/Mellanox's
+    /// definition of "degraded `PCIe` link" in NVIDIA/Mellanox's
     /// diagnostic guidance.
     #[must_use]
     pub fn is_degraded(&self) -> bool {
@@ -56,7 +56,7 @@ pub struct NicThermal {
     pub source_path: String,
 }
 
-/// Discovers IB devices and exposes per-device PCIe + thermal readers.
+/// Discovers IB devices and exposes per-device `PCIe` + thermal readers.
 /// One instance per agent; refreshes its readings each window.
 pub struct NicHealthReader {
     devices: Vec<NicDevice>,
@@ -64,10 +64,10 @@ pub struct NicHealthReader {
 
 struct NicDevice {
     ib_device: String,
-    /// /sys/class/infiniband/<ib_device>/device — symlinks to the PCI
+    /// /sys/class/infiniband/<`ib_device>/device` — symlinks to the PCI
     /// device. We resolve once at discovery and cache the resolved path.
     pci_path: PathBuf,
-    /// Optional path to the hwmon temp1_input under this PCI device,
+    /// Optional path to the hwmon `temp1_input` under this PCI device,
     /// resolved at discovery if present. Mellanox exposes it; other
     /// vendors may not.
     thermal_path: Option<PathBuf>,
@@ -103,7 +103,7 @@ impl NicHealthReader {
         Self { devices }
     }
 
-    /// Read current PCIe link state for every discovered NIC.
+    /// Read current `PCIe` link state for every discovered NIC.
     /// Reads that fail (sysfs unreadable, parse error) are silently
     /// omitted — the rest still report.
     #[must_use]
@@ -140,7 +140,9 @@ impl NicHealthReader {
     pub fn read_thermal(&self) -> Vec<NicThermal> {
         let mut out = Vec::new();
         for d in &self.devices {
-            let Some(path) = &d.thermal_path else { continue };
+            let Some(path) = &d.thermal_path else {
+                continue;
+            };
             // hwmon temp inputs are in millidegrees Celsius (per the
             // hwmon ABI documentation, kernel Documentation/hwmon/sysfs-interface).
             let Some(raw) = read_u64(path) else { continue };
@@ -154,12 +156,13 @@ impl NicHealthReader {
     }
 
     #[must_use]
-    pub fn device_count(&self) -> usize {
+    pub const fn device_count(&self) -> usize {
         self.devices.len()
     }
 
     /// Per-device thermal sensor availability — useful for the operator
     /// to know which NICs are being thermal-monitored vs which aren't.
+    #[must_use]
     pub fn thermal_coverage(&self) -> Vec<(String, bool)> {
         self.devices
             .iter()
@@ -168,7 +171,7 @@ impl NicHealthReader {
     }
 }
 
-/// Find an hwmon temp1_input under the given PCI device path, if any.
+/// Find an hwmon `temp1_input` under the given PCI device path, if any.
 /// Iterates /sys/class/hwmon/* and picks the entry whose device link
 /// resolves into our PCI tree. Mellanox NICs typically expose this;
 /// other vendors may not.

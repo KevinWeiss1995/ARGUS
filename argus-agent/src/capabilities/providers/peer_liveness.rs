@@ -1,4 +1,4 @@
-//! PeerLiveness capability — reads probe snapshots written by `argus-probe`.
+//! `PeerLiveness` capability — reads probe snapshots written by `argus-probe`.
 //!
 //! Decoupling the prober from the main agent keeps the agent's hot path
 //! short: probing is a side process, the agent just consumes its output.
@@ -7,9 +7,7 @@
 //! `device` = peer name. When the snapshot is missing or stale (older than
 //! 3× interval), the provider emits no samples and probes Unavailable.
 
-use crate::capabilities::{
-    CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome,
-};
+use crate::capabilities::{CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome};
 use argus_common::{BackendId, Capability, Quality, Sample};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -73,7 +71,10 @@ impl CapabilityProvider for PeerLivenessProvider {
             Ok(meta) => {
                 if let Ok(modified) = meta.modified() {
                     let now = SystemTime::now();
-                    let age = now.duration_since(modified).map(|d| d.as_secs()).unwrap_or(u64::MAX);
+                    let age = now
+                        .duration_since(modified)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(u64::MAX);
                     if age <= STALE_FACTOR * FALLBACK_INTERVAL_SECS {
                         return ProbeOutcome::Available {
                             quality: Quality::Medium,
@@ -113,7 +114,7 @@ impl CapabilityProvider for PeerLivenessProvider {
         snap.results
             .into_iter()
             .map(|r| {
-                let value = r.rtt_us.map(|v| v as f64).unwrap_or(f64::INFINITY);
+                let value = r.rtt_us.map_or(f64::INFINITY, |v| v as f64);
                 let confidence = if r.rtt_us.is_some() { 0.9 } else { 0.3 };
                 Sample {
                     capability: Capability::PeerLiveness,

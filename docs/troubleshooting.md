@@ -247,7 +247,36 @@ journalctl -u argusd -n 20 | grep "effective capabilities"
 # Should show: cap_bpf, cap_perfmon, cap_dac_read_search, cap_syslog
 ```
 
-## 11. None of the above
+## 11. Alert runbook anchors
+
+The shipped Prometheus alert rules link to the sections below by name.
+
+### ArgusNodeDegraded
+
+`argus_health_state == 1` held for 30s. Start with section 3 above —
+`argus-status --watch` on the node, then the Node Detail dashboard to
+see which rule is firing. Most degraded states with no IB error deltas
+are host-side (IRQ skew, NAPI saturation, slab pressure).
+
+### ArgusNodeCritical
+
+`argus_health_state == 2` held for 15s. If scheduler integration is
+enabled the node is being drained — check `argus-scheduler status` on
+the node. Inspect `argus_ib_link_downed_delta` and
+`argus_ib_link_error_recovery_delta`; non-zero values mean a physical
+layer problem (cable/optic/switch port), not a tuning problem.
+
+### ArgusNodeRecovering
+
+`argus_health_state == 3`. The node exited Critical and is in the
+recovery dwell; ARGUS resumes it (if scheduler-managed) only after the
+dwell completes. No action needed unless the node oscillates between
+Critical and Recovering — oscillation means the underlying fault is
+intermittent, which for IB links almost always means a marginal cable
+seating or optic. Treat a flapping node as Critical and drain it
+manually: `argus-scheduler hold`.
+
+## 12. None of the above
 
 ```bash
 # Collect a bundle for support:

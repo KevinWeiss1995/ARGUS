@@ -1,5 +1,5 @@
-//! LinkErrors capability — universal: every fabric exposes some form of
-//! port_rcv_errors / port_xmit_discards / link_downed via sysfs.
+//! `LinkErrors` capability — universal: every fabric exposes some form of
+//! `port_rcv_errors` / `port_xmit_discards` / `link_downed` via sysfs.
 //!
 //! Backends:
 //!   - `SysfsLinkErrorsProvider`: high-quality, derived from current
@@ -8,9 +8,7 @@
 //!     emits a sample if the sysfs path didn't fire (kept Available so we
 //!     have *something* even on weird hosts).
 
-use crate::capabilities::{
-    CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome,
-};
+use crate::capabilities::{CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome};
 use argus_common::{BackendId, Capability, Quality, Sample};
 
 /// Reads `IbCounterDeltas` already aggregated from sysfs into a single
@@ -20,7 +18,7 @@ pub struct SysfsLinkErrorsProvider;
 
 impl SysfsLinkErrorsProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -65,7 +63,7 @@ impl CapabilityProvider for SysfsLinkErrorsProvider {
         let hard = d.total_hard_error_delta() as f64;
         let recovery = d.link_error_recovery_delta as f64;
         let downed = d.link_downed_delta as f64;
-        let value = hard + 5.0 * recovery + 50.0 * downed;
+        let value = 50.0f64.mul_add(downed, 5.0f64.mul_add(recovery, hard));
 
         vec![Sample {
             capability: Capability::LinkErrors,
@@ -82,14 +80,16 @@ impl CapabilityProvider for SysfsLinkErrorsProvider {
     }
 }
 
-/// Always-on fallback. Emits zero, low-quality samples — its purpose is
-/// to keep the LinkErrors capability *registered* even on hosts where the
-/// sysfs provider can't probe (e.g., unit tests, unusual mountpoints).
+/// Always-on fallback that emits zero, low-quality samples.
+///
+/// Its purpose is to keep the `LinkErrors` capability *registered* even on
+/// hosts where the sysfs provider can't probe (e.g., unit tests, unusual
+/// mountpoints).
 pub struct InferredLinkErrorsProvider;
 
 impl InferredLinkErrorsProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

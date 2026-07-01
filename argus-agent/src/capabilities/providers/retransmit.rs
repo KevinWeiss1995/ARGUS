@@ -1,4 +1,4 @@
-//! RetransmitSignal capability — the most fabric-divergent signal.
+//! `RetransmitSignal` capability — the most fabric-divergent signal.
 //!
 //! Tier order (per the architecture plan):
 //!   1. **eBPF kprobe** on driver retry counters — ideal but requires
@@ -16,9 +16,7 @@
 //! The pipeline today already aggregates `rxe_*` deltas; the inference
 //! provider re-uses them.
 
-use crate::capabilities::{
-    CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome,
-};
+use crate::capabilities::{CapabilityProvider, DetectionContext, FabricEnv, ProbeOutcome};
 use argus_common::{BackendId, Capability, Quality, Sample};
 
 pub struct EbpfRetransmitProvider {
@@ -27,7 +25,7 @@ pub struct EbpfRetransmitProvider {
 
 impl EbpfRetransmitProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { attached: false }
     }
 }
@@ -63,16 +61,18 @@ impl CapabilityProvider for EbpfRetransmitProvider {
     }
 }
 
-/// MAD/perfquery proxy: real IB fabrics expose `port_xmit_pkts` vs
-/// `port_rcv_pkts` plus `port_rcv_remote_physical_errors` via the standard
-/// counter set. We treat *deltas of these* over a window as a Medium-quality
-/// retransmit signal — true retransmits aren't directly exposed, but the
-/// asymmetry plus remote-physical errors is the canonical proxy.
+/// MAD/perfquery proxy retransmit signal.
+///
+/// Real IB fabrics expose `port_xmit_pkts` vs `port_rcv_pkts` plus
+/// `port_rcv_remote_physical_errors` via the standard counter set. We treat
+/// *deltas of these* over a window as a Medium-quality retransmit signal —
+/// true retransmits aren't directly exposed, but the asymmetry plus
+/// remote-physical errors is the canonical proxy.
 pub struct MadRetransmitProvider;
 
 impl MadRetransmitProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -96,12 +96,10 @@ impl CapabilityProvider for MadRetransmitProvider {
     fn probe(&mut self, env: &FabricEnv) -> ProbeOutcome {
         // Real IB only — RoCE/softroce expose the same counters but the
         // retransmit semantics differ.
-        let any_ib = env.devices.iter().any(|d| {
-            matches!(
-                d.fabric,
-                crate::capabilities::FabricKind::InfiniBand
-            )
-        });
+        let any_ib = env
+            .devices
+            .iter()
+            .any(|d| matches!(d.fabric, crate::capabilities::FabricKind::InfiniBand));
         if !any_ib {
             return ProbeOutcome::Unavailable {
                 reason: "no InfiniBand fabric detected".into(),
@@ -121,7 +119,7 @@ impl CapabilityProvider for MadRetransmitProvider {
         let d = &ctx.metrics.ib_counter_deltas;
         let phys = d.port_rcv_remote_physical_errors_delta as f64;
         let asymm = (d.hw_xmit_pkts_delta as f64 - d.hw_rcv_pkts_delta as f64).max(0.0);
-        let value = phys + 0.05 * asymm;
+        let value = 0.05f64.mul_add(asymm, phys);
         vec![Sample {
             capability: Capability::RetransmitSignal,
             value,
@@ -141,7 +139,7 @@ pub struct SysfsRetransmitProvider;
 
 impl SysfsRetransmitProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -184,7 +182,7 @@ impl CapabilityProvider for SysfsRetransmitProvider {
         let retry = d.rxe_retry_exceeded_delta as f64;
         let seq = d.rxe_seq_error_delta as f64;
         let dup = d.rxe_duplicate_request_delta as f64;
-        let value = retry + 0.5 * seq + 0.3 * dup;
+        let value = 0.3f64.mul_add(dup, 0.5f64.mul_add(seq, retry));
         let traffic = d.has_traffic();
         let confidence = if traffic { 0.8 } else { 0.2 };
         vec![Sample {
@@ -209,7 +207,7 @@ pub struct InferredRetransmitProvider;
 
 impl InferredRetransmitProvider {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }

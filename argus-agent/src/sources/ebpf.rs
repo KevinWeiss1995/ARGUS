@@ -98,10 +98,9 @@ mod inner {
             .map_err(|e| EventSourceError::Other(format!("cannot read kernel version: {e}")))?;
         let release = release.trim();
         let parts: Vec<&str> = release.split('.').collect();
-        let major: u32 = parts.first()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let minor: u32 = parts.get(1)
+        let major: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor: u32 = parts
+            .get(1)
             .and_then(|s| s.split('-').next())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
@@ -529,8 +528,7 @@ mod inner {
             match self.slab_stats_map.get(&0, 0) {
                 Ok(percpu_vals) => {
                     let mut totals = [0u64; 6];
-                    let mut rearmed: Vec<SlabStatsArray> =
-                        Vec::with_capacity(percpu_vals.len());
+                    let mut rearmed: Vec<SlabStatsArray> = Vec::with_capacity(percpu_vals.len());
                     for val in percpu_vals.iter() {
                         for (i, t) in totals.iter_mut().enumerate() {
                             if i == 5 {
@@ -554,7 +552,8 @@ mod inner {
                     snap.slab_total_bytes_alloc = totals[3].saturating_sub(prev[3]);
                     snap.slab_total_latency_ns = totals[4].saturating_sub(prev[4]);
                     snap.slab_max_latency_ns = totals[5];
-                    self.prev_slab_totals = [totals[0], totals[1], totals[2], totals[3], totals[4], 0];
+                    self.prev_slab_totals =
+                        [totals[0], totals[1], totals[2], totals[3], totals[4], 0];
 
                     match PerCpuValues::try_from(rearmed) {
                         Ok(values) => {

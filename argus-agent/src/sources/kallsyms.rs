@@ -172,11 +172,7 @@ fn read_kallsyms_functions() -> HashSet<String> {
     // Sample log RDMA-driver symbols for diagnostics.
     let rdma_samples: Vec<&String> = funcs
         .iter()
-        .filter(|s| {
-            s.starts_with("mlx5_ib_")
-                || s.starts_with("mlx5r_")
-                || s.starts_with("rxe_")
-        })
+        .filter(|s| s.starts_with("mlx5_ib_") || s.starts_with("mlx5r_") || s.starts_with("rxe_"))
         .take(20)
         .collect();
 

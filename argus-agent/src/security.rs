@@ -137,13 +137,26 @@ fn log_held_capabilities(phase: &str) {
         Ok(set) => {
             let names: Vec<String> = set.iter().map(|c| format!("{c:?}")).collect();
             if names.is_empty() {
-                tracing::info!(component = "security", phase, "effective capabilities: none");
+                tracing::info!(
+                    component = "security",
+                    phase,
+                    "effective capabilities: none"
+                );
             } else {
-                tracing::info!(component = "security", phase, caps = names.join(", "), "effective capabilities");
+                tracing::info!(
+                    component = "security",
+                    phase,
+                    caps = names.join(", "),
+                    "effective capabilities"
+                );
             }
         }
         Err(e) => {
-            tracing::warn!(component = "security", phase, "failed to read effective capabilities: {e}");
+            tracing::warn!(
+                component = "security",
+                phase,
+                "failed to read effective capabilities: {e}"
+            );
         }
     }
 }

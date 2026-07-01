@@ -96,6 +96,7 @@ pub enum SchedulerEventKind {
 }
 
 impl SchedulerActionEvent {
+    #[must_use]
     pub fn drained(reason: &str) -> Self {
         Self {
             timestamp: Instant::now(),
@@ -104,6 +105,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn resumed() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -112,6 +114,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn operator_hold_detected() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -120,6 +123,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn hold_set() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -128,6 +132,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn hold_released() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -136,6 +141,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn error(op: &str, err: &crate::scheduler::SchedulerError) -> Self {
         Self {
             timestamp: Instant::now(),
@@ -144,6 +150,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn skipped(reason: &str) -> Self {
         Self {
             timestamp: Instant::now(),
@@ -152,6 +159,7 @@ impl SchedulerActionEvent {
         }
     }
 
+    #[must_use]
     pub fn contested_resume() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -169,6 +177,7 @@ pub struct SchedulerEventRing {
 }
 
 impl SchedulerEventRing {
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             events: VecDeque::with_capacity(capacity),
@@ -183,7 +192,8 @@ impl SchedulerEventRing {
         self.events.push_back(event);
     }
 
-    pub fn recent(&self) -> &VecDeque<SchedulerActionEvent> {
+    #[must_use]
+    pub const fn recent(&self) -> &VecDeque<SchedulerActionEvent> {
         &self.events
     }
 }

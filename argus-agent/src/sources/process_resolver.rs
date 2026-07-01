@@ -26,6 +26,7 @@ pub struct BlastRadius {
 impl BlastRadius {
     #[must_use]
     pub fn summary(&self) -> String {
+        use std::fmt::Write as _;
         if self.affected.is_empty() {
             return "no affected processes identified".into();
         }
@@ -34,10 +35,10 @@ impl BlastRadius {
             .map(|p| {
                 let mut desc = format!("PID {} ({})", p.pid, p.comm);
                 if let Some(ref job) = p.slurm_job_id {
-                    desc.push_str(&format!(" — SLURM #{job}"));
+                    let _ = write!(desc, " — SLURM #{job}");
                 }
                 if let Some(ref pod) = p.k8s_pod {
-                    desc.push_str(&format!(" — k8s {pod}"));
+                    let _ = write!(desc, " — k8s {pod}");
                 }
                 desc
             })
@@ -46,7 +47,7 @@ impl BlastRadius {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.affected.is_empty()
     }
 }
@@ -128,8 +129,7 @@ fn read_process_info(pid: u32) -> Option<ProcessInfo> {
 
     let comm = std::fs::read_to_string(format!("{proc_dir}/comm"))
         .ok()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "<unknown>".into());
+        .map_or_else(|| "<unknown>".into(), |s| s.trim().to_string());
 
     let cgroup_content = std::fs::read_to_string(format!("{proc_dir}/cgroup")).unwrap_or_default();
     let slurm_job_id = extract_slurm_job_id(&cgroup_content);
@@ -155,7 +155,7 @@ fn extract_slurm_job_id(cgroup: &str) -> Option<String> {
     for line in cgroup.lines() {
         if let Some(pos) = line.find("job_") {
             let rest = &line[pos + 4..];
-            let id: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
             if !id.is_empty() {
                 return Some(id);
             }

@@ -28,7 +28,7 @@ pub enum Timescale {
 
 impl Timescale {
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Fast => "fast",
             Self::Medium => "medium",
@@ -37,7 +37,7 @@ impl Timescale {
     }
 
     #[must_use]
-    pub fn all() -> [Timescale; 3] {
+    pub const fn all() -> [Self; 3] {
         [Self::Fast, Self::Medium, Self::Slow]
     }
 }
@@ -100,11 +100,11 @@ pub struct MultiTimescaleEvaluator {
 
 impl MultiTimescaleEvaluator {
     #[must_use]
-    pub fn new(base: StateMachineConfig) -> Self {
+    pub fn new(base: &StateMachineConfig) -> Self {
         Self {
-            fast: TimescaleTrack::fast(&base),
-            medium: TimescaleTrack::medium(&base),
-            slow: TimescaleTrack::slow(&base),
+            fast: TimescaleTrack::fast(base),
+            medium: TimescaleTrack::medium(base),
+            slow: TimescaleTrack::slow(base),
         }
     }
 
@@ -118,7 +118,7 @@ impl MultiTimescaleEvaluator {
 
     /// Per-track current state, for telemetry and the burst classifier.
     #[must_use]
-    pub fn states(&self) -> [(Timescale, HealthState); 3] {
+    pub const fn states(&self) -> [(Timescale, HealthState); 3] {
         [
             (Timescale::Fast, self.fast.state_machine.current()),
             (Timescale::Medium, self.medium.state_machine.current()),
@@ -128,7 +128,7 @@ impl MultiTimescaleEvaluator {
 
     /// Per-track effective score, for telemetry.
     #[must_use]
-    pub fn effective_scores(&self) -> [(Timescale, f64); 3] {
+    pub const fn effective_scores(&self) -> [(Timescale, f64); 3] {
         [
             (Timescale::Fast, self.fast.score.effective()),
             (Timescale::Medium, self.medium.score.effective()),
@@ -136,7 +136,7 @@ impl MultiTimescaleEvaluator {
         ]
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.fast.score.reset();
         self.fast.state_machine.reset();
         self.medium.score.reset();
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn fast_track_picks_up_bursts_first() {
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         // One big spike — only fast should react quickly.
         e.evaluate(0.7);
         e.evaluate(0.7);
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn slow_track_resists_short_spikes() {
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         // 2-window spike followed by sustained quiet (~realistic for slow)
         e.evaluate(0.7);
         e.evaluate(0.7);
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn composite_is_worst_of_tracks() {
-        let mut e = MultiTimescaleEvaluator::new(StateMachineConfig::default());
+        let mut e = MultiTimescaleEvaluator::new(&StateMachineConfig::default());
         let composite = e.evaluate(0.7);
         // Composite should match the fast track on first sustained spike.
         let _ = composite;
